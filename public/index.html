@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>美股基金估值</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #111;
+      color: #e8e8e8;
+      font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      max-width: 560px;
+      margin: 0 auto;
+      min-height: 100vh;
+    }
+
+    /* ── Header (list view) ── */
+    .header {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+      padding: 16px 8px 12px;
+      gap: 2px;
+      background:
+        radial-gradient(ellipse at 50% 0%, rgba(56, 76, 120, 0.35) 0%, transparent 70%),
+        linear-gradient(180deg, #1a1e2c 0%, #14172040 60%, #11111100 100%);
+      border-bottom: 1px solid #232838;
+      box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 6px rgba(0,0,0,0.4);
+      position: relative;
+    }
+    .header::after {
+      content: '';
+      position: absolute;
+      left: 0; right: 0; bottom: -1px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent 0%, #2a3045 50%, transparent 100%);
+    }
+    .h-item {
+      text-align: center;
+      min-width: 0;
+      padding: 4px 2px;
+      border-radius: 6px;
+      transition: background 0.4s ease-out;
+    }
+    .h-item.flash-up   { background: rgba(240, 82, 42, 0.18); }
+    .h-item.flash-down { background: rgba(26, 173, 79, 0.18); }
+    .h-label { font-size: 12.5px; color: #8088a0; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .h-val   { font-size: 21px; font-weight: 700; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; }
+
+    .status-bar {
+      text-align: center;
+      padding: 6px 12px;
+      font-size: 13px;
+      color: #505050;
+      border-bottom: 1px solid #1a1a1a;
+      line-height: 1.6;
+    }
+    .status-bar .mkt { color: #686868; }
+
+    /* ── Fund list ── */
+    .fund-item {
+      display: flex;
+      align-items: center;
+      padding: 11px 14px;
+      border-bottom: 1px solid #181818;
+      cursor: pointer;
+      position: relative;
+      background-color: transparent;
+      transition: background-color 0.18s ease-out;
+    }
+    .fund-item:active { background-color: #181818; }
+
+    /* Futu-style price-change flash */
+    @keyframes fund-flash-up {
+      0%   { background-color: rgba(240, 82, 42, 0.32); }
+      40%  { background-color: rgba(240, 82, 42, 0.22); }
+      100% { background-color: transparent; }
+    }
+    @keyframes fund-flash-down {
+      0%   { background-color: rgba(26, 173, 79, 0.30); }
+      40%  { background-color: rgba(26, 173, 79, 0.20); }
+      100% { background-color: transparent; }
+    }
+    .fund-item.flash-up   { animation: fund-flash-up   1.1s ease-out; }
+    .fund-item.flash-down { animation: fund-flash-down 1.1s ease-out; }
+
+    .fund-left { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .fund-name { font-size: 16px; color: #d8d8d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fund-code { font-size: 13px; color: #555; font-variant-numeric: tabular-nums; letter-spacing: 0.4px; flex-shrink: 0; }
+    .badge {
+      flex-shrink: 0;
+      font-size: 12.5px;
+      padding: 2px 5px;
+      border-radius: 3px;
+      background: #202020;
+      color: #5a5a5a;
+      border: 1px solid #2a2a2a;
+    }
+    .fund-pct {
+      font-size: 19px;
+      font-weight: 600;
+      min-width: 92px;
+      text-align: right;
+      letter-spacing: -0.3px;
+      font-variant-numeric: tabular-nums;
+    }
+    .chevron { color: #444; font-size: 16px; margin-left: 6px; }
+
+    /* Chinese convention: red = up, green = down */
+    .up   { color: #f0522a; }
+    .down { color: #1aad4f; }
+    .flat { color: #666; }
+
+    /* ── Detail view ── */
+    .detail-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 14px 10px;
+      border-bottom: 1px solid #1e1e1e;
+    }
+    .back-btn {
+      background: transparent; border: none; color: #aaa;
+      font-size: 17px; cursor: pointer; padding: 4px 8px 4px 0;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .back-btn:active { color: #fff; }
+    .detail-title { font-size: 19px; font-weight: 600; color: #f0f0f0; flex: 1; text-align: center; margin: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail-est { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 112px; text-align: right; }
+    .detail-est .est-label { color: #888; font-weight: 400; font-size: 14px; margin-right: 4px; }
+
+    .table-head {
+      display: grid;
+      grid-template-columns: 1fr 100px 100px;
+      padding: 11px 14px 9px;
+      font-size: 14px;
+      color: #7a7a7a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    .table-head .col-pct { text-align: right; padding-right: 12px; }
+    .table-head .col-chg { text-align: right; }
+
+    .holding-row {
+      display: grid;
+      grid-template-columns: 1fr 100px 100px;
+      padding: 14px 14px;
+      border-bottom: 1px solid #181818;
+      align-items: center;
+    }
+    .holding-name { font-size: 16px; color: #e0e0e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .holding-mkt-tag { font-size: 12px; color: #555; margin-left: 4px; padding: 1px 4px; border: 1px solid #2a2a2a; border-radius: 2px; }
+    .holding-weight { text-align: right; padding-right: 12px; font-size: 16px; color: #d0d0d0; font-variant-numeric: tabular-nums; }
+    .holding-chg { text-align: right; font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+    .detail-footnote {
+      text-align: center;
+      padding: 18px 14px 30px;
+      color: #5a5a5a;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    /* ── Loading / Error ── */
+    .center-msg {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 200px; color: #444; font-size: 15px; gap: 12px;
+    }
+    .spinner {
+      width: 28px; height: 28px;
+      border: 2px solid #2a2a2a; border-top-color: #555; border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .retry-btn {
+      padding: 7px 18px; background: #1e1e1e; border: 1px solid #333;
+      color: #888; border-radius: 5px; cursor: pointer; font-size: 14px;
+    }
+    .retry-btn:active { background: #2a2a2a; }
+
+    .footer {
+      text-align: center; padding: 20px 16px 30px; font-size: 13px; color: #333;
+    }
+
+    /* ── 24h entry card ── */
+    .entry-row {
+      display: flex;
+      align-items: center;
+      margin: 18px 14px 6px;
+      padding: 14px 16px;
+      background:
+        radial-gradient(ellipse at 0% 50%, rgba(56, 76, 120, 0.22) 0%, transparent 65%),
+        linear-gradient(180deg, #181c28 0%, #14172a 100%);
+      border: 1px solid #262c40;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.18s ease-out, border-color 0.18s ease-out;
+    }
+    .entry-row:active { border-color: #3a435f; }
+    .entry-main { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .entry-label { font-size: 16px; color: #e8e8e8; font-weight: 600; letter-spacing: 0.3px; }
+    .entry-sub { font-size: 13px; color: #6a7080; }
+    .entry-row .chevron { color: #6a7080; font-size: 18px; margin-left: 8px; }
+
+    .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #444; margin-left: 4px; vertical-align: middle; }
+    .dot.live { background: #27ae60; animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  </style>
+</head>
+<body>
+<div id="app"><div class="center-msg"><div class="spinner"></div><span>加载持仓数据…</span></div></div>
+
+<script>
+// Fallback Chinese names (used when eastmoney didn't provide one)
+const CN_NAME = {
+  AAPL: '苹果', MSFT: '微软', NVDA: '英伟达', AMZN: '亚马逊',
+  META: 'Meta', GOOGL: '谷歌-A', GOOG: '谷歌-C',
+  TSLA: '特斯拉', AVGO: '博通', COST: '好市多', NFLX: '奈飞',
+  AMD: 'AMD', INTC: '英特尔', CRM: 'Salesforce', ORCL: '甲骨文',
+  AMAT: '应用材料', QCOM: '高通', LRCX: '泛林集团', KLAC: '科磊',
+  TXN: '德州仪器', ADI: '亚德诺', ADBE: '奥多比',
+  TSM: '台积电', NIO: '蔚来', LI: '理想汽车', XPEV: '小鹏汽车',
+  RIVN: 'Rivian', F: '福特', GM: '通用汽车', ON: '安森美',
+  SNAP: 'Snap', UBER: '优步', PINS: 'Pinterest',
+  MRVL: '迈威尔科技', 'USDCNY=X': 'USD/CNY',
+};
+
+// Eastmoney market id → label / Sina prefix
+//   105 NASDAQ   106 NYSE   107 NYSE-Arca/AMEX   116 HK
+//   0 SZ A-share   1 SH A-share
+//   KR (synthetic)  Korean KRX, fetched via Naver Finance
+const COVERED_MARKETS = new Set(['105', '106', '107', '116', '0', '1', 'KR']);
+const CNY_MARKETS     = new Set(['0', '1']);  // A-shares are already in CNY
+function isCovered(h) { return COVERED_MARKETS.has(String(h.market)); }
+function isCnyHolding(h) { return CNY_MARKETS.has(String(h.market)); }
+// Backward alias so other code still reads cleanly
+function isUSHolding(h) { return isCovered(h); }
+function marketTag(m) {
+  m = String(m);
+  if (m === '116') return '港股';
+  if (m === '0') return 'A股·深';
+  if (m === '1') return 'A股·沪';
+  if (m === 'KR') return '韩股';
+  return '';
+}
+
+// Globals populated from /api/funds
+let FUNDS = [];          // [{ name, code, reportDate, totalCount, holdings:[{s,w,name_cn,market}], usCoveredWeight }]
+let LAST_MAP = {};       // symbol → quote
+let LAST_STALE = false;
+let timer = null;
+let expanded = false;
+
+// ═══════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════
+function allSymbols() {
+  // Always include index/forex refs; quote API only handles US tickers right now
+  const set = new Set(['IXIC', 'QQQ', 'SPY', 'VIXY', 'USDCNY=X']);
+  FUNDS.forEach(f => f.holdings.forEach(h => {
+    if (isUSHolding(h)) set.add(h.s);
+  }));
+  return [...set];
+}
+
+// mode: 'default' (homepage) — REGULAR shows realtime, all other states show last reg+post
+//       '24h' — 全时段盘后实时估值，直接采用 Sina 提供的累计涨跌幅
+//               （fields[2] 已经是当前价 vs 昨收，盘前/盘中/盘后均适用）
+function effectiveChange(q, opts = {}) {
+  if (!q) return null;
+  const mode = opts.mode || 'default';
+  const s = q.marketState;
+
+  if (mode === '24h') {
+    return q.regularMarketChangePercent ?? null;
+  }
+
+  if (s === 'REGULAR') return q.regularMarketChangePercent ?? null;
+
+  // POST / PRE-in-default / CLOSED: yesterday's regular + after-hours
+  const reg = q.regularMarketChangePercent ?? 0;
+  const post = q.postMarketChangePercent ?? 0;
+  return reg + post * (1 + reg / 100);
+}
+
+function calcFund(fund, qmap, forexChg, opts = {}) {
+  // Per-holding, currency-aware contribution:
+  //   USD / HKD (HKD≈USD-pegged): apply USDCNY forex
+  //   CNY (A-share):              direct, no forex
+  // Then normalize by covered weight (extrapolate to full fund).
+  const fx = forexChg ?? 0;
+  let sumW = 0, sumContrib = 0;
+  for (const h of fund.holdings) {
+    if (!isCovered(h)) continue;
+    const q = qmap[h.s];
+    if (!q) continue;
+    const chg = effectiveChange(q, opts);
+    if (chg === null) continue;
+
+    const stockReturn = isCnyHolding(h)
+      ? chg                                                    // 已是 CNY
+      : ((1 + chg / 100) * (1 + fx / 100) - 1) * 100;         // USD/HKD × 汇率
+    sumContrib += h.w * stockReturn;
+    sumW       += h.w;
+  }
+  if (sumW === 0) return null;
+  return sumContrib / sumW;
+}
+
+// Mirror server ET calc (server.js getUSMarketState) for client-side labels
+function usETNow() {
+  const now = new Date();
+  const month = now.getUTCMonth();
+  const isDST = month > 2 && month < 10;        // rough US DST (Apr–Oct)
+  const etOffsetMin = isDST ? -240 : -300;
+  const et = new Date(now.getTime() + etOffsetMin * 60000);
+  return { day: et.getUTCDay(), min: et.getUTCHours() * 60 + et.getUTCMinutes() };
+}
+
+// 24h-view granular session label — adds 夜盘/亚盘 for the overnight window
+//   盘前 04:00–09:30 · 盘中 09:30–16:00 · 盘后 16:00–20:00 (ET)
+//   夜盘 20:00–24:00 ET (周日–周四晚开盘)  亚盘 00:00–04:00 ET (周一–周五凌晨延续)
+function us24hSession() {
+  const { day, min } = usETNow();
+  const weekday = day >= 1 && day <= 5;
+  if (weekday) {
+    if (min >= 240 && min < 570) return '盘前';
+    if (min >= 570 && min < 960) return '盘中';
+    if (min >= 960 && min < 1200) return '盘后';
+  }
+  const eveningOpen = min >= 1200 && (day === 0 || (day >= 1 && day <= 4)); // Sun–Thu 20:00+
+  const dawnOpen    = min < 240  && weekday;                                // Mon–Fri 00:00–04:00
+  if (eveningOpen) return '夜盘';
+  if (dawnOpen)    return '亚盘';
+  return '已收盘';
+}
+
+function marketLabel(qmap, opts = {}) {
+  const mode = opts.mode || 'default';
+  if (mode === '24h') return us24hSession();    // 含 夜盘/亚盘 的全时段标签
+  const q = qmap['QQQ']; if (!q) return '盘中';
+  const s = q.marketState;
+  if (s === 'REGULAR') return '盘中';
+  if (s === 'POST' || s === 'POSTPOST') return '盘后';
+  if (s === 'PRE' || s === 'PREPRE') return '盘后';
+  return '已收盘';
+}
+
+function effectivePrice(q) {
+  if (!q) return null;
+  const s = q.marketState;
+  if (s === 'PRE' || s === 'PREPRE') return q.preMarketPrice ?? q.regularMarketPrice ?? null;
+  if (s === 'POST' || s === 'POSTPOST') return q.postMarketPrice ?? q.regularMarketPrice ?? null;
+  return q.regularMarketPrice ?? null;
+}
+
+function fmtPrice(v) {
+  if (v === null || v === undefined || isNaN(v)) return '--';
+  return v.toFixed(2);
+}
+
+function fmtPct(v) {
+  if (v === null || v === undefined || isNaN(v)) return '--';
+  const sign = v >= 0 ? '+' : '';
+  return sign + v.toFixed(2) + '%';
+}
+
+function cls(v) {
+  if (v === null || v === undefined || isNaN(v)) return 'flat';
+  if (v > 0.005) return 'up';
+  if (v < -0.005) return 'down';
+  return 'flat';
+}
+
+function nowStr() {
+  return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+function holdingDisplayName(h) {
+  return h.name_cn || CN_NAME[h.s] || h.s;
+}
+
+// ═══════════════════════════════════════════════════
+//  DATA FETCH
+// ═══════════════════════════════════════════════════
+async function fetchFunds() {
+  const r = await fetch('/api/funds');
+  if (!r.ok) throw new Error(`/api/funds HTTP ${r.status}`);
+  const json = await r.json();
+  if (!json.success) throw new Error(json.error || 'funds load failed');
+  return json.funds || [];
+}
+
+async function fetchQuotes() {
+  const syms = allSymbols();
+  const url = `/api/quotes?symbols=${encodeURIComponent(syms.join(','))}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const json = await r.json();
+  if (!json.success) throw new Error(json.error || 'Unknown error');
+  const map = {};
+  (json.data || []).forEach(q => { map[q.symbol] = q; });
+  return { map, stale: !!json.stale };
+}
+
+// ═══════════════════════════════════════════════════
+//  ROUTING
+// ═══════════════════════════════════════════════════
+function currentRoute() {
+  const hash = location.hash || '';
+  if (hash.startsWith('#/24h')) return { view: '24h' };
+  const m = hash.match(/^#\/fund\/(\d+)/);
+  if (m) {
+    const idx = parseInt(m[1], 10);
+    if (idx >= 0 && idx < FUNDS.length) return { view: 'detail', idx };
+  }
+  return { view: 'list' };
+}
+
+window.addEventListener('hashchange', () => {
+  expanded = false;
+  rerender();
+});
+
+function go(hash) { location.hash = hash; }
+function goBack() { if (history.length > 1) history.back(); else go('#/'); }
+function expandAll() { expanded = true; rerender(); }
+
+// ═══════════════════════════════════════════════════
+//  RENDER — list view (with Futu-style change-flash)
+// ═══════════════════════════════════════════════════
+
+// Diff-vs-previous-tick → flash class for an element
+const prevFundPct = new Map();          // fund index → previous pct value
+const prevHeaderVal = { IXIC: null, QQQ: null, SPY: null, VIXY: null, FX: null };
+const FLASH_EPS = 0.005;                // ignore noise below ~0.005%
+
+function flashClass(prev, cur) {
+  if (prev === undefined || prev === null || cur === null || cur === undefined || isNaN(cur)) return '';
+  const d = cur - prev;
+  if (d >  FLASH_EPS) return 'flash-up';
+  if (d < -FLASH_EPS) return 'flash-down';
+  return '';
+}
+
+function renderList() {
+  const map = LAST_MAP;
+  const mktLabel = marketLabel(map);
+  const ixicChg = effectiveChange(map['IXIC']);
+  const qqqChg  = effectiveChange(map['QQQ']);
+  const spyChg  = effectiveChange(map['SPY']);
+  const fxChg   = map['USDCNY=X']?.regularMarketChangePercent ?? 0;
+  const vixyChg   = effectiveChange(map['VIXY']);
+  const vixyPrice = effectivePrice(map['VIXY']);
+
+  // Header tile flash classes (compare vs last tick)
+  const fIxic = flashClass(prevHeaderVal.IXIC, ixicChg);
+  const fQqq  = flashClass(prevHeaderVal.QQQ,  qqqChg);
+  const fSpy  = flashClass(prevHeaderVal.SPY,  spyChg);
+  const fVixy = flashClass(prevHeaderVal.VIXY, vixyChg);
+  const fFx   = flashClass(prevHeaderVal.FX,   fxChg);
+
+  // Fund rows with per-row flash
+  let rows = '';
+  FUNDS.forEach((fund, i) => {
+    const chg = calcFund(fund, map, fxChg);
+    const flash = flashClass(prevFundPct.get(i), chg);
+    rows += `
+      <div class="fund-item ${flash}" onclick="go('#/fund/${i}')">
+        <div class="fund-left">
+          <span class="fund-name">${fund.name}</span>
+          <span class="fund-code">${fund.code || ''}</span>
+          <span class="badge">${mktLabel}</span>
+        </div>
+        <span class="fund-pct ${cls(chg)}">${fmtPct(chg)}</span>
+        <span class="chevron">›</span>
+      </div>`;
+    prevFundPct.set(i, chg);
+  });
+
+  // Commit header prev-values after computing flash
+  prevHeaderVal.IXIC = ixicChg;
+  prevHeaderVal.QQQ  = qqqChg;
+  prevHeaderVal.SPY  = spyChg;
+  prevHeaderVal.VIXY = vixyChg;
+  prevHeaderVal.FX   = fxChg;
+
+  const dotClass = LAST_STALE ? 'dot' : 'dot live';
+  // 美股盘中(REGULAR)隐藏入口；盘前/盘后/已收盘时显示
+  const isRegular = map['QQQ']?.marketState === 'REGULAR';
+  const entryHtml = isRegular ? '' : `
+    <div class="entry-row" onclick="go('#/24h')">
+      <div class="entry-main">
+        <span class="entry-label">美股24小时</span>
+        <span class="entry-sub">美股盘后实时估值 · 含盘前·盘中·盘后</span>
+      </div>
+      <span class="chevron">›</span>
+    </div>`;
+
+  document.getElementById('app').innerHTML = `
+    <div class="header">
+      <div class="h-item ${fIxic}">
+        <div class="h-label">纳斯达克</div>
+        <div class="h-val ${cls(ixicChg)}">${fmtPct(ixicChg)}</div>
+      </div>
+      <div class="h-item ${fQqq}">
+        <div class="h-label">纳指100(QQQ)</div>
+        <div class="h-val ${cls(qqqChg)}">${fmtPct(qqqChg)}</div>
+      </div>
+      <div class="h-item ${fSpy}">
+        <div class="h-label">标普500(SPY)</div>
+        <div class="h-val ${cls(spyChg)}">${fmtPct(spyChg)}</div>
+      </div>
+      <div class="h-item ${fVixy}">
+        <div class="h-label">VIXY</div>
+        <div class="h-val ${cls(vixyChg)}">${fmtPrice(vixyPrice)}</div>
+      </div>
+      <div class="h-item ${fFx}">
+        <div class="h-label">汇率</div>
+        <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
+      </div>
+    </div>
+    <div class="status-bar">
+      基于季报真实持仓计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>), 仅供参考<span class="${dotClass}"></span>
+    </div>
+    <div class="fund-list">${rows}</div>
+    ${entryHtml}
+    <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）&emsp;5秒自动刷新</div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════
+//  RENDER — 24h all-session view (includes pre-market during PRE)
+// ═══════════════════════════════════════════════════
+const prevFundPct24h = new Map();
+const prevHeaderVal24h = { IXIC: null, QQQ: null, SPY: null, VIXY: null, FX: null };
+
+function render24h() {
+  const map = LAST_MAP;
+  const opts = { mode: '24h' };
+  const mktLabel = marketLabel(map, opts);
+  const ixicChg   = effectiveChange(map['IXIC'], opts);
+  const qqqChg    = effectiveChange(map['QQQ'],  opts);
+  const spyChg    = effectiveChange(map['SPY'],  opts);
+  const vixyChg   = effectiveChange(map['VIXY'], opts);
+  const vixyPrice = effectivePrice(map['VIXY']);
+  const fxChg     = map['USDCNY=X']?.regularMarketChangePercent ?? 0;
+
+  const fIxic = flashClass(prevHeaderVal24h.IXIC, ixicChg);
+  const fQqq  = flashClass(prevHeaderVal24h.QQQ,  qqqChg);
+  const fSpy  = flashClass(prevHeaderVal24h.SPY,  spyChg);
+  const fVixy = flashClass(prevHeaderVal24h.VIXY, vixyChg);
+  const fFx   = flashClass(prevHeaderVal24h.FX,   fxChg);
+
+  let rows = '';
+  FUNDS.forEach((fund, i) => {
+    const chg = calcFund(fund, map, fxChg, opts);
+    const flash = flashClass(prevFundPct24h.get(i), chg);
+    rows += `
+      <div class="fund-item ${flash}" onclick="go('#/fund/${i}')">
+        <div class="fund-left">
+          <span class="fund-name">${fund.name}</span>
+          <span class="fund-code">${fund.code || ''}</span>
+          <span class="badge">${mktLabel}</span>
+        </div>
+        <span class="fund-pct ${cls(chg)}">${fmtPct(chg)}</span>
+        <span class="chevron">›</span>
+      </div>`;
+    prevFundPct24h.set(i, chg);
+  });
+
+  prevHeaderVal24h.IXIC = ixicChg;
+  prevHeaderVal24h.QQQ  = qqqChg;
+  prevHeaderVal24h.SPY  = spyChg;
+  prevHeaderVal24h.VIXY = vixyChg;
+  prevHeaderVal24h.FX   = fxChg;
+
+  const dotClass = LAST_STALE ? 'dot' : 'dot live';
+
+  document.getElementById('app').innerHTML = `
+    <div class="detail-topbar">
+      <button class="back-btn" onclick="goBack()">‹ 返回</button>
+      <div class="detail-title">美股24小时</div>
+      <div style="min-width:60px"></div>
+    </div>
+    <div class="header">
+      <div class="h-item ${fIxic}">
+        <div class="h-label">纳斯达克</div>
+        <div class="h-val ${cls(ixicChg)}">${fmtPct(ixicChg)}</div>
+      </div>
+      <div class="h-item ${fQqq}">
+        <div class="h-label">纳指100(QQQ)</div>
+        <div class="h-val ${cls(qqqChg)}">${fmtPct(qqqChg)}</div>
+      </div>
+      <div class="h-item ${fSpy}">
+        <div class="h-label">标普500(SPY)</div>
+        <div class="h-val ${cls(spyChg)}">${fmtPct(spyChg)}</div>
+      </div>
+      <div class="h-item ${fVixy}">
+        <div class="h-label">VIXY</div>
+        <div class="h-val ${cls(vixyChg)}">${fmtPrice(vixyPrice)}</div>
+      </div>
+      <div class="h-item ${fFx}">
+        <div class="h-label">汇率</div>
+        <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
+      </div>
+    </div>
+    <div class="status-bar">
+      美股盘后实时估值&ensp;含盘前·盘中·盘后累计涨跌&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
+    </div>
+    <div class="fund-list">${rows}</div>
+    <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）&emsp;5秒自动刷新</div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════
+//  RENDER — detail view
+// ═══════════════════════════════════════════════════
+function renderDetail(idx) {
+  const fund = FUNDS[idx];
+  const map = LAST_MAP;
+  const fxChg = map['USDCNY=X']?.regularMarketChangePercent ?? 0;
+  const est = calcFund(fund, map, fxChg);
+
+  const sorted = [...fund.holdings].sort((a, b) => b.w - a.w);
+  const visible = expanded ? sorted : sorted.slice(0, 10);
+  const hasMore = sorted.length > 10;
+
+  const rowsHtml = visible.map(h => {
+    const isUs = isUSHolding(h);
+    const q = isUs ? map[h.s] : null;
+    const chg = q ? effectiveChange(q) : null;
+    const tag = marketTag(h.market);
+    return `
+      <div class="holding-row">
+        <span class="holding-name">${holdingDisplayName(h)}${tag ? `<span class="holding-mkt-tag">${tag}</span>` : ''}</span>
+        <span class="holding-weight">${(h.w * 100).toFixed(2)}%</span>
+        <span class="holding-chg ${cls(chg)}">${fmtPct(chg)}</span>
+      </div>`;
+  }).join('');
+
+  const expandHtml = (hasMore && !expanded)
+    ? `<button class="retry-btn" style="display:block;width:100%;margin:0;padding:16px;border-radius:0;border:none;border-bottom:1px solid #1a1a1a;background:transparent;color:#c8c8c8;font-size:14px" onclick="expandAll()">展开全部数据 (${sorted.length})</button>`
+    : '';
+
+  const qDate = fund.reportDate || '';
+  const yDate = fund.annualDate || '';
+  let noteText;
+  if (qDate && yDate && qDate !== yDate) {
+    noteText = `基于 ${qDate} 季报结合 ${yDate} 年报持仓计算, 共 ${sorted.length} 支`;
+  } else if (qDate) {
+    noteText = `基于 ${qDate} 季报持仓计算, 共 ${sorted.length} 支`;
+  } else {
+    noteText = `基于季报披露的持仓计算, 共 ${sorted.length} 支`;
+  }
+
+  document.getElementById('app').innerHTML = `
+    <div class="detail-topbar">
+      <button class="back-btn" onclick="goBack()">‹ 返回</button>
+      <div class="detail-title">${fund.name}</div>
+      <div class="detail-est">
+        <span class="est-label">估值:</span><span class="${cls(est)}">${fmtPct(est)}</span>
+      </div>
+    </div>
+    <div class="table-head">
+      <span class="col-name">名称</span>
+      <span class="col-pct">占比</span>
+      <span class="col-chg">涨跌幅</span>
+    </div>
+    ${rowsHtml}
+    ${expandHtml}
+    <div class="detail-footnote">${noteText}</div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════
+//  RENDER dispatcher / errors
+// ═══════════════════════════════════════════════════
+function rerender() {
+  const r = currentRoute();
+  if (r.view === 'detail') renderDetail(r.idx);
+  else if (r.view === '24h') render24h();
+  else renderList();
+}
+
+function renderError(msg) {
+  document.getElementById('app').innerHTML = `
+    <div class="center-msg">
+      <span style="color:#555">数据加载失败</span>
+      <span style="font-size:11px;color:#333">${msg}</span>
+      <button class="retry-btn" onclick="bootstrap()">重试</button>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════
+//  MAIN — bootstrap + polling loop
+// ═══════════════════════════════════════════════════
+async function pollLoop() {
+  try {
+    const { map, stale } = await fetchQuotes();
+    LAST_MAP = map;
+    LAST_STALE = stale;
+    rerender();
+  } catch (e) {
+    console.error('quotes poll failed:', e);
+  }
+  clearTimeout(timer);
+  timer = setTimeout(pollLoop, 5000);
+}
+
+async function bootstrap() {
+  try {
+    const funds = await fetchFunds();
+    if (!funds.length) throw new Error('基金列表为空');
+    FUNDS = funds.filter(f => f.holdings && f.holdings.length > 0);
+    if (!FUNDS.length) throw new Error('未获取到任何持仓数据');
+    await pollLoop();
+  } catch (e) {
+    renderError(e.message);
+  }
+}
+
+// expose globals for inline onclick
+window.go = go;
+window.goBack = goBack;
+window.expandAll = expandAll;
+window.bootstrap = bootstrap;
+
+bootstrap();
+</script>
+</body>
+</html>

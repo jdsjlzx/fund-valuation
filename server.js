@@ -1,0 +1,678 @@
+const express = require('express');
+const https = require('https');
+const http = require('http');
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ═══════════════════════════════════════════════════════
+//  Fund roster (display name → eastmoney code)
+// ═══════════════════════════════════════════════════════
+const FUND_LIST = [
+  { name: '华宝纳斯达克精选',      code: '017436' },
+  { name: '浦银安盛全球智能科技',  code: '006555' },
+  { name: '广发全球精选',          code: '270023' },
+  { name: '嘉实全球产业升级',      code: '017730' },
+  { name: '嘉实美国成长',          code: '000043' },
+  { name: '易方达标普信息科技',    code: '161128' },
+  { name: '易方达全球成长精选',    code: '012920' },
+  { name: '国富全球科技互联',      code: '006373' },
+  { name: '建信新兴市场混合',      code: '539002' },
+  { name: '汇添富全球移动互联',    code: '001668' },
+  { name: '华夏全球科技先锋',      code: '005698' },
+  { name: '华夏移动互联',          code: '002891' },
+  { name: '银华海外数字经济',      code: '016701' },
+  { name: '长城全球新能源车',      code: '501226' },
+  { name: '华宝海外新能源汽车',    code: '017144' },
+  { name: '华宝海外科技',          code: '501312' },
+  { name: '华宝致远混合',          code: '008253' },
+  { name: '景顺长城纳斯达克科技',  code: '017091' },
+  { name: '天弘全球高端制造',      code: '016664' },
+  { name: '富国全球科技互联网',    code: '100055' },
+  { name: '中银全球策略',          code: '163813' },
+];
+
+// ═══════════════════════════════════════════════════════
+//  HTTP helper with GBK→UTF-8 decoding (eastmoney uses GBK)
+// ═══════════════════════════════════════════════════════
+function httpGet(url, headers = {}) {
+  const lib = url.startsWith('https:') ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = lib.get(
+      url,
+      {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+          ...headers,
+        },
+        timeout: 12000,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          // eastmoney serves UTF-8; default to UTF-8 for the holdings API
+          resolve(buf.toString('utf-8'));
+        });
+        res.on('error', reject);
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('request timeout')));
+    req.on('error', reject);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+//  Parse eastmoney holdings HTML
+//  URL prefix → market: 105 NASDAQ, 106 NYSE, 107 NYSE-ARCA(ETF)
+//  0/1 = A-share, 116 = HK
+// ═══════════════════════════════════════════════════════
+function stripTags(s) {
+  return String(s).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// Parse a single <table>...</table> block into holding rows
+// Detects column positions from the header row because quarterly vs annual
+// reports have DIFFERENT column structures:
+//   quarterly (top10):  序号|代码|名称|最新价|涨跌幅|资讯|占净值比例|持股|市值
+//   annual (full):      序号|代码|名称|资讯|占净值比例|持股|市值
+function parseHoldingsTable(tableHtml) {
+  // Discover column indices from header row
+  const thRe = /<th[^>]*>([\s\S]*?)<\/th>/g;
+  const headerLabels = [];
+  let th;
+  while ((th = thRe.exec(tableHtml)) !== null) {
+    headerLabels.push(stripTags(th[1]).replace(/\s+/g, ''));
+  }
+  const findIdx = (kw) => headerLabels.findIndex((l) => l.includes(kw));
+  const codeIdx   = findIdx('股票代码');
+  const nameIdx   = findIdx('股票名称');
+  let weightIdx = findIdx('占净值比例');
+  if (weightIdx < 0) weightIdx = findIdx('占净值');
+  if (weightIdx < 0) return []; // can't safely parse without a weight column
+
+  const rows = [];
+  const trRe = /<tr[^>]*>([\s\S]*?)<\/tr>/g;
+  let row;
+  let isFirst = true;
+  while ((row = trRe.exec(tableHtml)) !== null) {
+    if (isFirst) { isFirst = false; continue; } // skip header
+    const inner = row[1];
+    const tds = [...inner.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]);
+    if (tds.length <= weightIdx) continue;
+
+    const codeCell   = tds[codeIdx >= 0 ? codeIdx : 1];
+    const nameCell   = tds[nameIdx >= 0 ? nameIdx : 2];
+    const weightCell = tds[weightIdx];
+
+    let ticker = null;
+    let market = null;
+
+    // Primary: eastmoney quote URL (covers most US/HK/A-share holdings)
+    const urlM = codeCell.match(/quote\.eastmoney\.com\/unify\/r\/(\d+)\.([A-Za-z0-9.\-_$^]+)/);
+    if (urlM) {
+      market = urlM[1];
+      ticker = urlM[2];
+    } else {
+      // Fallback: stocks without a quote link (日股、欧股、未上市等)
+      //   - code may appear in <span data-texch=''>285AJP</span>
+      //   - or in data-id='dq{CODE}' / data-id='zd{CODE}' attributes
+      const tx = codeCell.match(/data-texch=['"][^'"]*['"]\s*>([^<]+)</);
+      if (tx) ticker = tx[1].trim();
+      if (!ticker) {
+        const di = codeCell.match(/data-id=['"](?:dq|zd)([^'"]+)['"]/);
+        if (di) ticker = di[1].trim();
+      }
+      if (!ticker) {
+        // Last resort: any non-empty text in the cell
+        const text = stripTags(codeCell);
+        if (text) ticker = text;
+      }
+      market = 'other'; // unknown market — won't fetch live price, but weight is preserved
+    }
+    if (!ticker) continue;
+
+    // Reclassify recognized international tickers that we have fetchers for
+    if (market === 'other' && KR_STOCKS.has(ticker)) market = 'KR';
+
+    const w = parseFloat(stripTags(weightCell).replace('%', '')) / 100;
+    if (isNaN(w) || w <= 0) continue;
+
+    rows.push({
+      s: ticker,
+      w,
+      name_cn: stripTags(nameCell),
+      market,
+    });
+  }
+  return rows;
+}
+
+// Parse the full eastmoney apidata response → list of sections
+// Each section: { label, date, holdings: [...] }
+function parseAllSections(text) {
+  const cm = text.match(/content\s*:\s*"([\s\S]*?)"\s*[,}]/);
+  if (!cm) return [];
+  const content = cm[1];
+
+  // Split by <h4 class='t'> blocks; each section begins with one of these headers
+  const parts = content.split(/<h4[^>]*class='t'>/);
+  const sections = [];
+  for (let i = 1; i < parts.length; i++) {
+    const block = parts[i];
+    const labelM = block.match(/(20\d{2}年[1-4一二三四]季度|20\d{2}年年度|20\d{2}年中报)/);
+    const dateM  = block.match(/截止至[^>]*>([\d\-]+)</);
+    const tableM = block.match(/<table[^>]*>([\s\S]*?)<\/table>/);
+    if (!tableM) continue;
+    const holdings = parseHoldingsTable(tableM[1]);
+    if (holdings.length === 0) continue;
+    sections.push({
+      label: labelM ? labelM[1] : null,
+      date: dateM ? dateM[1] : null,
+      holdings,
+    });
+  }
+  return sections;
+}
+
+// Fetch eastmoney holdings with explicit year/month (empty = latest)
+async function fetchHoldingsRaw(code, year, month, topline = 50) {
+  const url =
+    `http://fundf10.eastmoney.com/FundArchivesDatas.aspx?` +
+    `type=jjcc&code=${code}&topline=${topline}&year=${year || ''}&month=${month || ''}`;
+  const html = await httpGet(url, {
+    Referer: `http://fundf10.eastmoney.com/ccmx_${code}.html`,
+  });
+  return parseAllSections(html);
+}
+
+// Merge: latest quarterly top 10 (current weights) + previous year-end long tail
+const MIN_WEIGHT = 0.001;       // 0.1% — ignore micro-positions (immaterial to NAV)
+const MAX_HOLDINGS = 80;        // cap for display & quote-fan-out (annual reports can have 60-80 holdings)
+
+function mergeHoldings(latest, annual) {
+  if (!latest && !annual) return { holdings: [], reportDate: null, annualDate: null };
+  if (!latest) return {
+    holdings: annual.holdings.filter(h => h.w >= MIN_WEIGHT).slice(0, MAX_HOLDINGS),
+    reportDate: annual.date, annualDate: annual.date,
+  };
+  if (!annual) return { holdings: latest.holdings, reportDate: latest.date, annualDate: null };
+
+  // Start with latest top N — these have the most up-to-date weights
+  const seen = new Set(latest.holdings.map((h) => h.s));
+  const merged = [...latest.holdings];
+
+  // Long tail from annual report: positions NOT in latest top N, with material weight.
+  // Weights are taken as-disclosed in the annual report (no cap) so the display
+  // matches 天天基金网's annual-report view exactly. Caveat: a stock that was
+  // significantly trimmed between annual & latest will display its (stale) annual weight.
+  const tail = annual.holdings
+    .filter((h) => !seen.has(h.s) && h.w >= MIN_WEIGHT)
+    .sort((a, b) => b.w - a.w);
+
+  for (const h of tail) {
+    merged.push(h);
+    if (merged.length >= MAX_HOLDINGS) break;
+  }
+  return {
+    holdings: merged,
+    reportDate: latest.date,
+    annualDate: annual.date,
+  };
+}
+
+async function fetchFundHoldings(code) {
+  // Latest annual is previous calendar year (e.g. 2026 → fetch 2025 annual)
+  const annualYear = String(new Date().getUTCFullYear() - 1);
+  const [latestSecs, annualSecs] = await Promise.all([
+    fetchHoldingsRaw(code, '', '').catch(() => []),
+    fetchHoldingsRaw(code, annualYear, '12').catch(() => []),
+  ]);
+
+  // Latest quarter = first section returned with no year filter
+  const latest = latestSecs[0] || null;
+
+  // From the previous-year fetch, pick the section with the most holdings
+  // (this is the annual or semi-annual full-disclosure section)
+  let annual = null;
+  for (const s of annualSecs) {
+    if (!annual || s.holdings.length > annual.holdings.length) annual = s;
+  }
+
+  const merged = mergeHoldings(latest, annual);
+  return {
+    reportDate: merged.reportDate,
+    annualDate: merged.annualDate,
+    totalCount: merged.holdings.length,
+    holdings: merged.holdings,
+  };
+}
+
+// ═══════════════════════════════════════════════════════
+//  In-memory fund cache (24h TTL)
+// ═══════════════════════════════════════════════════════
+let fundsCache = null;
+let fundsCacheTs = 0;
+let loadInFlight = null;
+const FUNDS_TTL = 24 * 60 * 60 * 1000;
+const tickerMarket = {};   // US ticker → eastmoney market id (105/106/107), built from holdings
+
+async function loadAllFunds() {
+  if (loadInFlight) return loadInFlight;
+  loadInFlight = (async () => {
+    console.log('[funds] loading holdings from eastmoney...');
+    const results = await Promise.all(
+      FUND_LIST.map(async (f) => {
+        try {
+          const data = await fetchFundHoldings(f.code);
+          if (!data || data.holdings.length === 0) {
+            console.warn(`  [funds] ${f.name} (${f.code}): empty`);
+            return { name: f.name, code: f.code, holdings: [], reportDate: null, totalCount: null };
+          }
+          console.log(`  [funds] ${f.name} (${f.code}): ${data.holdings.length} holdings`);
+          return { name: f.name, code: f.code, ...data };
+        } catch (e) {
+          console.error(`  [funds] ${f.name} (${f.code}) failed:`, e.message);
+          return { name: f.name, code: f.code, holdings: [], reportDate: null, totalCount: null };
+        }
+      })
+    );
+    fundsCache = results;
+    fundsCacheTs = Date.now();
+    // Build ticker→eastmoney market map (US only: 105/106/107) for live quotes
+    for (const f of results) {
+      for (const h of (f.holdings || [])) {
+        const m = String(h.market);
+        if (m === '105' || m === '106' || m === '107') tickerMarket[h.s] = m;
+      }
+    }
+    return results;
+  })();
+  try { return await loadInFlight; }
+  finally { loadInFlight = null; }
+}
+
+app.get('/api/funds', async (req, res) => {
+  try {
+    if (!fundsCache || Date.now() - fundsCacheTs > FUNDS_TTL) {
+      await loadAllFunds();
+    }
+    res.json({ success: true, funds: fundsCache, loadedAt: fundsCacheTs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+//  Sina quotes proxy (real-time prices)
+// ═══════════════════════════════════════════════════════
+const quoteCache = new Map();
+const QUOTE_TTL = 4 * 1000;
+
+// Known international tickers handled by a non-Sina fetcher
+// (国内财经 API 不覆盖韩/日/台/欧实时行情，需要单独走 Naver/Yahoo Japan 等)
+const KR_STOCKS = new Set(['000660', '005930']);  // SK海力士、三星电子
+
+function isKoreanSymbol(s) { return KR_STOCKS.has(s); }
+
+function toSinaId(symbol) {
+  if (symbol === 'USDCNY=X') return 'fx_susdcny';
+  if (symbol === 'IXIC' || symbol === '^IXIC') return 'gb_$ixic';
+  if (symbol === 'DJI'  || symbol === '^DJI')  return 'gb_$dji';
+  if (symbol === 'INX'  || symbol === '^GSPC') return 'gb_$inx';
+  // A-share: 6-digit numeric
+  //   6xxxxx, 688xxx, 689xxx → 沪市
+  //   0xxxxx, 3xxxxx         → 深市
+  //   4xxxxx, 8xxxxx (非688/689) → 北交所
+  if (/^\d{6}$/.test(symbol)) {
+    if (symbol[0] === '6') return 'sh' + symbol;
+    if (symbol[0] === '0' || symbol[0] === '3') return 'sz' + symbol;
+    if (symbol.startsWith('43') || symbol.startsWith('83') ||
+        symbol.startsWith('87') || symbol.startsWith('92'))  return 'bj' + symbol;
+    return 'sh' + symbol; // safe default
+  }
+  // HK stocks: 4-5 digit numeric (e.g. 00981 SMIC)
+  if (/^\d{4,5}$/.test(symbol)) return 'hk' + symbol.padStart(5, '0');
+  return 'gb_' + symbol.toLowerCase();
+}
+
+function fetchSina(sinaIds) {
+  const url = `https://hq.sinajs.cn/list=${sinaIds.join(',')}`;
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      {
+        headers: {
+          Referer: 'https://finance.sina.com.cn/',
+          'User-Agent': 'Mozilla/5.0',
+        },
+        timeout: 8000,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks).toString('latin1')));
+        res.on('error', reject);
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('Sina request timeout')));
+    req.on('error', reject);
+  });
+}
+
+// ──────────────────────────────────────────
+//  Naver Finance fetcher (Korean stocks)
+//  Sina/Tencent/eastmoney 都不覆盖 KRX；Naver 是 EUC-KR 编码的纯 HTML 页面
+// ──────────────────────────────────────────
+function fetchNaverHtml(ticker) {
+  const url = `https://finance.naver.com/item/main.naver?code=${encodeURIComponent(ticker)}`;
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0 Safari/537.36',
+          'Accept-Language': 'ko-KR,en;q=0.9',
+        },
+        timeout: 8000,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          // Naver finance now serves UTF-8 (used to be EUC-KR).
+          // Pick decoder from response Content-Type, default to utf-8.
+          const ct = String(res.headers['content-type'] || '').toLowerCase();
+          const enc = /euc-kr/.test(ct) ? 'euc-kr' : 'utf-8';
+          try {
+            resolve(new TextDecoder(enc).decode(Buffer.concat(chunks)));
+          } catch {
+            resolve(Buffer.concat(chunks).toString('utf-8'));
+          }
+        });
+        res.on('error', reject);
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('Naver request timeout')));
+    req.on('error', reject);
+  });
+}
+
+function parseNaverQuote(html, ticker) {
+  // Naver embeds an accessibility-labelled <dl class="blind"> with ordered fields:
+  //   [0] 거래소 timestamp  [1] 시장 (코스피/코스닥)
+  //   [2] 종목 + 시장코드
+  //   [3] "현재가 X,XXX 전일대비 보합/상승/하락 +Y -Y.YY 등락률"
+  //   [4]+ open/high/low/52w/...
+  const m = html.match(/<dl class="blind">([\s\S]*?)<\/dl>/);
+  if (!m) return null;
+  const dds = [...m[1].matchAll(/<dd>([^<]+)<\/dd>/g)].map((x) => x[1].trim());
+  if (dds.length < 4) return null;
+
+  const priceLine = dds[3];
+  // Detect sign: 상승=up, 하락=down, 보합=unchanged
+  let sign = 1;
+  if (/하락/.test(priceLine)) sign = -1;
+  else if (/상승/.test(priceLine)) sign = 1;
+  else if (/보합/.test(priceLine)) sign = 0;
+
+  // Extract numbers in priceLine: [price, changeAbs, changePct]
+  const nums = (priceLine.match(/[\d,]+\.?\d*/g) || []).map((n) =>
+    parseFloat(n.replace(/,/g, ''))
+  );
+  if (nums.length < 1 || isNaN(nums[0])) return null;
+  const price = nums[0];
+  // changeAbs and changePct are unsigned in the page; apply sign
+  const changeAbs = sign * Math.abs(nums[1] || 0);
+  const changePct = sign * Math.abs(nums[2] || 0);
+  const prevClose = price - changeAbs;
+
+  return {
+    symbol: ticker,
+    regularMarketPrice: price,
+    regularMarketPreviousClose: prevClose,
+    regularMarketChangePercent: changePct,
+    preMarketChangePercent: changePct,
+    postMarketChangePercent: 0,
+    marketState: 'REGULAR',
+  };
+}
+
+async function fetchKoreanQuote(ticker) {
+  const html = await fetchNaverHtml(ticker);
+  return parseNaverQuote(html, ticker);
+}
+
+function getUSMarketState() {
+  const now = new Date();
+  const month = now.getUTCMonth();
+  const isDST = month > 2 && month < 10;
+  const etOffsetMin = isDST ? -240 : -300;
+  const et = new Date(now.getTime() + etOffsetMin * 60000);
+  const day = et.getUTCDay();
+  const minOfDay = et.getUTCHours() * 60 + et.getUTCMinutes();
+  if (day === 0 || day === 6) return 'CLOSED';
+  if (minOfDay >= 240 && minOfDay < 570) return 'PRE';
+  if (minOfDay >= 570 && minOfDay < 960) return 'REGULAR';
+  if (minOfDay >= 960 && minOfDay < 1200) return 'POST';
+  return 'CLOSED';
+}
+
+// ──────────────────────────────────────────
+//  Eastmoney push2 fetcher (US stocks / indices / ETFs)
+//  覆盖盘前·盘中·盘后(及隔夜，待隔夜时段验证)，并提供准确昨收 (f18)。
+//  f2 最新价 · f3 涨跌幅 · f12 代码 · f13 市场 · f14 名称 · f18 昨收 (fltt=2 不缩放)
+// ──────────────────────────────────────────
+const EM_STATIC = {            // 指数/ETF → eastmoney secid
+  IXIC: '100.NDX',             // 纳斯达克综合
+  QQQ:  '105.QQQ',
+  SPY:  '107.SPY',
+  VIXY: '107.VIXY',
+};
+function emSecid(sym) {
+  if (EM_STATIC[sym]) return EM_STATIC[sym];
+  const m = tickerMarket[sym];
+  if (m === '105' || m === '106' || m === '107') return `${m}.${sym}`;
+  return null;                 // 非美股(汇率/港股/A股/韩股/未知) → 不走 eastmoney
+}
+function fetchEastmoney(secids) {
+  const url =
+    `https://push2.eastmoney.com/api/qt/ulist.np/get` +
+    `?secids=${secids.join(',')}&fields=f2,f3,f12,f13,f14,f18&fltt=2`;
+  return httpGet(url, { Referer: 'https://quote.eastmoney.com/' });
+}
+function parseEastmoney(jsonText, secidToSym) {
+  let j;
+  try { j = JSON.parse(jsonText); } catch { return {}; }
+  const diff = (j && j.data && j.data.diff) || [];
+  const usState = getUSMarketState();
+  const map = {};
+  for (const d of diff) {
+    const secid = `${d.f13}.${d.f12}`;
+    const sym = secidToSym.get(secid) || d.f12;
+    const price = Number(d.f2), chg = Number(d.f3), prev = Number(d.f18);
+    if (!isFinite(price) || !isFinite(chg)) continue;  // eastmoney 用 '-' 表示无数据
+    map[sym] = {
+      symbol: sym,
+      regularMarketPrice: price,
+      regularMarketChangePercent: chg,
+      regularMarketPreviousClose: isFinite(prev) ? prev : null,
+      preMarketChangePercent: chg,
+      postMarketChangePercent: 0,
+      marketState: usState,
+    };
+  }
+  return map;
+}
+
+function parseSinaResponse(text, requestedSymbols) {
+  const map = {};
+  const symMap = new Map(requestedSymbols.map((s) => [s.toUpperCase(), s]));
+  const usState = getUSMarketState();
+
+  for (const line of text.split('\n')) {
+    const m = line.match(/var\s+hq_str_([\w$^]+)\s*=\s*"([^"]*)"/);
+    if (!m) continue;
+    const id = m[1];
+    const fields = m[2].split(',');
+    if (fields.length < 3) continue;
+
+    if (id === 'fx_susdcny') {
+      const price   = parseFloat(fields[8]) || parseFloat(fields[2]) || 0;
+      const prevRef = parseFloat(fields[3]) || price;
+      let chgPct = parseFloat(fields[10]);
+      if (isNaN(chgPct) && prevRef) chgPct = ((price - prevRef) / prevRef) * 100;
+      if (isNaN(chgPct)) chgPct = 0;
+      map['USDCNY=X'] = {
+        symbol: 'USDCNY=X',
+        regularMarketPrice: price,
+        regularMarketPreviousClose: prevRef,
+        regularMarketChangePercent: chgPct,
+        marketState: 'REGULAR',
+      };
+      continue;
+    }
+
+    if (id.startsWith('gb_')) {
+      let upper = id.slice(3).toUpperCase();
+      if (upper.startsWith('$')) {
+        const stripped = upper.slice(1);
+        upper = symMap.has(stripped) ? stripped
+              : symMap.has('^' + stripped) ? '^' + stripped
+              : stripped;
+      }
+      const symbol = symMap.get(upper) || upper;
+      const price = parseFloat(fields[1]);
+      const chgPct = parseFloat(fields[2]);
+      if (isNaN(price) || isNaN(chgPct)) continue;
+      map[symbol] = {
+        symbol,
+        regularMarketPrice: price,
+        regularMarketChangePercent: chgPct,
+        regularMarketPreviousClose: parseFloat(fields[8]) || null,
+        preMarketChangePercent: chgPct,
+        postMarketChangePercent: 0,
+        marketState: usState,
+      };
+      continue;
+    }
+
+    if (id.startsWith('hk')) {
+      // HK stock fields:
+      //  [2] open  [3] prev_close  [4] high  [5] low
+      //  [6] current  [7] change_amt  [8] change_%
+      const ticker = id.slice(2);
+      const symbol = symMap.get(ticker) || symMap.get(ticker.replace(/^0+/, '')) || ticker;
+      const price = parseFloat(fields[6]);
+      const chgPct = parseFloat(fields[8]);
+      if (isNaN(price) || isNaN(chgPct)) continue;
+      map[symbol] = {
+        symbol,
+        regularMarketPrice: price,
+        regularMarketChangePercent: chgPct,
+        regularMarketPreviousClose: parseFloat(fields[3]) || null,
+        preMarketChangePercent: chgPct,
+        postMarketChangePercent: 0,
+        marketState: 'REGULAR',
+      };
+      continue;
+    }
+
+    if (id.startsWith('sh') || id.startsWith('sz') || id.startsWith('bj')) {
+      // A-share fields (Sina):
+      //   [0] 名称  [1] 今开  [2] 昨收  [3] 当前价  [4] 最高  [5] 最低
+      //   [6] 买1价 [7] 卖1价 [8] 成交量  ...  [30] 日期  [31] 时间
+      // “当日收盘价”：A 股盘后 fields[3] 即为收盘价；盘中为最新价。两者均取 fields[3]。
+      const ticker = id.slice(2);
+      const symbol = symMap.get(ticker) || ticker;
+      const prevClose = parseFloat(fields[2]);
+      const price     = parseFloat(fields[3]);
+      if (isNaN(price) || isNaN(prevClose) || prevClose <= 0) continue;
+      const chgPct = ((price - prevClose) / prevClose) * 100;
+      map[symbol] = {
+        symbol,
+        regularMarketPrice: price,
+        regularMarketPreviousClose: prevClose,
+        regularMarketChangePercent: chgPct,
+        preMarketChangePercent: chgPct,
+        postMarketChangePercent: 0,
+        marketState: 'REGULAR',
+      };
+    }
+  }
+  return map;
+}
+
+app.get('/api/quotes', async (req, res) => {
+  const raw = (req.query.symbols || '').trim();
+  if (!raw) return res.status(400).json({ error: 'symbols required' });
+  const symbols = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const cacheKey = [...symbols].sort().join(',');
+  const cached = quoteCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < QUOTE_TTL) {
+    return res.json({ success: true, data: cached.data, cached: true });
+  }
+
+  // Route each symbol: eastmoney(US) → Naver(KR) → Sina(forex/HK/A股/兜底)
+  const krSymbols   = symbols.filter((s) =>  isKoreanSymbol(s));
+  const emSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && emSecid(s));
+  const sinaSymbols = symbols.filter((s) => !isKoreanSymbol(s) && !emSecid(s));
+  const secidToSym  = new Map(emSymbols.map((s) => [emSecid(s), s]));
+
+  try {
+    // 1) eastmoney 主源(美股)，失败的标的回落到新浪
+    let emMap = {};
+    if (emSymbols.length) {
+      try {
+        const txt = await fetchEastmoney(emSymbols.map(emSecid));
+        emMap = parseEastmoney(txt, secidToSym);
+      } catch (e) {
+        console.error('[eastmoney]', e.message);
+      }
+    }
+    const emMissing = emSymbols.filter((s) => !emMap[s]);
+    const sinaAll = [...sinaSymbols, ...emMissing];
+
+    const [emData, sinaData, krData] = await Promise.all([
+      emSymbols.map((s) => emMap[s]).filter(Boolean),
+      (async () => {
+        if (sinaAll.length === 0) return [];
+        const text = await fetchSina(sinaAll.map(toSinaId));
+        const m = parseSinaResponse(text, sinaAll);
+        return sinaAll.map((s) => m[s]).filter(Boolean);
+      })(),
+      Promise.all(
+        krSymbols.map((s) =>
+          fetchKoreanQuote(s).catch((e) => {
+            console.error('[naver]', s, e.message);
+            return null;
+          })
+        )
+      ).then((arr) => arr.filter(Boolean)),
+    ]);
+
+    const data = [...emData, ...sinaData, ...krData];
+    if (data.length === 0) throw new Error('No quotes returned');
+    quoteCache.set(cacheKey, { data, ts: Date.now() });
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('[quotes]', err.message);
+    const stale = quoteCache.get(cacheKey);
+    if (stale) return res.json({ success: true, data: stale.data, stale: true });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+//  Startup
+// ═══════════════════════════════════════════════════════
+app.listen(PORT, () => {
+  console.log(`美股基金估值服务已启动 → http://localhost:${PORT}`);
+  // Warm fund cache in background
+  loadAllFunds().catch((e) => console.error('[funds] initial load failed:', e.message));
+});

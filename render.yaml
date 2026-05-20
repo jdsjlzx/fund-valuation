@@ -1,0 +1,12 @@
+# Render Blueprint —— 美股基金估值服务
+# 用法：把代码推到 GitHub 后，在 Render 选 "New → Blueprint" 连接此仓库即可。
+services:
+  - type: web
+    name: fund-valuation
+    runtime: node
+    region: singapore        # 离中国最近的免费区域；若不可选改 frankfurt/oregon
+    plan: free               # 免费实例：闲置 15 分钟休眠，下次访问冷启动约 30-60 秒
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /
+    autoDeploy: true         # push 到主分支即自动重新部署

@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# secrets / credentials —— 切勿提交
+claud-id.txt
+.env
+.env.*
+
+# local screenshots (部署不需要)
+*.jpg
+*.jpeg
+*.png
+
+# logs / os
+*.log
+npm-debug.log*
+.DS_Store
+
+# editor / tooling
+.claude/
+.vscode/
+.idea/
