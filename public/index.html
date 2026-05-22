@@ -5,11 +5,114 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>美股基金估值</title>
   <style>
+    /* ── Theme variables ── */
+    :root {
+      --bg: #111;
+      --bg-secondary: #1a1e2c;
+      --bg-card: transparent;
+      --bg-active: #181818;
+      --bg-badge: #202020;
+      --bg-entry: linear-gradient(180deg, #181c28 0%, #14172a 100%);
+      --bg-header: radial-gradient(ellipse at 50% 0%, rgba(56, 76, 120, 0.35) 0%, transparent 70%), linear-gradient(180deg, #1a1e2c 0%, #14172040 60%, #11111100 100%);
+      --bg-vixy: linear-gradient(180deg, #1a1e2c 0%, #141720 100%);
+      --text-primary: #e8e8e8;
+      --text-name: #d8d8d8;
+      --text-holding: #e0e0e0;
+      --text-weight: #d0d0d0;
+      --text-secondary: #8088a0;
+      --text-muted: #555;
+      --text-footer: #333;
+      --text-status: #505050;
+      --text-status-mkt: #686868;
+      --border: #181818;
+      --border-header: #232838;
+      --border-detail: #1e1e1e;
+      --border-badge: #2a2a2a;
+      --border-entry: #262c40;
+      --shadow-header: 0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 6px rgba(0,0,0,0.4);
+      --header-line: linear-gradient(90deg, transparent 0%, #2a3045 50%, transparent 100%);
+      --spinner-border: #2a2a2a;
+      --spinner-top: #555;
+      --btn-bg: #1e1e1e;
+      --btn-border: #333;
+      --btn-color: #888;
+      --btn-active: #2a2a2a;
+      --back-btn: #aaa;
+      --back-btn-active: #fff;
+      --detail-title: #f0f0f0;
+      --detail-code: #666;
+      --est-label: #888;
+      --table-head: #7a7a7a;
+      --chevron: #444;
+      --dot-bg: #444;
+      --entry-label: #e8e8e8;
+      --entry-sub: #6a7080;
+      --flash-up-start: rgba(240, 82, 42, 0.32);
+      --flash-up-mid: rgba(240, 82, 42, 0.22);
+      --flash-down-start: rgba(26, 173, 79, 0.30);
+      --flash-down-mid: rgba(26, 173, 79, 0.20);
+      --up: #f0522a;
+      --down: #1aad4f;
+      --flat: #666;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f5f6f8;
+        --bg-secondary: #ffffff;
+        --bg-card: #ffffff;
+        --bg-active: #f0f1f3;
+        --bg-badge: #f0f1f4;
+        --bg-entry: linear-gradient(180deg, #ffffff 0%, #f8f9fc 100%);
+        --bg-header: linear-gradient(180deg, #ffffff 0%, #f5f7fa 100%);
+        --bg-vixy: linear-gradient(180deg, #ffffff 0%, #f8f9fc 100%);
+        --text-primary: #1a1a1a;
+        --text-name: #222222;
+        --text-holding: #1a1a1a;
+        --text-weight: #444444;
+        --text-secondary: #6b7280;
+        --text-muted: #9ca3af;
+        --text-footer: #9ca3af;
+        --text-status: #9ca3af;
+        --text-status-mkt: #6b7280;
+        --border: #eef0f3;
+        --border-header: #e5e7eb;
+        --border-detail: #eef0f3;
+        --border-badge: #e5e7eb;
+        --border-entry: #e5e7eb;
+        --shadow-header: 0 1px 3px rgba(0,0,0,0.06);
+        --header-line: linear-gradient(90deg, transparent 0%, #e5e7eb 50%, transparent 100%);
+        --spinner-border: #e5e7eb;
+        --spinner-top: #9ca3af;
+        --btn-bg: #ffffff;
+        --btn-border: #e5e7eb;
+        --btn-color: #6b7280;
+        --btn-active: #f0f1f3;
+        --back-btn: #6b7280;
+        --back-btn-active: #1a1a1a;
+        --detail-title: #1a1a1a;
+        --detail-code: #9ca3af;
+        --est-label: #9ca3af;
+        --table-head: #9ca3af;
+        --chevron: #d1d5db;
+        --dot-bg: #d1d5db;
+        --entry-label: #1a1a1a;
+        --entry-sub: #6b7280;
+        --flash-up-start: rgba(240, 82, 42, 0.15);
+        --flash-up-mid: rgba(240, 82, 42, 0.08);
+        --flash-down-start: rgba(26, 173, 79, 0.15);
+        --flash-down-mid: rgba(26, 173, 79, 0.08);
+        --up: #e63e1c;
+        --down: #0da84e;
+        --flat: #9ca3af;
+      }
+    }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      background: #111;
-      color: #e8e8e8;
+      background: var(--bg);
+      color: var(--text-primary);
       font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
       max-width: 560px;
@@ -23,11 +126,9 @@
       grid-template-columns: 1fr 1fr 1fr 1fr;
       padding: 12px 6px 10px;
       gap: 2px;
-      background:
-        radial-gradient(ellipse at 50% 0%, rgba(56, 76, 120, 0.35) 0%, transparent 70%),
-        linear-gradient(180deg, #1a1e2c 0%, #14172040 60%, #11111100 100%);
-      border-bottom: 1px solid #232838;
-      box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 6px rgba(0,0,0,0.4);
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--border-header);
+      box-shadow: var(--shadow-header);
       position: relative;
     }
     .header::after {
@@ -35,7 +136,7 @@
       position: absolute;
       left: 0; right: 0; bottom: -1px;
       height: 1px;
-      background: linear-gradient(90deg, transparent 0%, #2a3045 50%, transparent 100%);
+      background: var(--header-line);
     }
     .h-item {
       text-align: center;
@@ -44,9 +145,9 @@
       border-radius: 6px;
       transition: background 0.4s ease-out;
     }
-    .h-item.flash-up   { background: rgba(240, 82, 42, 0.18); }
-    .h-item.flash-down { background: rgba(26, 173, 79, 0.18); }
-    .h-label { font-size: 11px; color: #8088a0; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .h-item.flash-up   { background: var(--flash-up-mid); }
+    .h-item.flash-down { background: var(--flash-down-mid); }
+    .h-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .h-val   { font-size: 18px; font-weight: 700; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; }
 
     /* ── VIXY 恐慌指标栏 ── */
@@ -56,8 +157,8 @@
       justify-content: center;
       gap: 10px;
       padding: 8px 12px;
-      background: linear-gradient(180deg, #1a1e2c 0%, #141720 100%);
-      border-bottom: 1px solid #232838;
+      background: var(--bg-vixy);
+      border-bottom: 1px solid var(--border-header);
     }
     .vixy-bar .vixy-price {
       font-size: 19px;
@@ -66,7 +167,7 @@
     }
     .vixy-bar .vixy-label {
       font-size: 12px;
-      color: #8088a0;
+      color: var(--text-secondary);
     }
     .vixy-bar .vixy-chg {
       font-size: 13px;
@@ -79,7 +180,7 @@
       border-radius: 4px;
     }
     .vixy-signal.signal-normal {
-      color: #8088a0;
+      color: var(--text-secondary);
       background: rgba(128,136,160,0.12);
     }
     .vixy-signal.signal-watch {
@@ -112,7 +213,7 @@
       font-size: 13px;
       font-weight: 600;
       letter-spacing: 0.5px;
-      border-bottom: 1px solid #232838;
+      border-bottom: 1px solid var(--border-header);
       animation: alert-glow 2s ease-in-out infinite;
     }
     .vixy-alert .alert-price {
@@ -153,50 +254,50 @@
       text-align: center;
       padding: 6px 12px;
       font-size: 13px;
-      color: #505050;
-      border-bottom: 1px solid #1a1a1a;
+      color: var(--text-status);
+      border-bottom: 1px solid var(--border);
       line-height: 1.6;
     }
-    .status-bar .mkt { color: #686868; }
+    .status-bar .mkt { color: var(--text-status-mkt); }
 
     /* ── Fund list ── */
     .fund-item {
       display: flex;
       align-items: center;
       padding: 9px 12px;
-      border-bottom: 1px solid #181818;
+      border-bottom: 1px solid var(--border);
+      background-color: var(--bg-card);
       cursor: pointer;
       position: relative;
-      background-color: transparent;
       transition: background-color 0.18s ease-out;
     }
-    .fund-item:active { background-color: #181818; }
+    .fund-item:active { background-color: var(--bg-active); }
 
     /* Futu-style price-change flash */
     @keyframes fund-flash-up {
-      0%   { background-color: rgba(240, 82, 42, 0.32); }
-      40%  { background-color: rgba(240, 82, 42, 0.22); }
-      100% { background-color: transparent; }
+      0%   { background-color: var(--flash-up-start); }
+      40%  { background-color: var(--flash-up-mid); }
+      100% { background-color: var(--bg-card); }
     }
     @keyframes fund-flash-down {
-      0%   { background-color: rgba(26, 173, 79, 0.30); }
-      40%  { background-color: rgba(26, 173, 79, 0.20); }
-      100% { background-color: transparent; }
+      0%   { background-color: var(--flash-down-start); }
+      40%  { background-color: var(--flash-down-mid); }
+      100% { background-color: var(--bg-card); }
     }
     .fund-item.flash-up   { animation: fund-flash-up   1.1s ease-out; }
     .fund-item.flash-down { animation: fund-flash-down 1.1s ease-out; }
 
     .fund-left { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; }
-    .fund-name { font-size: 14px; color: #d8d8d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .fund-code { font-size: 13px; color: #555; font-variant-numeric: tabular-nums; letter-spacing: 0.4px; flex-shrink: 0; }
+    .fund-name { font-size: 14px; color: var(--text-name); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fund-code { font-size: 13px; color: var(--text-muted); font-variant-numeric: tabular-nums; letter-spacing: 0.4px; flex-shrink: 0; }
     .badge {
       flex-shrink: 0;
       font-size: 11px;
       padding: 1px 4px;
       border-radius: 3px;
-      background: #202020;
-      color: #5a5a5a;
-      border: 1px solid #2a2a2a;
+      background: var(--bg-badge);
+      color: var(--text-muted);
+      border: 1px solid var(--border-badge);
     }
     .fund-pct {
       font-size: 16px;
@@ -206,12 +307,12 @@
       letter-spacing: -0.3px;
       font-variant-numeric: tabular-nums;
     }
-    .chevron { color: #444; font-size: 16px; margin-left: 6px; }
+    .chevron { color: var(--chevron); font-size: 16px; margin-left: 6px; }
 
     /* Chinese convention: red = up, green = down */
-    .up   { color: #f0522a; }
-    .down { color: #1aad4f; }
-    .flat { color: #666; }
+    .up   { color: var(--up); }
+    .down { color: var(--down); }
+    .flat { color: var(--flat); }
 
     /* ── Detail view ── */
     .detail-topbar {
@@ -219,25 +320,27 @@
       align-items: center;
       justify-content: space-between;
       padding: 14px 14px 10px;
-      border-bottom: 1px solid #1e1e1e;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border-detail);
     }
     .back-btn {
-      background: transparent; border: none; color: #aaa;
+      background: transparent; border: none; color: var(--back-btn);
       font-size: 17px; cursor: pointer; padding: 4px 8px 4px 0;
       display: flex; align-items: center; gap: 4px;
     }
-    .back-btn:active { color: #fff; }
-    .detail-title { font-size: 16px; font-weight: 600; color: #f0f0f0; flex: 1; text-align: center; margin: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
+    .back-btn:active { color: var(--back-btn-active); }
+    .detail-title { font-size: 16px; font-weight: 600; color: var(--detail-title); flex: 1; text-align: center; margin: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
     .detail-est { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 100px; text-align: right; }
-    .detail-est .est-label { color: #888; font-weight: 400; font-size: 12px; margin-right: 4px; }
+    .detail-est .est-label { color: var(--est-label); font-weight: 400; font-size: 12px; margin-right: 4px; }
 
     .table-head {
       display: grid;
       grid-template-columns: 1fr 80px 90px;
       padding: 9px 12px 7px;
       font-size: 12px;
-      color: #7a7a7a;
-      border-bottom: 1px solid #1a1a1a;
+      color: var(--table-head);
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
     }
     .table-head .col-pct { text-align: right; padding-right: 12px; }
     .table-head .col-chg { text-align: right; }
@@ -246,18 +349,19 @@
       display: grid;
       grid-template-columns: 1fr 80px 90px;
       padding: 10px 12px;
-      border-bottom: 1px solid #181818;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-card);
       align-items: center;
     }
-    .holding-name { font-size: 14px; color: #e0e0e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .holding-mkt-tag { font-size: 11px; color: #555; margin-left: 4px; padding: 1px 3px; border: 1px solid #2a2a2a; border-radius: 2px; }
-    .holding-weight { text-align: right; padding-right: 10px; font-size: 14px; color: #d0d0d0; font-variant-numeric: tabular-nums; }
+    .holding-name { font-size: 14px; color: var(--text-holding); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .holding-mkt-tag { font-size: 11px; color: var(--text-muted); margin-left: 4px; padding: 1px 3px; border: 1px solid var(--border-badge); border-radius: 2px; }
+    .holding-weight { text-align: right; padding-right: 10px; font-size: 14px; color: var(--text-weight); font-variant-numeric: tabular-nums; }
     .holding-chg { text-align: right; font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
 
     .detail-footnote {
       text-align: center;
       padding: 18px 14px 30px;
-      color: #5a5a5a;
+      color: var(--text-muted);
       font-size: 14px;
       line-height: 1.6;
     }
@@ -265,23 +369,23 @@
     /* ── Loading / Error ── */
     .center-msg {
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      min-height: 200px; color: #444; font-size: 15px; gap: 12px;
+      min-height: 200px; color: var(--text-muted); font-size: 15px; gap: 12px;
     }
     .spinner {
       width: 28px; height: 28px;
-      border: 2px solid #2a2a2a; border-top-color: #555; border-radius: 50%;
+      border: 2px solid var(--spinner-border); border-top-color: var(--spinner-top); border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
     .retry-btn {
-      padding: 7px 18px; background: #1e1e1e; border: 1px solid #333;
-      color: #888; border-radius: 5px; cursor: pointer; font-size: 14px;
+      padding: 7px 18px; background: var(--btn-bg); border: 1px solid var(--btn-border);
+      color: var(--btn-color); border-radius: 5px; cursor: pointer; font-size: 14px;
     }
-    .retry-btn:active { background: #2a2a2a; }
+    .retry-btn:active { background: var(--btn-active); }
 
     .footer {
-      text-align: center; padding: 20px 16px 30px; font-size: 13px; color: #333;
+      text-align: center; padding: 20px 16px 30px; font-size: 13px; color: var(--text-footer);
     }
 
     /* ── 24h entry card ── */
@@ -290,21 +394,19 @@
       align-items: center;
       margin: 18px 14px 6px;
       padding: 14px 16px;
-      background:
-        radial-gradient(ellipse at 0% 50%, rgba(56, 76, 120, 0.22) 0%, transparent 65%),
-        linear-gradient(180deg, #181c28 0%, #14172a 100%);
-      border: 1px solid #262c40;
+      background: var(--bg-entry);
+      border: 1px solid var(--border-entry);
       border-radius: 10px;
       cursor: pointer;
       transition: background 0.18s ease-out, border-color 0.18s ease-out;
     }
-    .entry-row:active { border-color: #3a435f; }
+    .entry-row:active { border-color: var(--text-secondary); }
     .entry-main { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-    .entry-label { font-size: 16px; color: #e8e8e8; font-weight: 600; letter-spacing: 0.3px; }
-    .entry-sub { font-size: 13px; color: #6a7080; }
-    .entry-row .chevron { color: #6a7080; font-size: 18px; margin-left: 8px; }
+    .entry-label { font-size: 16px; color: var(--entry-label); font-weight: 600; letter-spacing: 0.3px; }
+    .entry-sub { font-size: 13px; color: var(--entry-sub); }
+    .entry-row .chevron { color: var(--entry-sub); font-size: 18px; margin-left: 8px; }
 
-    .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #444; margin-left: 4px; vertical-align: middle; }
+    .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--dot-bg); margin-left: 4px; vertical-align: middle; }
     .dot.live { background: #27ae60; animation: pulse 2s ease-in-out infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   </style>
@@ -728,17 +830,7 @@ function render24h() {
                       : vixyChg >= 10   ? { text: '恐慌提升', cls: 'signal-panic' }
                       : { text: '正常', cls: 'signal-normal' };
 
-  // 15:00-05:00 北京时间作为首页时隐藏返回按钮
-  const bjHour = (new Date().getUTCHours() + 8) % 24;
-  const is24hHome = !(bjHour >= 5 && bjHour < 15);
-  const backBtn = is24hHome ? '<div style="min-width:60px"></div>' : '<button class="back-btn" onclick="goBack()">‹ 返回</button>';
-
   document.getElementById('app').innerHTML = `
-    <div class="detail-topbar">
-      ${backBtn}
-      <div class="detail-title">美股24小时</div>
-      <div style="min-width:60px"></div>
-    </div>
     <div class="header">
       <div class="h-item ${fIxic}">
         <div class="h-label">纳斯达克</div>
@@ -800,7 +892,7 @@ function renderDetail(idx, mode) {
   }).join('');
 
   const expandHtml = (hasMore && !expanded)
-    ? `<button class="retry-btn" style="display:block;width:100%;margin:0;padding:16px;border-radius:0;border:none;border-bottom:1px solid #1a1a1a;background:transparent;color:#c8c8c8;font-size:14px" onclick="expandAll()">展开全部数据 (${sorted.length})</button>`
+    ? `<button class="retry-btn" style="display:block;width:100%;margin:0;padding:16px;border-radius:0;border:none;border-bottom:1px solid var(--border);background:transparent;color:var(--text-name);font-size:14px" onclick="expandAll()">展开全部数据 (${sorted.length})</button>`
     : '';
 
   const qDate = fund.reportDate || '';
@@ -821,7 +913,7 @@ function renderDetail(idx, mode) {
       <button class="back-btn" onclick="goBack()">‹ 返回</button>
       <div class="detail-title">
         <div>${fund.name}</div>
-        <div style="font-size:11px;color:#666;font-weight:400;margin-top:2px;">${fund.code || ''}</div>
+        <div style="font-size:11px;color:var(--detail-code);font-weight:400;margin-top:2px;">${fund.code || ''}</div>
       </div>
       <div class="detail-est">
         <span class="est-label">${mode === '24h' ? mktLabel24h + ':' : '估值:'}</span><span class="${cls(est)}">${fmtPct(est)}</span>
@@ -851,8 +943,8 @@ function rerender() {
 function renderError(msg) {
   document.getElementById('app').innerHTML = `
     <div class="center-msg">
-      <span style="color:#555">数据加载失败</span>
-      <span style="font-size:11px;color:#333">${msg}</span>
+      <span style="color:var(--text-muted)">数据加载失败</span>
+      <span style="font-size:11px;color:var(--text-footer)">${msg}</span>
       <button class="retry-btn" onclick="bootstrap()">重试</button>
     </div>`;
 }
