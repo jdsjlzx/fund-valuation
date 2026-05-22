@@ -300,18 +300,18 @@
       border: 1px solid var(--border-badge);
     }
     .fund-pct {
-      font-size: 14px;
-      font-weight: 600;
-      min-width: 80px;
+      font-size: 13px;
+      font-weight: 400;
+      min-width: 72px;
       text-align: center;
-      letter-spacing: -0.3px;
+      letter-spacing: -0.2px;
       font-variant-numeric: tabular-nums;
-      padding: 5px 10px;
-      border-radius: 4px;
+      padding: 4px 8px;
+      border-radius: 3px;
       color: #fff;
     }
-    .fund-pct.up   { background: #cc2929; color: #fff; }
-    .fund-pct.down { background: #0d8c42; color: #fff; }
+    .fund-pct.up   { background: rgba(204, 41, 41, 0.75); color: #fff; }
+    .fund-pct.down { background: rgba(13, 140, 66, 0.75); color: #fff; }
     .fund-pct.flat { background: var(--bg-active); color: var(--flat); }
     .chevron { color: var(--chevron); font-size: 16px; margin-left: 6px; }
 
@@ -957,7 +957,7 @@ function render24h() {
     </div>
     ${vixyAlertHtml(vixyPrice)}
     <div class="status-bar">
-      美股盘后/盘前实时估值&ensp;显示收盘后至今变动&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
+      美股盘后/盘前实时估值&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
     </div>
     <div class="list-toolbar">
       <button class="sort-btn ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">${sortBtnLabel()}</button>
