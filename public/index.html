@@ -51,8 +51,8 @@
       --flash-up-mid: rgba(240, 82, 42, 0.22);
       --flash-down-start: rgba(26, 173, 79, 0.30);
       --flash-down-mid: rgba(26, 173, 79, 0.20);
-      --up: #f0522a;
-      --down: #1aad4f;
+      --up: #e84c3d;
+      --down: #2ebd85;
       --flat: #666;
     }
 
@@ -102,8 +102,8 @@
         --flash-up-mid: rgba(240, 82, 42, 0.08);
         --flash-down-start: rgba(26, 173, 79, 0.15);
         --flash-down-mid: rgba(26, 173, 79, 0.08);
-        --up: #e63e1c;
-        --down: #0da84e;
+        --up: #e84c3d;
+        --down: #2ebd85;
         --flat: #9ca3af;
       }
     }
@@ -275,17 +275,15 @@
 
     /* Futu-style price-change flash */
     @keyframes fund-flash-up {
-      0%   { background-color: rgba(204, 41, 41, 0.35); }
-      30%  { background-color: rgba(204, 41, 41, 0.25); }
+      0%   { background-color: rgba(232, 76, 61, 0.18); }
       100% { background-color: var(--bg-card); }
     }
     @keyframes fund-flash-down {
-      0%   { background-color: rgba(13, 140, 66, 0.35); }
-      30%  { background-color: rgba(13, 140, 66, 0.25); }
+      0%   { background-color: rgba(46, 189, 133, 0.18); }
       100% { background-color: var(--bg-card); }
     }
-    .fund-item.flash-up   { animation: fund-flash-up   1.4s ease-out; }
-    .fund-item.flash-down { animation: fund-flash-down 1.4s ease-out; }
+    .fund-item.flash-up   { animation: fund-flash-up 1s ease-out; }
+    .fund-item.flash-down { animation: fund-flash-down 1s ease-out; }
 
     .fund-left { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; }
     .fund-name { font-size: 14px; color: var(--text-name); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -310,8 +308,8 @@
       border-radius: 3px;
       color: #fff;
     }
-    .fund-pct.up   { background: rgba(204, 41, 41, 0.75); color: #fff; }
-    .fund-pct.down { background: rgba(13, 140, 66, 0.75); color: #fff; }
+    .fund-pct.up   { background: #e84c3d; color: #fff; }
+    .fund-pct.down { background: #2ebd85; color: #fff; }
     .fund-pct.flat { background: var(--bg-active); color: var(--flat); }
     .chevron { color: var(--chevron); font-size: 16px; margin-left: 6px; }
 
