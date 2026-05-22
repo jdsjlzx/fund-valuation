@@ -21,7 +21,7 @@
     .header {
       display: grid;
       grid-template-columns: 1fr 1fr 1fr 1fr;
-      padding: 16px 8px 12px;
+      padding: 12px 6px 10px;
       gap: 2px;
       background:
         radial-gradient(ellipse at 50% 0%, rgba(56, 76, 120, 0.35) 0%, transparent 70%),
@@ -46,36 +46,36 @@
     }
     .h-item.flash-up   { background: rgba(240, 82, 42, 0.18); }
     .h-item.flash-down { background: rgba(26, 173, 79, 0.18); }
-    .h-label { font-size: 12.5px; color: #8088a0; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .h-val   { font-size: 21px; font-weight: 700; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; }
+    .h-label { font-size: 11px; color: #8088a0; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .h-val   { font-size: 18px; font-weight: 700; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; }
 
     /* ── VIXY 恐慌指标栏 ── */
     .vixy-bar {
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 12px;
-      padding: 10px 14px;
+      gap: 10px;
+      padding: 8px 12px;
       background: linear-gradient(180deg, #1a1e2c 0%, #141720 100%);
       border-bottom: 1px solid #232838;
     }
     .vixy-bar .vixy-price {
-      font-size: 22px;
+      font-size: 19px;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
     }
     .vixy-bar .vixy-label {
-      font-size: 13px;
+      font-size: 12px;
       color: #8088a0;
     }
     .vixy-bar .vixy-chg {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
     }
     .vixy-bar .vixy-signal {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
-      padding: 2px 8px;
+      padding: 2px 7px;
       border-radius: 4px;
     }
     .vixy-signal.signal-normal {
@@ -107,24 +107,24 @@
     /* ── VIXY 加仓提醒横幅 ── */
     .vixy-alert {
       margin: 0;
-      padding: 14px 18px;
+      padding: 10px 14px;
       text-align: center;
-      font-size: 15px;
+      font-size: 13px;
       font-weight: 600;
       letter-spacing: 0.5px;
       border-bottom: 1px solid #232838;
       animation: alert-glow 2s ease-in-out infinite;
     }
     .vixy-alert .alert-price {
-      font-size: 20px;
+      font-size: 17px;
       font-weight: 700;
-      margin: 0 6px;
+      margin: 0 5px;
       font-variant-numeric: tabular-nums;
     }
     .vixy-alert .alert-tip {
       display: block;
-      margin-top: 4px;
-      font-size: 13px;
+      margin-top: 3px;
+      font-size: 11px;
       font-weight: 400;
       opacity: 0.8;
     }
@@ -163,7 +163,7 @@
     .fund-item {
       display: flex;
       align-items: center;
-      padding: 11px 14px;
+      padding: 9px 12px;
       border-bottom: 1px solid #181818;
       cursor: pointer;
       position: relative;
@@ -187,21 +187,21 @@
     .fund-item.flash-down { animation: fund-flash-down 1.1s ease-out; }
 
     .fund-left { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; }
-    .fund-name { font-size: 16px; color: #d8d8d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fund-name { font-size: 14px; color: #d8d8d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .fund-code { font-size: 13px; color: #555; font-variant-numeric: tabular-nums; letter-spacing: 0.4px; flex-shrink: 0; }
     .badge {
       flex-shrink: 0;
-      font-size: 12.5px;
-      padding: 2px 5px;
+      font-size: 11px;
+      padding: 1px 4px;
       border-radius: 3px;
       background: #202020;
       color: #5a5a5a;
       border: 1px solid #2a2a2a;
     }
     .fund-pct {
-      font-size: 19px;
+      font-size: 16px;
       font-weight: 600;
-      min-width: 92px;
+      min-width: 80px;
       text-align: right;
       letter-spacing: -0.3px;
       font-variant-numeric: tabular-nums;
@@ -227,15 +227,15 @@
       display: flex; align-items: center; gap: 4px;
     }
     .back-btn:active { color: #fff; }
-    .detail-title { font-size: 19px; font-weight: 600; color: #f0f0f0; flex: 1; text-align: center; margin: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .detail-est { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 112px; text-align: right; }
-    .detail-est .est-label { color: #888; font-weight: 400; font-size: 14px; margin-right: 4px; }
+    .detail-title { font-size: 16px; font-weight: 600; color: #f0f0f0; flex: 1; text-align: center; margin: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
+    .detail-est { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 100px; text-align: right; }
+    .detail-est .est-label { color: #888; font-weight: 400; font-size: 12px; margin-right: 4px; }
 
     .table-head {
       display: grid;
-      grid-template-columns: 1fr 100px 100px;
-      padding: 11px 14px 9px;
-      font-size: 14px;
+      grid-template-columns: 1fr 80px 90px;
+      padding: 9px 12px 7px;
+      font-size: 12px;
       color: #7a7a7a;
       border-bottom: 1px solid #1a1a1a;
     }
@@ -244,15 +244,15 @@
 
     .holding-row {
       display: grid;
-      grid-template-columns: 1fr 100px 100px;
-      padding: 14px 14px;
+      grid-template-columns: 1fr 80px 90px;
+      padding: 10px 12px;
       border-bottom: 1px solid #181818;
       align-items: center;
     }
-    .holding-name { font-size: 16px; color: #e0e0e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .holding-mkt-tag { font-size: 12px; color: #555; margin-left: 4px; padding: 1px 4px; border: 1px solid #2a2a2a; border-radius: 2px; }
-    .holding-weight { text-align: right; padding-right: 12px; font-size: 16px; color: #d0d0d0; font-variant-numeric: tabular-nums; }
-    .holding-chg { text-align: right; font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .holding-name { font-size: 14px; color: #e0e0e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .holding-mkt-tag { font-size: 11px; color: #555; margin-left: 4px; padding: 1px 3px; border: 1px solid #2a2a2a; border-radius: 2px; }
+    .holding-weight { text-align: right; padding-right: 10px; font-size: 14px; color: #d0d0d0; font-variant-numeric: tabular-nums; }
+    .holding-chg { text-align: right; font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
 
     .detail-footnote {
       text-align: center;
@@ -603,7 +603,6 @@ function renderList() {
       <div class="fund-item ${flash}" onclick="go('#/fund/${i}')">
         <div class="fund-left">
           <span class="fund-name">${fund.name}</span>
-          <span class="fund-code">${fund.code || ''}</span>
           <span class="badge">${mktLabel}</span>
         </div>
         <span class="fund-pct ${cls(chg)}">${fmtPct(chg)}</span>
@@ -706,7 +705,6 @@ function render24h() {
       <div class="fund-item ${flash}" onclick="go('#/24h/fund/${i}')">
         <div class="fund-left">
           <span class="fund-name">${fund.name}</span>
-          <span class="fund-code">${fund.code || ''}</span>
           <span class="badge">${mktLabel}</span>
         </div>
         <span class="fund-pct ${cls(chg)}">${fmtPct(chg)}</span>
@@ -821,7 +819,10 @@ function renderDetail(idx, mode) {
   document.getElementById('app').innerHTML = `
     <div class="detail-topbar">
       <button class="back-btn" onclick="goBack()">‹ 返回</button>
-      <div class="detail-title">${fund.name}</div>
+      <div class="detail-title">
+        <div>${fund.name}</div>
+        <div style="font-size:11px;color:#666;font-weight:400;margin-top:2px;">${fund.code || ''}</div>
+      </div>
       <div class="detail-est">
         <span class="est-label">${mode === '24h' ? mktLabel24h + ':' : '估值:'}</span><span class="${cls(est)}">${fmtPct(est)}</span>
       </div>
