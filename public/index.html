@@ -438,16 +438,18 @@
     .sort-btn:active { background: var(--bg-active); }
     .sort-btn.active { color: var(--up); border-color: var(--up); }
     .pin-icon {
-      font-size: 12px;
-      color: var(--text-muted);
       margin-right: 4px;
       cursor: pointer;
       flex-shrink: 0;
       padding: 2px;
-      opacity: 0.4;
+      opacity: 0.35;
       transition: opacity 0.15s;
+      display: inline-flex;
+      align-items: center;
     }
-    .pin-icon.pinned { opacity: 1; color: var(--up); }
+    .pin-icon svg { width: 14px; height: 14px; fill: var(--text-muted); }
+    .pin-icon.pinned { opacity: 1; }
+    .pin-icon.pinned svg { fill: var(--up); }
     .fund-item.pinned-item { border-bottom-color: var(--border-header); }
     .pin-divider {
       height: 1px;
@@ -788,7 +790,7 @@ function renderList() {
     const pinCls = isPinned ? 'pin-icon pinned' : 'pin-icon';
     rows += `
       <div class="fund-item ${flash}${isPinned ? ' pinned-item' : ''}" onclick="go('#/fund/${idx}')">
-        <span class="${pinCls}" onclick="togglePin(${idx}, event)">${isPinned ? '&#x1F4CC;' : '&#x25CB;'}</span>
+        <span class="${pinCls}" onclick="togglePin(${idx}, event)"><svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5v6h2v-6h5v-2z"/></svg></span>
         <div class="fund-left">
           <span class="fund-name">${fund.name}</span>
           <span class="badge">${mktLabel}</span>
@@ -901,7 +903,7 @@ function render24h() {
     const pinCls = isPinned ? 'pin-icon pinned' : 'pin-icon';
     rows += `
       <div class="fund-item ${flash}${isPinned ? ' pinned-item' : ''}" onclick="go('#/24h/fund/${idx}')">
-        <span class="${pinCls}" onclick="togglePin(${idx}, event)">${isPinned ? '&#x1F4CC;' : '&#x25CB;'}</span>
+        <span class="${pinCls}" onclick="togglePin(${idx}, event)"><svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5v6h2v-6h5v-2z"/></svg></span>
         <div class="fund-left">
           <span class="fund-name">${fund.name}</span>
           <span class="badge">${mktLabel}</span>
