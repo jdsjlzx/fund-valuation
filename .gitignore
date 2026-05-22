@@ -10,6 +10,7 @@ claud-id.txt
 *.jpg
 *.jpeg
 *.png
+!pic/**
 
 # logs / os
 *.log
