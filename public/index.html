@@ -531,8 +531,8 @@ function sortedFundIndices(map, fxChg, opts) {
   return [...pinned, ...rest];
 }
 function sortBtnLabel() {
-  if (sortMode === 'desc') return '↓ 跌幅优先';
-  if (sortMode === 'asc') return '↑ 涨幅优先';
+  if (sortMode === 'desc') return '↓ 涨幅优先';
+  if (sortMode === 'asc') return '↑ 跌幅优先';
   return '↕ 默认';
 }
 
