@@ -409,6 +409,47 @@
     .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--dot-bg); margin-left: 4px; vertical-align: middle; }
     .dot.live { background: #27ae60; animation: pulse 2s ease-in-out infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* ── Sort & Pin ── */
+    .list-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 6px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+    .sort-btn {
+      background: transparent;
+      border: 1px solid var(--border-badge);
+      color: var(--text-secondary);
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .sort-btn:active { background: var(--bg-active); }
+    .sort-btn.active { color: var(--up); border-color: var(--up); }
+    .pin-icon {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-right: 4px;
+      cursor: pointer;
+      flex-shrink: 0;
+      padding: 2px;
+      opacity: 0.4;
+      transition: opacity 0.15s;
+    }
+    .pin-icon.pinned { opacity: 1; color: var(--up); }
+    .fund-item.pinned-item { border-bottom-color: var(--border-header); }
+    .pin-divider {
+      height: 1px;
+      background: var(--border-header);
+      margin: 0;
+    }
   </style>
 </head>
 <body>
@@ -454,6 +495,40 @@ let LAST_MAP = {};       // symbol → quote
 let LAST_STALE = false;
 let timer = null;
 let expanded = false;
+
+// Sort & Pin state
+let sortMode = 'default';  // 'default' | 'desc' | 'asc'
+const pinnedSet = new Set(JSON.parse(localStorage.getItem('pinnedFunds') || '[]'));
+
+function savePinned() {
+  localStorage.setItem('pinnedFunds', JSON.stringify([...pinnedSet]));
+}
+function toggleSort() {
+  sortMode = sortMode === 'default' ? 'desc' : sortMode === 'desc' ? 'asc' : 'default';
+  rerender();
+}
+function togglePin(idx, evt) {
+  evt.stopPropagation();
+  if (pinnedSet.has(idx)) pinnedSet.delete(idx);
+  else pinnedSet.add(idx);
+  savePinned();
+  rerender();
+}
+function sortedFundIndices(map, fxChg, opts) {
+  const items = FUNDS.map((fund, i) => ({ idx: i, chg: calcFund(fund, map, fxChg, opts) }));
+  const pinned = items.filter(x => pinnedSet.has(x.idx));
+  const rest = items.filter(x => !pinnedSet.has(x.idx));
+  const sorter = sortMode === 'desc' ? (a, b) => (b.chg ?? -999) - (a.chg ?? -999)
+               : sortMode === 'asc'  ? (a, b) => (a.chg ?? -999) - (b.chg ?? -999)
+               : null;
+  if (sorter) { pinned.sort(sorter); rest.sort(sorter); }
+  return [...pinned, ...rest];
+}
+function sortBtnLabel() {
+  if (sortMode === 'desc') return '↓ 跌幅优先';
+  if (sortMode === 'asc') return '↑ 涨幅优先';
+  return '↕ 默认';
+}
 
 // ═══════════════════════════════════════════════════
 //  HELPERS
@@ -698,11 +773,18 @@ function renderList() {
 
   // Fund rows with per-row flash
   let rows = '';
-  FUNDS.forEach((fund, i) => {
-    const chg = calcFund(fund, map, fxChg);
-    const flash = flashClass(prevFundPct.get(i), chg);
+  const sorted = sortedFundIndices(map, fxChg, {});
+  const lastPinnedIdx = [...sorted].reverse().findIndex(x => pinnedSet.has(x.idx));
+  const lastPinnedPos = lastPinnedIdx >= 0 ? sorted.length - 1 - lastPinnedIdx : -1;
+  sorted.forEach((item, pos) => {
+    const { idx, chg } = item;
+    const fund = FUNDS[idx];
+    const flash = flashClass(prevFundPct.get(idx), chg);
+    const isPinned = pinnedSet.has(idx);
+    const pinCls = isPinned ? 'pin-icon pinned' : 'pin-icon';
     rows += `
-      <div class="fund-item ${flash}" onclick="go('#/fund/${i}')">
+      <div class="fund-item ${flash}${isPinned ? ' pinned-item' : ''}" onclick="go('#/fund/${idx}')">
+        <span class="${pinCls}" onclick="togglePin(${idx}, event)">${isPinned ? '&#x1F4CC;' : '&#x25CB;'}</span>
         <div class="fund-left">
           <span class="fund-name">${fund.name}</span>
           <span class="badge">${mktLabel}</span>
@@ -710,7 +792,8 @@ function renderList() {
         <span class="fund-pct ${cls(chg)}">${fmtPct(chg)}</span>
         <span class="chevron">›</span>
       </div>`;
-    prevFundPct.set(i, chg);
+    if (pos === lastPinnedPos && lastPinnedPos < sorted.length - 1) rows += '<div class="pin-divider"></div>';
+    prevFundPct.set(idx, chg);
   });
 
   // Commit header prev-values after computing flash
@@ -768,6 +851,9 @@ function renderList() {
     <div class="status-bar">
       基于季报真实持仓计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>), 仅供参考<span class="${dotClass}"></span>
     </div>
+    <div class="list-toolbar">
+      <button class="sort-btn ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">${sortBtnLabel()}</button>
+    </div>
     <div class="fund-list">${rows}</div>
     ${entryHtml}
     <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）&emsp;5秒自动刷新</div>
@@ -800,11 +886,18 @@ function render24h() {
   const fFx   = flashClass(prevHeaderVal24h.FX,   fxChg);
 
   let rows = '';
-  FUNDS.forEach((fund, i) => {
-    const chg = calcFund(fund, map, fxChg, opts);
-    const flash = flashClass(prevFundPct24h.get(i), chg);
+  const sorted24 = sortedFundIndices(map, fxChg, opts);
+  const lastPinIdx24 = [...sorted24].reverse().findIndex(x => pinnedSet.has(x.idx));
+  const lastPinPos24 = lastPinIdx24 >= 0 ? sorted24.length - 1 - lastPinIdx24 : -1;
+  sorted24.forEach((item, pos) => {
+    const { idx, chg } = item;
+    const fund = FUNDS[idx];
+    const flash = flashClass(prevFundPct24h.get(idx), chg);
+    const isPinned = pinnedSet.has(idx);
+    const pinCls = isPinned ? 'pin-icon pinned' : 'pin-icon';
     rows += `
-      <div class="fund-item ${flash}" onclick="go('#/24h/fund/${i}')">
+      <div class="fund-item ${flash}${isPinned ? ' pinned-item' : ''}" onclick="go('#/24h/fund/${idx}')">
+        <span class="${pinCls}" onclick="togglePin(${idx}, event)">${isPinned ? '&#x1F4CC;' : '&#x25CB;'}</span>
         <div class="fund-left">
           <span class="fund-name">${fund.name}</span>
           <span class="badge">${mktLabel}</span>
@@ -812,7 +905,8 @@ function render24h() {
         <span class="fund-pct ${cls(chg)}">${fmtPct(chg)}</span>
         <span class="chevron">›</span>
       </div>`;
-    prevFundPct24h.set(i, chg);
+    if (pos === lastPinPos24 && lastPinPos24 < sorted24.length - 1) rows += '<div class="pin-divider"></div>';
+    prevFundPct24h.set(idx, chg);
   });
 
   prevHeaderVal24h.IXIC = ixicChg;
@@ -858,6 +952,9 @@ function render24h() {
     ${vixyAlertHtml(vixyPrice)}
     <div class="status-bar">
       美股盘后/盘前实时估值&ensp;显示收盘后至今变动&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
+    </div>
+    <div class="list-toolbar">
+      <button class="sort-btn ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">${sortBtnLabel()}</button>
     </div>
     <div class="fund-list">${rows}</div>
     <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）&emsp;5秒自动刷新</div>
