@@ -145,8 +145,8 @@
       border-radius: 6px;
       transition: background 0.4s ease-out;
     }
-    .h-item.flash-up   { background: var(--flash-up-mid); }
-    .h-item.flash-down { background: var(--flash-down-mid); }
+    .h-item.flash-up   { background: rgba(204, 41, 41, 0.25); }
+    .h-item.flash-down { background: rgba(13, 140, 66, 0.25); }
     .h-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .h-val   { font-size: 18px; font-weight: 700; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; }
 
@@ -275,17 +275,17 @@
 
     /* Futu-style price-change flash */
     @keyframes fund-flash-up {
-      0%   { background-color: var(--flash-up-start); }
-      40%  { background-color: var(--flash-up-mid); }
+      0%   { background-color: rgba(204, 41, 41, 0.35); }
+      30%  { background-color: rgba(204, 41, 41, 0.25); }
       100% { background-color: var(--bg-card); }
     }
     @keyframes fund-flash-down {
-      0%   { background-color: var(--flash-down-start); }
-      40%  { background-color: var(--flash-down-mid); }
+      0%   { background-color: rgba(13, 140, 66, 0.35); }
+      30%  { background-color: rgba(13, 140, 66, 0.25); }
       100% { background-color: var(--bg-card); }
     }
-    .fund-item.flash-up   { animation: fund-flash-up   1.1s ease-out; }
-    .fund-item.flash-down { animation: fund-flash-down 1.1s ease-out; }
+    .fund-item.flash-up   { animation: fund-flash-up   1.4s ease-out; }
+    .fund-item.flash-down { animation: fund-flash-down 1.4s ease-out; }
 
     .fund-left { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; }
     .fund-name { font-size: 14px; color: var(--text-name); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -300,13 +300,19 @@
       border: 1px solid var(--border-badge);
     }
     .fund-pct {
-      font-size: 16px;
+      font-size: 14px;
       font-weight: 600;
       min-width: 80px;
-      text-align: right;
+      text-align: center;
       letter-spacing: -0.3px;
       font-variant-numeric: tabular-nums;
+      padding: 5px 10px;
+      border-radius: 4px;
+      color: #fff;
     }
+    .fund-pct.up   { background: #cc2929; color: #fff; }
+    .fund-pct.down { background: #0d8c42; color: #fff; }
+    .fund-pct.flat { background: var(--bg-active); color: var(--flat); }
     .chevron { color: var(--chevron); font-size: 16px; margin-left: 6px; }
 
     /* Chinese convention: red = up, green = down */
