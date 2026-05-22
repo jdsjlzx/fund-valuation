@@ -20,7 +20,7 @@
     /* ── Header (list view) ── */
     .header {
       display: grid;
-      grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+      grid-template-columns: 1fr 1fr 1fr 1fr;
       padding: 16px 8px 12px;
       gap: 2px;
       background:
@@ -48,6 +48,106 @@
     .h-item.flash-down { background: rgba(26, 173, 79, 0.18); }
     .h-label { font-size: 12.5px; color: #8088a0; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .h-val   { font-size: 21px; font-weight: 700; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; }
+
+    /* ── VIXY 恐慌指标栏 ── */
+    .vixy-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 10px 14px;
+      background: linear-gradient(180deg, #1a1e2c 0%, #141720 100%);
+      border-bottom: 1px solid #232838;
+    }
+    .vixy-bar .vixy-price {
+      font-size: 22px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .vixy-bar .vixy-label {
+      font-size: 13px;
+      color: #8088a0;
+    }
+    .vixy-bar .vixy-chg {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .vixy-bar .vixy-signal {
+      font-size: 13px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    .vixy-signal.signal-normal {
+      color: #8088a0;
+      background: rgba(128,136,160,0.12);
+    }
+    .vixy-signal.signal-watch {
+      color: #5ba8d6;
+      background: rgba(91,168,214,0.15);
+    }
+    .vixy-signal.signal-panic {
+      color: #e6a700;
+      background: rgba(230,167,0,0.15);
+    }
+    .vixy-signal.signal-buy {
+      color: #f0522a;
+      background: rgba(240,82,42,0.18);
+    }
+    .vixy-signal.signal-heavy {
+      color: #ff2d2d;
+      background: rgba(255,45,45,0.22);
+      animation: pulse-signal 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse-signal {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    /* ── VIXY 加仓提醒横幅 ── */
+    .vixy-alert {
+      margin: 0;
+      padding: 14px 18px;
+      text-align: center;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #232838;
+      animation: alert-glow 2s ease-in-out infinite;
+    }
+    .vixy-alert .alert-price {
+      font-size: 20px;
+      font-weight: 700;
+      margin: 0 6px;
+      font-variant-numeric: tabular-nums;
+    }
+    .vixy-alert .alert-tip {
+      display: block;
+      margin-top: 4px;
+      font-size: 13px;
+      font-weight: 400;
+      opacity: 0.8;
+    }
+    .vixy-alert.alert-buy {
+      color: #ff6b35;
+      background: linear-gradient(180deg, rgba(240,82,42,0.22) 0%, rgba(240,82,42,0.08) 100%);
+      border-top: 2px solid rgba(240,82,42,0.6);
+    }
+    .vixy-alert.alert-add {
+      color: #ff4040;
+      background: linear-gradient(180deg, rgba(255,45,45,0.25) 0%, rgba(255,45,45,0.10) 100%);
+      border-top: 2px solid rgba(255,45,45,0.7);
+    }
+    .vixy-alert.alert-full {
+      color: #ff2020;
+      background: linear-gradient(180deg, rgba(255,30,30,0.30) 0%, rgba(255,30,30,0.12) 100%);
+      border-top: 3px solid rgba(255,30,30,0.9);
+      animation: alert-glow 1.2s ease-in-out infinite;
+    }
+    @keyframes alert-glow {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.85; }
+    }
 
     .status-bar {
       text-align: center;
@@ -266,15 +366,20 @@ function allSymbols() {
 }
 
 // mode: 'default' (homepage) — REGULAR shows realtime, all other states show last reg+post
-//       '24h' — 全时段盘后实时估值，直接采用 Sina 提供的累计涨跌幅
-//               （fields[2] 已经是当前价 vs 昨收，盘前/盘中/盘后均适用）
+//       '24h' — 全时段实时估值：盘中用regular涨跌，盘前/盘后/收盘用累计(regular+post)
 function effectiveChange(q, opts = {}) {
   if (!q) return null;
   const mode = opts.mode || 'default';
   const s = q.marketState;
 
   if (mode === '24h') {
-    return q.regularMarketChangePercent ?? null;
+    // 24h模式：显示收盘后/收盘前的实时变动
+    // 参考点 = 最近一次正式收盘价，目标 = 当前盘后/盘前价格
+    // postMarketChangePercent = (盘后或盘前价 - 收盘价) / 收盘价
+    // 这就是基金下一次净值会反映的"隔夜变动"
+    const post = q.postMarketChangePercent ?? 0;
+    if (s === 'REGULAR') return q.regularMarketChangePercent ?? 0;
+    return post;
   }
 
   if (s === 'REGULAR') return q.regularMarketChangePercent ?? null;
@@ -410,13 +515,21 @@ async function fetchQuotes() {
 // ═══════════════════════════════════════════════════
 function currentRoute() {
   const hash = location.hash || '';
-  if (hash.startsWith('#/24h')) return { view: '24h' };
+  if (hash === '#/24h') return { view: '24h' };
+  const m24h = hash.match(/^#\/24h\/fund\/(\d+)/);
+  if (m24h) {
+    const idx = parseInt(m24h[1], 10);
+    if (idx >= 0 && idx < FUNDS.length) return { view: 'detail', idx, mode: '24h' };
+  }
   const m = hash.match(/^#\/fund\/(\d+)/);
   if (m) {
     const idx = parseInt(m[1], 10);
     if (idx >= 0 && idx < FUNDS.length) return { view: 'detail', idx };
   }
-  return { view: 'list' };
+  // 首页：北京时间 5:00-15:00 显示盘后列表，其他时间显示24h页面
+  const bjHour = (new Date().getUTCHours() + 8) % 24;
+  if (bjHour >= 5 && bjHour < 15) return { view: 'list' };
+  return { view: '24h' };
 }
 
 window.addEventListener('hashchange', () => {
@@ -443,6 +556,25 @@ function flashClass(prev, cur) {
   if (d >  FLASH_EPS) return 'flash-up';
   if (d < -FLASH_EPS) return 'flash-down';
   return '';
+}
+
+function vixyAlertHtml(vixyPrice) {
+  if (!vixyPrice || vixyPrice < 30) return '';
+  if (vixyPrice >= 40) return `
+    <div class="vixy-alert alert-full">
+      恐慌指数<span class="alert-price">${fmtPrice(vixyPrice)}</span>极度恐慌！重仓买入时机
+      <span class="alert-tip">VIXY ≥ 40，市场极度恐慌，历史大底区域，可重仓抄底</span>
+    </div>`;
+  if (vixyPrice >= 35) return `
+    <div class="vixy-alert alert-add">
+      恐慌指数<span class="alert-price">${fmtPrice(vixyPrice)}</span>持续恐慌，加大仓位
+      <span class="alert-tip">VIXY ≥ 35，恐慌持续升级，建议加大仓位逢低买入</span>
+    </div>`;
+  return `
+    <div class="vixy-alert alert-buy">
+      恐慌指数<span class="alert-price">${fmtPrice(vixyPrice)}</span>逐步买入，提高仓位
+      <span class="alert-tip">VIXY ≥ 30，市场出现恐慌，可分批建仓、逐步提高仓位</span>
+    </div>`;
 }
 
 function renderList() {
@@ -499,6 +631,13 @@ function renderList() {
       <span class="chevron">›</span>
     </div>`;
 
+  const vixySignal = vixyPrice >= 40 ? { text: '重仓买入', cls: 'signal-heavy' }
+                   : vixyPrice >= 35 ? { text: '加大仓位', cls: 'signal-heavy' }
+                   : vixyPrice >= 30 ? { text: '逐步买入', cls: 'signal-buy' }
+                   : vixyPrice >= 25 ? { text: '关注机会', cls: 'signal-watch' }
+                   : vixyChg >= 10   ? { text: '恐慌提升', cls: 'signal-panic' }
+                   : { text: '正常', cls: 'signal-normal' };
+
   document.getElementById('app').innerHTML = `
     <div class="header">
       <div class="h-item ${fIxic}">
@@ -513,15 +652,18 @@ function renderList() {
         <div class="h-label">标普500(SPY)</div>
         <div class="h-val ${cls(spyChg)}">${fmtPct(spyChg)}</div>
       </div>
-      <div class="h-item ${fVixy}">
-        <div class="h-label">VIXY</div>
-        <div class="h-val ${cls(vixyChg)}">${fmtPrice(vixyPrice)}</div>
-      </div>
       <div class="h-item ${fFx}">
         <div class="h-label">汇率</div>
         <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
       </div>
     </div>
+    <div class="vixy-bar ${fVixy}">
+      <span class="vixy-label">VIXY 恐慌指数</span>
+      <span class="vixy-price ${cls(vixyChg)}">${fmtPrice(vixyPrice)}</span>
+      <span class="vixy-chg ${cls(vixyChg)}">${fmtPct(vixyChg)}</span>
+      <span class="vixy-signal ${vixySignal.cls}">${vixySignal.text}</span>
+    </div>
+    ${vixyAlertHtml(vixyPrice)}
     <div class="status-bar">
       基于季报真实持仓计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>), 仅供参考<span class="${dotClass}"></span>
     </div>
@@ -541,12 +683,14 @@ function render24h() {
   const map = LAST_MAP;
   const opts = { mode: '24h' };
   const mktLabel = marketLabel(map, opts);
-  const ixicChg   = effectiveChange(map['IXIC'], opts);
   const qqqChg    = effectiveChange(map['QQQ'],  opts);
   const spyChg    = effectiveChange(map['SPY'],  opts);
   const vixyChg   = effectiveChange(map['VIXY'], opts);
   const vixyPrice = effectivePrice(map['VIXY']);
   const fxChg     = map['USDCNY=X']?.regularMarketChangePercent ?? 0;
+  // IXIC 指数无盘后数据，用 QQQ 作为代理
+  const ixicRaw   = effectiveChange(map['IXIC'], opts);
+  const ixicChg   = (ixicRaw === 0 && qqqChg !== 0) ? qqqChg : ixicRaw;
 
   const fIxic = flashClass(prevHeaderVal24h.IXIC, ixicChg);
   const fQqq  = flashClass(prevHeaderVal24h.QQQ,  qqqChg);
@@ -559,7 +703,7 @@ function render24h() {
     const chg = calcFund(fund, map, fxChg, opts);
     const flash = flashClass(prevFundPct24h.get(i), chg);
     rows += `
-      <div class="fund-item ${flash}" onclick="go('#/fund/${i}')">
+      <div class="fund-item ${flash}" onclick="go('#/24h/fund/${i}')">
         <div class="fund-left">
           <span class="fund-name">${fund.name}</span>
           <span class="fund-code">${fund.code || ''}</span>
@@ -579,9 +723,21 @@ function render24h() {
 
   const dotClass = LAST_STALE ? 'dot' : 'dot live';
 
+  const vixySignal24h = vixyPrice >= 40 ? { text: '重仓买入', cls: 'signal-heavy' }
+                      : vixyPrice >= 35 ? { text: '加大仓位', cls: 'signal-heavy' }
+                      : vixyPrice >= 30 ? { text: '逐步买入', cls: 'signal-buy' }
+                      : vixyPrice >= 25 ? { text: '关注机会', cls: 'signal-watch' }
+                      : vixyChg >= 10   ? { text: '恐慌提升', cls: 'signal-panic' }
+                      : { text: '正常', cls: 'signal-normal' };
+
+  // 15:00-05:00 北京时间作为首页时隐藏返回按钮
+  const bjHour = (new Date().getUTCHours() + 8) % 24;
+  const is24hHome = !(bjHour >= 5 && bjHour < 15);
+  const backBtn = is24hHome ? '<div style="min-width:60px"></div>' : '<button class="back-btn" onclick="goBack()">‹ 返回</button>';
+
   document.getElementById('app').innerHTML = `
     <div class="detail-topbar">
-      <button class="back-btn" onclick="goBack()">‹ 返回</button>
+      ${backBtn}
       <div class="detail-title">美股24小时</div>
       <div style="min-width:60px"></div>
     </div>
@@ -598,17 +754,20 @@ function render24h() {
         <div class="h-label">标普500(SPY)</div>
         <div class="h-val ${cls(spyChg)}">${fmtPct(spyChg)}</div>
       </div>
-      <div class="h-item ${fVixy}">
-        <div class="h-label">VIXY</div>
-        <div class="h-val ${cls(vixyChg)}">${fmtPrice(vixyPrice)}</div>
-      </div>
       <div class="h-item ${fFx}">
         <div class="h-label">汇率</div>
         <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
       </div>
     </div>
+    <div class="vixy-bar ${fVixy}">
+      <span class="vixy-label">VIXY 恐慌指数</span>
+      <span class="vixy-price ${cls(vixyChg)}">${fmtPrice(vixyPrice)}</span>
+      <span class="vixy-chg ${cls(vixyChg)}">${fmtPct(vixyChg)}</span>
+      <span class="vixy-signal ${vixySignal24h.cls}">${vixySignal24h.text}</span>
+    </div>
+    ${vixyAlertHtml(vixyPrice)}
     <div class="status-bar">
-      美股盘后实时估值&ensp;含盘前·盘中·盘后累计涨跌&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
+      美股盘后/盘前实时估值&ensp;显示收盘后至今变动&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
     </div>
     <div class="fund-list">${rows}</div>
     <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）&emsp;5秒自动刷新</div>
@@ -618,11 +777,12 @@ function render24h() {
 // ═══════════════════════════════════════════════════
 //  RENDER — detail view
 // ═══════════════════════════════════════════════════
-function renderDetail(idx) {
+function renderDetail(idx, mode) {
   const fund = FUNDS[idx];
   const map = LAST_MAP;
   const fxChg = map['USDCNY=X']?.regularMarketChangePercent ?? 0;
-  const est = calcFund(fund, map, fxChg);
+  const opts = mode === '24h' ? { mode: '24h' } : {};
+  const est = calcFund(fund, map, fxChg, opts);
 
   const sorted = [...fund.holdings].sort((a, b) => b.w - a.w);
   const visible = expanded ? sorted : sorted.slice(0, 10);
@@ -631,7 +791,7 @@ function renderDetail(idx) {
   const rowsHtml = visible.map(h => {
     const isUs = isUSHolding(h);
     const q = isUs ? map[h.s] : null;
-    const chg = q ? effectiveChange(q) : null;
+    const chg = q ? effectiveChange(q, opts) : null;
     const tag = marketTag(h.market);
     return `
       <div class="holding-row">
@@ -656,18 +816,20 @@ function renderDetail(idx) {
     noteText = `基于季报披露的持仓计算, 共 ${sorted.length} 支`;
   }
 
+  const mktLabel24h = mode === '24h' ? us24hSession() : '';
+
   document.getElementById('app').innerHTML = `
     <div class="detail-topbar">
       <button class="back-btn" onclick="goBack()">‹ 返回</button>
       <div class="detail-title">${fund.name}</div>
       <div class="detail-est">
-        <span class="est-label">估值:</span><span class="${cls(est)}">${fmtPct(est)}</span>
+        <span class="est-label">${mode === '24h' ? mktLabel24h + ':' : '估值:'}</span><span class="${cls(est)}">${fmtPct(est)}</span>
       </div>
     </div>
     <div class="table-head">
       <span class="col-name">名称</span>
       <span class="col-pct">占比</span>
-      <span class="col-chg">涨跌幅</span>
+      <span class="col-chg">${mode === '24h' ? '盘后涨跌' : '涨跌幅'}</span>
     </div>
     ${rowsHtml}
     ${expandHtml}
@@ -680,7 +842,7 @@ function renderDetail(idx) {
 // ═══════════════════════════════════════════════════
 function rerender() {
   const r = currentRoute();
-  if (r.view === 'detail') renderDetail(r.idx);
+  if (r.view === 'detail') renderDetail(r.idx, r.mode);
   else if (r.view === '24h') render24h();
   else renderList();
 }

@@ -550,13 +550,22 @@ function parseSinaResponse(text, requestedSymbols) {
       const price = parseFloat(fields[1]);
       const chgPct = parseFloat(fields[2]);
       if (isNaN(price) || isNaN(chgPct)) continue;
+      const prevClose = parseFloat(fields[26]) || parseFloat(fields[8]) || null;
+      // After-hours / pre-market price from Sina field[21]
+      const ahPrice = parseFloat(fields[21]);
+      let postChgPct = 0;
+      if (!isNaN(ahPrice) && ahPrice > 0 && price > 0) {
+        // post-market change relative to regular close price
+        postChgPct = ((ahPrice - price) / price) * 100;
+      }
       map[symbol] = {
         symbol,
         regularMarketPrice: price,
         regularMarketChangePercent: chgPct,
-        regularMarketPreviousClose: parseFloat(fields[8]) || null,
+        regularMarketPreviousClose: prevClose,
         preMarketChangePercent: chgPct,
-        postMarketChangePercent: 0,
+        postMarketChangePercent: postChgPct,
+        afterHoursPrice: (!isNaN(ahPrice) && ahPrice > 0) ? ahPrice : null,
         marketState: usState,
       };
       continue;
@@ -636,7 +645,8 @@ app.get('/api/quotes', async (req, res) => {
       }
     }
     const emMissing = emSymbols.filter((s) => !emMap[s]);
-    const sinaAll = [...sinaSymbols, ...emMissing];
+    // Always fetch Sina for all US stocks to get after-hours data (field[21])
+    const sinaAll = [...sinaSymbols, ...emMissing, ...emSymbols.filter((s) => emMap[s])];
 
     const [emData, sinaData, krData] = await Promise.all([
       emSymbols.map((s) => emMap[s]).filter(Boolean),
@@ -644,7 +654,7 @@ app.get('/api/quotes', async (req, res) => {
         if (sinaAll.length === 0) return [];
         const text = await fetchSina(sinaAll.map(toSinaId));
         const m = parseSinaResponse(text, sinaAll);
-        return sinaAll.map((s) => m[s]).filter(Boolean);
+        return { map: m, list: sinaAll.map((s) => m[s]).filter(Boolean) };
       })(),
       Promise.all(
         krSymbols.map((s) =>
@@ -656,7 +666,27 @@ app.get('/api/quotes', async (req, res) => {
       ).then((arr) => arr.filter(Boolean)),
     ]);
 
-    const data = [...emData, ...sinaData, ...krData];
+    // Merge: for symbols that have both eastmoney and sina data,
+    // use eastmoney as base but overlay after-hours data from sina
+    const sinaMap = (sinaData && sinaData.map) || {};
+    const mergedEmData = emData.map((em) => {
+      const sina = sinaMap[em.symbol];
+      if (sina && sina.postMarketChangePercent !== undefined) {
+        return {
+          ...em,
+          postMarketChangePercent: sina.postMarketChangePercent,
+          afterHoursPrice: sina.afterHoursPrice || null,
+          regularMarketPreviousClose: sina.regularMarketPreviousClose || em.regularMarketPreviousClose,
+        };
+      }
+      return em;
+    });
+
+    // For non-eastmoney symbols, use sina data directly (excluding those already in emData)
+    const emSymSet = new Set(emSymbols.filter((s) => emMap[s]));
+    const puresinaData = (sinaData && sinaData.list || []).filter((q) => !emSymSet.has(q.symbol));
+
+    const data = [...mergedEmData, ...puresinaData, ...krData];
     if (data.length === 0) throw new Error('No quotes returned');
     quoteCache.set(cacheKey, { data, ts: Date.now() });
     res.json({ success: true, data });
