@@ -419,24 +419,31 @@
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      padding: 6px 12px;
+      padding: 7px 30px 7px 12px;
       border-bottom: 1px solid var(--border);
       background: var(--bg-card);
     }
-    .sort-btn {
-      background: transparent;
-      border: 1px solid var(--border-badge);
-      color: var(--text-secondary);
-      font-size: 12px;
-      padding: 3px 8px;
-      border-radius: 4px;
-      cursor: pointer;
-      display: flex;
+    .sort-header {
+      display: inline-flex;
       align-items: center;
-      gap: 3px;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
     }
-    .sort-btn:active { background: var(--bg-active); }
-    .sort-btn.active { color: var(--up); border-color: var(--up); }
+    .sort-header:active { opacity: 0.6; }
+    .sort-header.active { color: var(--text-name); }
+    .sort-arrows {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      line-height: 0.72;
+      font-size: 9px;
+    }
+    .sort-arrows .arr { color: var(--flat); }
+    .sort-arrows .arr.on { color: var(--up); }
     .pin-icon {
       margin-right: 4px;
       cursor: pointer;
@@ -529,11 +536,6 @@ function sortedFundIndices(map, fxChg, opts) {
                : null;
   if (sorter) { pinned.sort(sorter); rest.sort(sorter); }
   return [...pinned, ...rest];
-}
-function sortBtnLabel() {
-  if (sortMode === 'desc') return '↑ 涨幅优先';
-  if (sortMode === 'asc') return '↓ 跌幅优先';
-  return '↕ 默认';
 }
 
 // ═══════════════════════════════════════════════════
@@ -858,7 +860,7 @@ function renderList() {
       基于季报真实持仓计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>), 仅供参考<span class="${dotClass}"></span>
     </div>
     <div class="list-toolbar">
-      <button class="sort-btn ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">${sortBtnLabel()}</button>
+      <span class="sort-header ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">涨跌幅<span class="sort-arrows"><span class="arr ${sortMode === 'asc' ? 'on' : ''}">▲</span><span class="arr ${sortMode === 'desc' ? 'on' : ''}">▼</span></span></span>
     </div>
     <div class="fund-list">${rows}</div>
     ${entryHtml}
@@ -960,7 +962,7 @@ function render24h() {
       美股盘后/盘前实时估值&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
     </div>
     <div class="list-toolbar">
-      <button class="sort-btn ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">${sortBtnLabel()}</button>
+      <span class="sort-header ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">涨跌幅<span class="sort-arrows"><span class="arr ${sortMode === 'asc' ? 'on' : ''}">▲</span><span class="arr ${sortMode === 'desc' ? 'on' : ''}">▼</span></span></span>
     </div>
     <div class="fund-list">${rows}</div>
     <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）<br>5秒自动刷新</div>
