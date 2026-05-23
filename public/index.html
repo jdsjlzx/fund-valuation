@@ -333,6 +333,7 @@
       display: flex; align-items: center; gap: 4px;
     }
     .back-btn:active { color: var(--back-btn-active); }
+    .h24-topbar { padding: 10px 14px 0; background: var(--bg-header); }
     .detail-title { font-size: 16px; font-weight: 600; color: var(--detail-title); flex: 1; text-align: center; margin: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
     .detail-est { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 100px; text-align: right; }
     .detail-est .est-label { color: var(--est-label); font-weight: 400; font-size: 12px; margin-right: 4px; }
@@ -609,22 +610,18 @@ function usETNow() {
   return { day: et.getUTCDay(), min: et.getUTCHours() * 60 + et.getUTCMinutes() };
 }
 
-// 24h-view granular session label — adds 夜盘/亚盘 for the overnight window
+// 24h-view session label — 只显示 盘前/盘中/盘后 (美东时间)
+//   数据源参考 bowtie《美股交易时间》:
 //   盘前 04:00–09:30 · 盘中 09:30–16:00 · 盘后 16:00–20:00 (ET)
-//   夜盘 20:00–24:00 ET (周日–周四晚开盘)  亚盘 00:00–04:00 ET (周一–周五凌晨延续)
+//   收盘后(夜盘/隔夜)及周末统一归为「盘后」, 不显示「已收盘」
 function us24hSession() {
   const { day, min } = usETNow();
   const weekday = day >= 1 && day <= 5;
   if (weekday) {
-    if (min >= 240 && min < 570) return '盘前';
-    if (min >= 570 && min < 960) return '盘中';
-    if (min >= 960 && min < 1200) return '盘后';
+    if (min >= 240 && min < 570) return '盘前';   // 04:00–09:30
+    if (min >= 570 && min < 960) return '盘中';   // 09:30–16:00
   }
-  const eveningOpen = min >= 1200 && (day === 0 || (day >= 1 && day <= 4)); // Sun–Thu 20:00+
-  const dawnOpen    = min < 240  && weekday;                                // Mon–Fri 00:00–04:00
-  if (eveningOpen) return '夜盘';
-  if (dawnOpen)    return '亚盘';
-  return '已收盘';
+  return '盘后';   // 16:00–次日04:00、夜盘、隔夜及周末统一显示盘后
 }
 
 function marketLabel(qmap, opts = {}) {
@@ -932,7 +929,9 @@ function render24h() {
                       : vixyChg >= 10   ? { text: '恐慌提升', cls: 'signal-panic' }
                       : { text: '正常', cls: 'signal-normal' };
 
+  const showBack = mktLabel !== '盘中';   // 盘中(美股 regular)隐藏返回；盘前/盘后显示
   document.getElementById('app').innerHTML = `
+    ${showBack ? `<div class="h24-topbar"><button class="back-btn" onclick="goBack()">‹ 返回</button></div>` : ''}
     <div class="header">
       <div class="h-item ${fIxic}">
         <div class="h-label">纳斯达克</div>
