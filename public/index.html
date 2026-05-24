@@ -624,6 +624,14 @@ function us24hSession() {
   return '盘后';   // 16:00–次日04:00、夜盘、隔夜及周末统一显示盘后
 }
 
+// 美股是否处于交易时段(盘前/盘中/盘后)：周末休市、隔夜(20:00–次日04:00 ET)休市
+//   交易时段 = 工作日美东 04:00–20:00 (盘前 04:00–09:30 · 盘中 09:30–16:00 · 盘后 16:00–20:00)
+function usMarketTrading() {
+  const { day, min } = usETNow();
+  if (day === 0 || day === 6) return false;   // 周六/周日 休市
+  return min >= 240 && min < 1200;            // 04:00–20:00 ET
+}
+
 function marketLabel(qmap, opts = {}) {
   const mode = opts.mode || 'default';
   if (mode === '24h') return us24hSession();    // 含 夜盘/亚盘 的全时段标签
@@ -708,10 +716,8 @@ function currentRoute() {
     const idx = parseInt(m[1], 10);
     if (idx >= 0 && idx < FUNDS.length) return { view: 'detail', idx };
   }
-  // 首页：北京时间 5:00-15:00 显示盘后列表，其他时间显示24h页面
-  const bjHour = (new Date().getUTCHours() + 8) % 24;
-  if (bjHour >= 5 && bjHour < 15) return { view: 'list' };
-  return { view: '24h' };
+  // 首页：美股交易时段(盘前/盘中/盘后)显示24h实时估值；休市(隔夜/周末)显示季报列表
+  return usMarketTrading() ? { view: '24h' } : { view: 'list' };
 }
 
 window.addEventListener('hashchange', () => {
