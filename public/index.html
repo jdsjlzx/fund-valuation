@@ -935,9 +935,8 @@ function render24h() {
                       : vixyChg >= 10   ? { text: '恐慌提升', cls: 'signal-panic' }
                       : { text: '正常', cls: 'signal-normal' };
 
-  const showBack = mktLabel !== '盘中';   // 盘中(美股 regular)隐藏返回；盘前/盘后显示
   document.getElementById('app').innerHTML = `
-    ${showBack ? `<div class="h24-topbar"><button class="back-btn" onclick="goBack()">‹ 返回</button></div>` : ''}
+    <div class="h24-topbar"><button class="back-btn" onclick="go('#/')">‹ 列表</button></div>
     <div class="header">
       <div class="h-item ${fIxic}">
         <div class="h-label">纳斯达克</div>
