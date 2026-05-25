@@ -935,8 +935,9 @@ function render24h() {
                       : vixyChg >= 10   ? { text: '恐慌提升', cls: 'signal-panic' }
                       : { text: '正常', cls: 'signal-normal' };
 
+  const isHome = !location.hash || location.hash === '#' || location.hash === '#/';
   document.getElementById('app').innerHTML = `
-    <div class="h24-topbar"><button class="back-btn" onclick="go('#/')">‹ 列表</button></div>
+    ${!isHome ? `<div class="h24-topbar"><button class="back-btn" onclick="goBack()">‹ 返回</button></div>` : ''}
     <div class="header">
       <div class="h-item ${fIxic}">
         <div class="h-label">纳斯达克</div>
