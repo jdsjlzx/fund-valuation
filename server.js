@@ -700,6 +700,85 @@ app.get('/api/quotes', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
+//  /api/ashare-ma — 上证指数 & 创业板指数 MA20 数据
+// ═══════════════════════════════════════════════════════
+const MA_CACHE = { data: null, ts: 0 };
+const MA_TTL = 3600_000; // 1小时缓存
+
+async function fetchKline(sinaSymbol, limit = 25) {
+  const url =
+    `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData` +
+    `?symbol=${sinaSymbol}&scale=240&ma=no&datalen=${limit}`;
+  const txt = await httpGet(url, { Referer: 'https://finance.sina.com.cn/' });
+  const arr = JSON.parse(txt);
+  return arr.map(k => ({ date: k.day, close: parseFloat(k.close), volume: parseFloat(k.volume) || 0 }));
+}
+
+function calcMA(klines, period) {
+  if (klines.length < period) return null;
+  const recent = klines.slice(-period);
+  const sum = recent.reduce((a, k) => a + k.close, 0);
+  return sum / period;
+}
+
+app.get('/api/ashare-ma', async (req, res) => {
+  if (MA_CACHE.data && Date.now() - MA_CACHE.ts < MA_TTL) {
+    return res.json({ success: true, ...MA_CACHE.data });
+  }
+  try {
+    const [shKlines, cyKlines, etfKlines] = await Promise.all([
+      fetchKline('sh000001', 25),
+      fetchKline('sz399006', 25),
+      fetchKline('sz159509', 25),
+    ]);
+
+    const shPrice = shKlines.length ? shKlines[shKlines.length - 1].close : null;
+    const shMa20 = calcMA(shKlines, 20);
+    const cyPrice = cyKlines.length ? cyKlines[cyKlines.length - 1].close : null;
+    const cyMa20 = calcMA(cyKlines, 20);
+
+    // 159509 ETF: 价格、MA20偏离、成交量比
+    const etfPrice = etfKlines.length ? etfKlines[etfKlines.length - 1].close : null;
+    const etfMa20 = calcMA(etfKlines, 20);
+    const etfVolume = etfKlines.length ? etfKlines[etfKlines.length - 1].volume : null;
+    const etfVolMa20 = etfKlines.length >= 20
+      ? etfKlines.slice(-20).reduce((s, k) => s + k.volume, 0) / 20
+      : null;
+
+    const result = {
+      sh: {
+        price: shPrice,
+        ma20: shMa20 ? +shMa20.toFixed(2) : null,
+        aboveMa20: shPrice && shMa20 ? shPrice >= shMa20 : null,
+        deviation: shPrice && shMa20 ? +((shPrice - shMa20) / shMa20 * 100).toFixed(2) : null,
+      },
+      cy: {
+        price: cyPrice,
+        ma20: cyMa20 ? +cyMa20.toFixed(2) : null,
+        aboveMa20: cyPrice && cyMa20 ? cyPrice >= cyMa20 : null,
+        deviation: cyPrice && cyMa20 ? +((cyPrice - cyMa20) / cyMa20 * 100).toFixed(2) : null,
+      },
+      etf159509: {
+        price: etfPrice,
+        ma20: etfMa20 ? +etfMa20.toFixed(4) : null,
+        deviation: etfPrice && etfMa20 ? +((etfPrice - etfMa20) / etfMa20 * 100).toFixed(2) : null,
+        volume: etfVolume,
+        volMa20: etfVolMa20 ? Math.round(etfVolMa20) : null,
+        volRatio: etfVolume && etfVolMa20 ? +(etfVolume / etfVolMa20).toFixed(2) : null,
+      },
+    };
+
+    MA_CACHE.data = result;
+    MA_CACHE.ts = Date.now();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[ashare-ma]', err.message);
+    if (MA_CACHE.data) return res.json({ success: true, ...MA_CACHE.data, stale: true });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
 //  Startup
 // ═══════════════════════════════════════════════════════
 app.listen(PORT, () => {

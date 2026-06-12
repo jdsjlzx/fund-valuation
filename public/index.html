@@ -153,12 +153,16 @@
     /* ── VIXY 恐慌指标栏 ── */
     .vixy-bar {
       display: flex;
+      flex-direction: column;
       align-items: center;
-      justify-content: center;
-      gap: 10px;
       padding: 8px 12px;
       background: var(--bg-vixy);
       border-bottom: 1px solid var(--border-header);
+    }
+    .vixy-bar .vixy-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
     .vixy-bar .vixy-price {
       font-size: 19px;
@@ -178,6 +182,82 @@
       font-weight: 600;
       padding: 2px 7px;
       border-radius: 4px;
+    }
+    .vixy-bar .vixy-action {
+      margin-top: 5px;
+      text-align: center;
+    }
+    .vixy-bar .vixy-etf {
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px dashed rgba(128,136,160,0.25);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .vixy-bar .etf-label {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .vixy-bar .etf-chg {
+      font-size: 14px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .vixy-bar .etf-amount {
+      font-size: 12px;
+      font-weight: 600;
+      opacity: 0.85;
+    }
+    .vixy-bar .etf-signal {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 3px;
+      margin-left: 4px;
+    }
+    .etf-signal.sig-strong {
+      color: #fff;
+      background: #e84c3d;
+    }
+    .etf-signal.sig-good {
+      color: #fff;
+      background: #2196f3;
+    }
+    .etf-signal.sig-wait {
+      color: var(--text-secondary);
+      background: rgba(128,136,160,0.15);
+    }
+    .etf-signal.sig-none {
+      color: var(--text-secondary);
+      background: rgba(128,136,160,0.1);
+    }
+    .vixy-bar .etf-ma {
+      font-size: 10px;
+      color: var(--text-secondary);
+      opacity: 0.7;
+      margin-left: 4px;
+    }
+    .vixy-bar .etf-detail {
+      display: block;
+      width: 100%;
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      opacity: 0.85;
+      letter-spacing: 0.3px;
+    }
+    .vixy-bar .alert-amount {
+      font-size: 14px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .vixy-bar .alert-tip {
+      display: block;
+      margin-top: 2px;
+      font-size: 11px;
+      font-weight: 400;
+      opacity: 0.8;
     }
     .vixy-signal.signal-normal {
       color: var(--text-secondary);
@@ -205,46 +285,28 @@
       50% { opacity: 0.6; }
     }
 
-    /* ── VIXY 加仓提醒横幅 ── */
-    .vixy-alert {
-      margin: 0;
-      padding: 10px 14px;
-      text-align: center;
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      border-bottom: 1px solid var(--border-header);
-      animation: alert-glow 2s ease-in-out infinite;
+    /* ── VIXY 加仓提醒等级 ── */
+    .vixy-bar.alert-watch {
+      background: linear-gradient(180deg, rgba(224,160,48,0.18) 0%, rgba(224,160,48,0.06) 100%);
+      border-top: 2px solid rgba(224,160,48,0.5);
     }
-    .vixy-alert .alert-price {
-      font-size: 17px;
-      font-weight: 700;
-      margin: 0 5px;
-      font-variant-numeric: tabular-nums;
-    }
-    .vixy-alert .alert-tip {
-      display: block;
-      margin-top: 3px;
-      font-size: 11px;
-      font-weight: 400;
-      opacity: 0.8;
-    }
-    .vixy-alert.alert-buy {
-      color: #ff6b35;
+    .vixy-bar.alert-watch .alert-amount { color: #e0a030; }
+    .vixy-bar.alert-buy {
       background: linear-gradient(180deg, rgba(240,82,42,0.22) 0%, rgba(240,82,42,0.08) 100%);
       border-top: 2px solid rgba(240,82,42,0.6);
     }
-    .vixy-alert.alert-add {
-      color: #ff4040;
+    .vixy-bar.alert-buy .alert-amount { color: #ff6b35; }
+    .vixy-bar.alert-add {
       background: linear-gradient(180deg, rgba(255,45,45,0.25) 0%, rgba(255,45,45,0.10) 100%);
       border-top: 2px solid rgba(255,45,45,0.7);
     }
-    .vixy-alert.alert-full {
-      color: #ff2020;
+    .vixy-bar.alert-add .alert-amount { color: #ff4040; }
+    .vixy-bar.alert-full {
       background: linear-gradient(180deg, rgba(255,30,30,0.30) 0%, rgba(255,30,30,0.12) 100%);
       border-top: 3px solid rgba(255,30,30,0.9);
       animation: alert-glow 1.2s ease-in-out infinite;
     }
+    .vixy-bar.alert-full .alert-amount { color: #ff2020; }
     @keyframes alert-glow {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.85; }
@@ -700,6 +762,66 @@ async function fetchQuotes() {
   return { map, stale: !!json.stale };
 }
 
+// A股指数MA20数据（上证+创业板）
+let ASHARE_MA = null;
+async function fetchAshareMa() {
+  try {
+    const r = await fetch('/api/ashare-ma');
+    if (!r.ok) return;
+    const json = await r.json();
+    if (json.success) ASHARE_MA = { sh: json.sh, cy: json.cy, etf159509: json.etf159509 };
+  } catch (e) { console.error('[ashare-ma]', e); }
+}
+
+// 159509 买入信号打分（基于3/31低点特征增强版）
+function calc159509Signal(qqqChg) {
+  if (!qqqChg || qqqChg >= 0) return null; // 纳指没跌，不触发
+  if (!ASHARE_MA) return null;
+
+  let score = 0;
+
+  // 1) 纳指跌幅（0-30分）
+  const drop = Math.abs(qqqChg);
+  if (drop >= 3) score += 30;
+  else if (drop >= 2) score += 25;
+  else if (drop >= 1) score += 15;
+  else score += 5;
+
+  // 2) 159509 vs MA20 偏离度（0-35分）— 最重要维度
+  const etfDev = ASHARE_MA.etf159509?.deviation;
+  if (etfDev != null && etfDev < 0) {
+    const absDev = Math.abs(etfDev);
+    if (absDev >= 10) score += 35;
+    else if (absDev >= 8) score += 28;
+    else if (absDev >= 5) score += 20;
+    else if (absDev >= 3) score += 10;
+  }
+
+  // 3) 上证 vs MA20（0-20分）
+  const shDev = ASHARE_MA.sh?.deviation;
+  if (shDev != null) {
+    if (shDev >= 1) score += 20;
+    else if (shDev >= -1) score += 10;
+  }
+
+  // 4) 创业板 vs MA20（0-15分）
+  const cyDev = ASHARE_MA.cy?.deviation;
+  if (cyDev != null) {
+    if (cyDev >= 1) score += 15;
+    else if (cyDev >= -1) score += 8;
+  }
+
+  // 5) 成交量加成：放大1.5倍以上额外+15分
+  const volRatio = ASHARE_MA.etf159509?.volRatio;
+  if (volRatio && volRatio >= 1.5) score += 15;
+
+  // 分档信号+操作建议
+  if (score >= 75) return { text: '重仓信号', cls: 'sig-strong', score, amount: '¥5,000+', tip: '跌破MA20深+放量，重仓买入' };
+  if (score >= 55) return { text: '加仓', cls: 'sig-good', score, amount: '¥3,000', tip: '明显低估，加仓买入' };
+  if (score >= 35) return { text: '试探买入', cls: 'sig-wait', score, amount: '¥1,000', tip: '初步信号，小仓试探' };
+  return { text: '观望', cls: 'sig-none', score, amount: null, tip: '跌幅不足，继续观察' };
+}
+
 // ═══════════════════════════════════════════════════
 //  ROUTING
 // ═══════════════════════════════════════════════════
@@ -746,22 +868,102 @@ function flashClass(prev, cur) {
   return '';
 }
 
-function vixyAlertHtml(vixyPrice) {
-  if (!vixyPrice || vixyPrice < 30) return '';
-  if (vixyPrice >= 40) return `
-    <div class="vixy-alert alert-full">
-      恐慌指数<span class="alert-price">${fmtPrice(vixyPrice)}</span>极度恐慌！重仓买入时机
-      <span class="alert-tip">VIXY ≥ 40，市场极度恐慌，历史大底区域，可重仓抄底</span>
+function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg) {
+  const chgCls = cls(vixyChg);
+  const priceTxt = fmtPrice(vixyPrice);
+  const chgTxt = fmtPct(vixyChg);
+
+  // 估算159509(纳指100ETF)次日涨幅 = QQQ涨跌 × 汇率变动
+  const etf159509Chg = ((1 + (qqqChg || 0) / 100) * (1 + (fxChg || 0) / 100) - 1) * 100;
+  const etfCls = cls(etf159509Chg);
+
+  // 159509 最新净值
+  const etfPrice = ASHARE_MA?.etf159509?.price;
+  const etfPriceTxt = etfPrice ? etfPrice.toFixed(3) : '--';
+
+  // 159509 买入信号
+  const sig = calc159509Signal(qqqChg);
+  const sigHtml = sig
+    ? `<span class="etf-signal ${sig.cls}">${sig.text}(${sig.score}分)</span>`
+    : '';
+  // 159509偏离MA20信息
+  const etfDevInfo = ASHARE_MA?.etf159509
+    ? `<span class="etf-ma">159509偏离MA20: ${ASHARE_MA.etf159509.deviation > 0 ? '+' : ''}${ASHARE_MA.etf159509.deviation}%${ASHARE_MA.etf159509.volRatio >= 1.5 ? ' · 放量' + ASHARE_MA.etf159509.volRatio + 'x' : ''}</span>`
+    : '';
+  const maInfo = ASHARE_MA
+    ? `<span class="etf-ma">沪${ASHARE_MA.sh?.deviation > 0 ? '+' : ''}${ASHARE_MA.sh?.deviation ?? '-'}% · 创${ASHARE_MA.cy?.deviation > 0 ? '+' : ''}${ASHARE_MA.cy?.deviation ?? '-'}%</span>`
+    : '';
+  const sigTipHtml = sig && sig.amount
+    ? `<span class="etf-amount">${sig.tip}，建议：${sig.amount}</span>`
+    : '';
+
+  // 始终显示159509评分维度明细
+  let scoreDetail = '';
+  if (ASHARE_MA) {
+    const etfDev = ASHARE_MA.etf159509?.deviation;
+    const shDev = ASHARE_MA.sh?.deviation;
+    const cyDev = ASHARE_MA.cy?.deviation;
+    const volR = ASHARE_MA.etf159509?.volRatio;
+    const rows = [];
+    if (qqqChg && qqqChg < 0) rows.push(`纳指跌${Math.abs(qqqChg).toFixed(1)}%`);
+    if (etfDev != null) rows.push(`ETF偏离${etfDev > 0 ? '+' : ''}${etfDev}%`);
+    if (shDev != null) rows.push(`沪${shDev > 0 ? '+' : ''}${shDev}%`);
+    if (cyDev != null) rows.push(`创${cyDev > 0 ? '+' : ''}${cyDev}%`);
+    if (volR != null) rows.push(`量比${volR}x`);
+    scoreDetail = `<span class="etf-detail">${rows.join(' | ')}</span>`;
+  }
+
+  // VIXY < 25: 正常状态，仅显示价格信息
+  if (!vixyPrice || vixyPrice < 25) return `
+    <div class="vixy-bar">
+      <div class="vixy-row">
+        <span class="vixy-label">VIXY 恐慌指数</span>
+        <span class="vixy-price ${chgCls}">${priceTxt}</span>
+        <span class="vixy-chg ${chgCls}">${chgTxt}</span>
+        <span class="vixy-signal ${vixySignal.cls}">${vixySignal.text}</span>
+      </div>
+      <div class="vixy-etf">
+        <span class="etf-label">159509</span>
+        <span class="etf-chg ${etfCls}">${etfPriceTxt}</span>
+        ${sigHtml}
+        ${sigTipHtml}
+        ${scoreDetail}
+      </div>
     </div>`;
-  if (vixyPrice >= 35) return `
-    <div class="vixy-alert alert-add">
-      恐慌指数<span class="alert-price">${fmtPrice(vixyPrice)}</span>持续恐慌，加大仓位
-      <span class="alert-tip">VIXY ≥ 35，恐慌持续升级，建议加大仓位逢低买入</span>
-    </div>`;
+
+  // VIXY >= 25: 带加仓建议的合并横幅
+  let alertCls, amount, tip;
+  if (vixyPrice >= 50) {
+    alertCls = 'alert-full'; amount = '¥20,000'; tip = 'VIXY ≥ 50，历史级恐慌，满仓买入';
+  } else if (vixyPrice >= 40) {
+    alertCls = 'alert-full'; amount = '¥10,000'; tip = 'VIXY ≥ 40，历史大底区域，重仓抄底';
+  } else if (vixyPrice >= 35) {
+    alertCls = 'alert-add'; amount = '¥5,000'; tip = 'VIXY ≥ 35，恐慌升级，加大仓位逢低买入';
+  } else if (vixyPrice >= 30) {
+    alertCls = 'alert-buy'; amount = '¥2,000'; tip = 'VIXY ≥ 30，市场恐慌，分批建仓';
+  } else {
+    alertCls = 'alert-watch'; amount = '¥1,000'; tip = 'VIXY ≥ 25，波动加大，试探性建仓';
+  }
+
   return `
-    <div class="vixy-alert alert-buy">
-      恐慌指数<span class="alert-price">${fmtPrice(vixyPrice)}</span>逐步买入，提高仓位
-      <span class="alert-tip">VIXY ≥ 30，市场出现恐慌，可分批建仓、逐步提高仓位</span>
+    <div class="vixy-bar ${alertCls}">
+      <div class="vixy-row">
+        <span class="vixy-label">VIXY 恐慌指数</span>
+        <span class="vixy-price">${priceTxt}</span>
+        <span class="vixy-chg ${chgCls}">${chgTxt}</span>
+        <span class="vixy-signal ${vixySignal.cls}">${vixySignal.text}</span>
+      </div>
+      <div class="vixy-action">
+        <span class="alert-amount">建议加仓 QQQ：${amount}</span>
+        <span class="alert-tip">${tip}</span>
+      </div>
+      <div class="vixy-etf">
+        <span class="etf-label">159509</span>
+        <span class="etf-chg ${etfCls}">${etfPriceTxt}</span>
+        ${sigHtml}
+        ${sigTipHtml}
+        ${scoreDetail}
+      </div>
     </div>`;
 }
 
@@ -779,7 +981,6 @@ function renderList() {
   const fIxic = flashClass(prevHeaderVal.IXIC, ixicChg);
   const fQqq  = flashClass(prevHeaderVal.QQQ,  qqqChg);
   const fSpy  = flashClass(prevHeaderVal.SPY,  spyChg);
-  const fVixy = flashClass(prevHeaderVal.VIXY, vixyChg);
   const fFx   = flashClass(prevHeaderVal.FX,   fxChg);
 
   // Fund rows with per-row flash
@@ -852,13 +1053,7 @@ function renderList() {
         <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
       </div>
     </div>
-    <div class="vixy-bar ${fVixy}">
-      <span class="vixy-label">VIXY 恐慌指数</span>
-      <span class="vixy-price ${cls(vixyChg)}">${fmtPrice(vixyPrice)}</span>
-      <span class="vixy-chg ${cls(vixyChg)}">${fmtPct(vixyChg)}</span>
-      <span class="vixy-signal ${vixySignal.cls}">${vixySignal.text}</span>
-    </div>
-    ${vixyAlertHtml(vixyPrice)}
+    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg)}
     <div class="status-bar">
       基于季报真实持仓计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>), 仅供参考<span class="${dotClass}"></span>
     </div>
@@ -893,7 +1088,6 @@ function render24h() {
   const fIxic = flashClass(prevHeaderVal24h.IXIC, ixicChg);
   const fQqq  = flashClass(prevHeaderVal24h.QQQ,  qqqChg);
   const fSpy  = flashClass(prevHeaderVal24h.SPY,  spyChg);
-  const fVixy = flashClass(prevHeaderVal24h.VIXY, vixyChg);
   const fFx   = flashClass(prevHeaderVal24h.FX,   fxChg);
 
   let rows = '';
@@ -956,13 +1150,7 @@ function render24h() {
         <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
       </div>
     </div>
-    <div class="vixy-bar ${fVixy}">
-      <span class="vixy-label">VIXY 恐慌指数</span>
-      <span class="vixy-price ${cls(vixyChg)}">${fmtPrice(vixyPrice)}</span>
-      <span class="vixy-chg ${cls(vixyChg)}">${fmtPct(vixyChg)}</span>
-      <span class="vixy-signal ${vixySignal24h.cls}">${vixySignal24h.text}</span>
-    </div>
-    ${vixyAlertHtml(vixyPrice)}
+    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal24h, qqqChg, fxChg)}
     <div class="status-bar">
       美股盘后/盘前实时估值&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
     </div>
@@ -1081,6 +1269,7 @@ async function bootstrap() {
     if (!funds.length) throw new Error('基金列表为空');
     FUNDS = funds.filter(f => f.holdings && f.holdings.length > 0);
     if (!FUNDS.length) throw new Error('未获取到任何持仓数据');
+    fetchAshareMa(); // 非阻塞加载A股MA数据
     await pollLoop();
   } catch (e) {
     renderError(e.message);
