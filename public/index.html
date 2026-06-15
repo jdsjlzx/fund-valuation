@@ -148,6 +148,7 @@
     .h-item.flash-up   { background: rgba(204, 41, 41, 0.25); }
     .h-item.flash-down { background: rgba(13, 140, 66, 0.25); }
     .h-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .h-price { font-size: 15px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
     .h-val   { font-size: 18px; font-weight: 700; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; }
 
     /* ── VIXY 恐慌指标栏 ── */
@@ -607,27 +608,30 @@ function sortedFundIndices(map, fxChg, opts) {
 function allSymbols() {
   // Always include index/forex refs; quote API only handles US tickers right now
   const set = new Set(['IXIC', 'QQQ', 'SPY', 'VIXY', 'USDCNY=X']);
-  FUNDS.forEach(f => f.holdings.forEach(h => {
+  FUNDS.forEach(f => (f.holdings || []).forEach(h => {
     if (isUSHolding(h)) set.add(h.s);
   }));
   return [...set];
 }
 
 // mode: 'default' (homepage) — REGULAR shows realtime, all other states show last reg+post
-//       '24h' — 全时段实时估值：盘中用regular涨跌，盘前/盘后/收盘用累计(regular+post)
+//       '24h' — 实时价格 vs 前收盘：盘中用regular涨跌，盘后/隔夜用 reg+post 累计
 function effectiveChange(q, opts = {}) {
   if (!q) return null;
   const mode = opts.mode || 'default';
   const s = q.marketState;
 
   if (mode === '24h') {
-    // 24h模式：显示收盘后/收盘前的实时变动
-    // 参考点 = 最近一次正式收盘价，目标 = 当前盘后/盘前价格
-    // postMarketChangePercent = (盘后或盘前价 - 收盘价) / 收盘价
-    // 这就是基金下一次净值会反映的"隔夜变动"
+    // 24h模式：优先用盘后价 vs 昨收计算涨幅
+    const prev = q.regularMarketPreviousClose;
+    if (q.afterHoursPrice && prev) {
+      return ((q.afterHoursPrice - prev) / prev) * 100;
+    }
+    // 无盘后价时 fallback
+    if (s === 'REGULAR' || s === 'PRE') return q.regularMarketChangePercent ?? 0;
+    const reg = q.regularMarketChangePercent ?? 0;
     const post = q.postMarketChangePercent ?? 0;
-    if (s === 'REGULAR') return q.regularMarketChangePercent ?? 0;
-    return post;
+    return reg + post * (1 + reg / 100);
   }
 
   if (s === 'REGULAR') return q.regularMarketChangePercent ?? null;
@@ -645,7 +649,7 @@ function calcFund(fund, qmap, forexChg, opts = {}) {
   // Then normalize by covered weight (extrapolate to full fund).
   const fx = forexChg ?? 0;
   let sumW = 0, sumContrib = 0;
-  for (const h of fund.holdings) {
+  for (const h of (fund.holdings || [])) {
     if (!isCovered(h)) continue;
     const q = qmap[h.s];
     if (!q) continue;
@@ -707,10 +711,9 @@ function marketLabel(qmap, opts = {}) {
 
 function effectivePrice(q) {
   if (!q) return null;
-  const s = q.marketState;
-  if (s === 'PRE' || s === 'PREPRE') return q.preMarketPrice ?? q.regularMarketPrice ?? null;
-  if (s === 'POST' || s === 'POSTPOST') return q.postMarketPrice ?? q.regularMarketPrice ?? null;
-  return q.regularMarketPrice ?? null;
+  // 优先盘后价格，盘后没数据再用盘前/盘中价
+  if (q.afterHoursPrice) return q.afterHoursPrice;
+  return q.preMarketPrice ?? q.regularMarketPrice ?? null;
 }
 
 function fmtPrice(v) {
@@ -1080,6 +1083,8 @@ function render24h() {
   const spyChg    = effectiveChange(map['SPY'],  opts);
   const vixyChg   = effectiveChange(map['VIXY'], opts);
   const vixyPrice = effectivePrice(map['VIXY']);
+  const qqqPrice  = effectivePrice(map['QQQ']);
+  const spyPrice  = effectivePrice(map['SPY']);
   const fxChg     = map['USDCNY=X']?.regularMarketChangePercent ?? 0;
   // IXIC 指数无盘后数据，用 QQQ 作为代理
   const ixicRaw   = effectiveChange(map['IXIC'], opts);
@@ -1172,7 +1177,7 @@ function renderDetail(idx, mode) {
   const opts = mode === '24h' ? { mode: '24h' } : {};
   const est = calcFund(fund, map, fxChg, opts);
 
-  const sorted = [...fund.holdings].sort((a, b) => b.w - a.w);
+  const sorted = [...(fund.holdings || [])].sort((a, b) => b.w - a.w);
   const visible = expanded ? sorted : sorted.slice(0, 10);
   const hasMore = sorted.length > 10;
 

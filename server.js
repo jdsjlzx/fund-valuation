@@ -282,6 +282,26 @@ async function loadAllFunds() {
         }
       })
     );
+
+    // Retry empty funds once (eastmoney may rate-limit concurrent requests)
+    const emptyIdxs = results.map((r, i) => (!r.holdings || r.holdings.length === 0) ? i : -1).filter(i => i >= 0);
+    if (emptyIdxs.length > 0 && emptyIdxs.length < results.length) {
+      console.log(`[funds] retrying ${emptyIdxs.length} empty funds...`);
+      for (const i of emptyIdxs) {
+        const f = FUND_LIST[i];
+        try {
+          await new Promise(r => setTimeout(r, 1000)); // delay to avoid rate limit
+          const data = await fetchFundHoldings(f.code);
+          if (data && data.holdings.length > 0) {
+            console.log(`  [funds] retry OK: ${f.name} (${f.code}): ${data.holdings.length} holdings`);
+            results[i] = { name: f.name, code: f.code, ...data };
+          }
+        } catch (e) {
+          console.error(`  [funds] retry failed: ${f.name} (${f.code}):`, e.message);
+        }
+      }
+    }
+
     fundsCache = results;
     fundsCacheTs = Date.now();
     // Build ticker→eastmoney market map (US only: 105/106/107) for live quotes
@@ -668,11 +688,23 @@ app.get('/api/quotes', async (req, res) => {
     ]);
 
     // Merge: for symbols that have both eastmoney and sina data,
-    // use eastmoney as base but overlay after-hours data from sina
+    // use eastmoney as base but overlay after-hours data from sina.
+    // 盘前(PRE)时 eastmoney f2/f3 已是盘前实时价(vs昨收)，不需要叠加 sina 的旧 post 数据。
     const sinaMap = (sinaData && sinaData.map) || {};
+    const usState = getUSMarketState();
     const mergedEmData = emData.map((em) => {
       const sina = sinaMap[em.symbol];
       if (sina && sina.postMarketChangePercent !== undefined) {
+        // 盘前时段: eastmoney f2/f3 已反映盘前实时价 vs 昨收，
+        // sina fields[21] 可能是过期的旧盘后价，不要覆盖
+        if (usState === 'PRE') {
+          return {
+            ...em,
+            postMarketChangePercent: 0,
+            afterHoursPrice: null,
+            regularMarketPreviousClose: sina.regularMarketPreviousClose || em.regularMarketPreviousClose,
+          };
+        }
         return {
           ...em,
           postMarketChangePercent: sina.postMarketChangePercent,
