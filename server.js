@@ -2,6 +2,7 @@ const express = require('express');
 const https = require('https');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -68,264 +69,39 @@ function httpGet(url, headers = {}) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  Parse eastmoney holdings HTML
-//  URL prefix → market: 105 NASDAQ, 106 NYSE, 107 NYSE-ARCA(ETF)
-//  0/1 = A-share, 116 = HK
-// ═══════════════════════════════════════════════════════
-function stripTags(s) {
-  return String(s).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-}
-
-// Parse a single <table>...</table> block into holding rows
-// Detects column positions from the header row because quarterly vs annual
-// reports have DIFFERENT column structures:
-//   quarterly (top10):  序号|代码|名称|最新价|涨跌幅|资讯|占净值比例|持股|市值
-//   annual (full):      序号|代码|名称|资讯|占净值比例|持股|市值
-function parseHoldingsTable(tableHtml) {
-  // Discover column indices from header row
-  const thRe = /<th[^>]*>([\s\S]*?)<\/th>/g;
-  const headerLabels = [];
-  let th;
-  while ((th = thRe.exec(tableHtml)) !== null) {
-    headerLabels.push(stripTags(th[1]).replace(/\s+/g, ''));
-  }
-  const findIdx = (kw) => headerLabels.findIndex((l) => l.includes(kw));
-  const codeIdx   = findIdx('股票代码');
-  const nameIdx   = findIdx('股票名称');
-  let weightIdx = findIdx('占净值比例');
-  if (weightIdx < 0) weightIdx = findIdx('占净值');
-  if (weightIdx < 0) return []; // can't safely parse without a weight column
-
-  const rows = [];
-  const trRe = /<tr[^>]*>([\s\S]*?)<\/tr>/g;
-  let row;
-  let isFirst = true;
-  while ((row = trRe.exec(tableHtml)) !== null) {
-    if (isFirst) { isFirst = false; continue; } // skip header
-    const inner = row[1];
-    const tds = [...inner.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]);
-    if (tds.length <= weightIdx) continue;
-
-    const codeCell   = tds[codeIdx >= 0 ? codeIdx : 1];
-    const nameCell   = tds[nameIdx >= 0 ? nameIdx : 2];
-    const weightCell = tds[weightIdx];
-
-    let ticker = null;
-    let market = null;
-
-    // Primary: eastmoney quote URL (covers most US/HK/A-share holdings)
-    const urlM = codeCell.match(/quote\.eastmoney\.com\/unify\/r\/(\d+)\.([A-Za-z0-9.\-_$^]+)/);
-    if (urlM) {
-      market = urlM[1];
-      ticker = urlM[2];
-    } else {
-      // Fallback: stocks without a quote link (日股、欧股、未上市等)
-      //   - code may appear in <span data-texch=''>285AJP</span>
-      //   - or in data-id='dq{CODE}' / data-id='zd{CODE}' attributes
-      const tx = codeCell.match(/data-texch=['"][^'"]*['"]\s*>([^<]+)</);
-      if (tx) ticker = tx[1].trim();
-      if (!ticker) {
-        const di = codeCell.match(/data-id=['"](?:dq|zd)([^'"]+)['"]/);
-        if (di) ticker = di[1].trim();
-      }
-      if (!ticker) {
-        // Last resort: any non-empty text in the cell
-        const text = stripTags(codeCell);
-        if (text) ticker = text;
-      }
-      market = 'other'; // unknown market — won't fetch live price, but weight is preserved
-    }
-    if (!ticker) continue;
-
-    // Reclassify recognized international tickers that we have fetchers for
-    if (market === 'other' && KR_STOCKS.has(ticker)) market = 'KR';
-
-    const w = parseFloat(stripTags(weightCell).replace('%', '')) / 100;
-    if (isNaN(w) || w <= 0) continue;
-
-    rows.push({
-      s: ticker,
-      w,
-      name_cn: stripTags(nameCell),
-      market,
-    });
-  }
-  return rows;
-}
-
-// Parse the full eastmoney apidata response → list of sections
-// Each section: { label, date, holdings: [...] }
-function parseAllSections(text) {
-  const cm = text.match(/content\s*:\s*"([\s\S]*?)"\s*[,}]/);
-  if (!cm) return [];
-  const content = cm[1];
-
-  // Split by <h4 class='t'> blocks; each section begins with one of these headers
-  const parts = content.split(/<h4[^>]*class='t'>/);
-  const sections = [];
-  for (let i = 1; i < parts.length; i++) {
-    const block = parts[i];
-    const labelM = block.match(/(20\d{2}年[1-4一二三四]季度|20\d{2}年年度|20\d{2}年中报)/);
-    const dateM  = block.match(/截止至[^>]*>([\d\-]+)</);
-    const tableM = block.match(/<table[^>]*>([\s\S]*?)<\/table>/);
-    if (!tableM) continue;
-    const holdings = parseHoldingsTable(tableM[1]);
-    if (holdings.length === 0) continue;
-    sections.push({
-      label: labelM ? labelM[1] : null,
-      date: dateM ? dateM[1] : null,
-      holdings,
-    });
-  }
-  return sections;
-}
-
-// Fetch eastmoney holdings with explicit year/month (empty = latest)
-async function fetchHoldingsRaw(code, year, month, topline = 50) {
-  const url =
-    `http://fundf10.eastmoney.com/FundArchivesDatas.aspx?` +
-    `type=jjcc&code=${code}&topline=${topline}&year=${year || ''}&month=${month || ''}`;
-  const html = await httpGet(url, {
-    Referer: `http://fundf10.eastmoney.com/ccmx_${code}.html`,
-  });
-  return parseAllSections(html);
-}
-
-// Merge: latest quarterly top 10 (current weights) + previous year-end long tail
-const MIN_WEIGHT = 0.001;       // 0.1% — ignore micro-positions (immaterial to NAV)
-const MAX_HOLDINGS = 80;        // cap for display & quote-fan-out (annual reports can have 60-80 holdings)
-
-function mergeHoldings(latest, annual) {
-  if (!latest && !annual) return { holdings: [], reportDate: null, annualDate: null };
-  if (!latest) return {
-    holdings: annual.holdings.filter(h => h.w >= MIN_WEIGHT).slice(0, MAX_HOLDINGS),
-    reportDate: annual.date, annualDate: annual.date,
-  };
-  if (!annual) return { holdings: latest.holdings, reportDate: latest.date, annualDate: null };
-
-  // Start with latest top N — these have the most up-to-date weights
-  const seen = new Set(latest.holdings.map((h) => h.s));
-  const merged = [...latest.holdings];
-
-  // Long tail from annual report: positions NOT in latest top N, with material weight.
-  // Weights are taken as-disclosed in the annual report (no cap) so the display
-  // matches 天天基金网's annual-report view exactly. Caveat: a stock that was
-  // significantly trimmed between annual & latest will display its (stale) annual weight.
-  const tail = annual.holdings
-    .filter((h) => !seen.has(h.s) && h.w >= MIN_WEIGHT)
-    .sort((a, b) => b.w - a.w);
-
-  for (const h of tail) {
-    merged.push(h);
-    if (merged.length >= MAX_HOLDINGS) break;
-  }
-  return {
-    holdings: merged,
-    reportDate: latest.date,
-    annualDate: annual.date,
-  };
-}
-
-async function fetchFundHoldings(code) {
-  // Latest annual is previous calendar year (e.g. 2026 → fetch 2025 annual)
-  const annualYear = String(new Date().getUTCFullYear() - 1);
-  const [latestSecs, annualSecs] = await Promise.all([
-    fetchHoldingsRaw(code, '', '').catch(() => []),
-    fetchHoldingsRaw(code, annualYear, '12').catch(() => []),
-  ]);
-
-  // Latest quarter = first section returned with no year filter
-  const latest = latestSecs[0] || null;
-
-  // From the previous-year fetch, pick the section with the most holdings
-  // (this is the annual or semi-annual full-disclosure section)
-  let annual = null;
-  for (const s of annualSecs) {
-    if (!annual || s.holdings.length > annual.holdings.length) annual = s;
-  }
-
-  const merged = mergeHoldings(latest, annual);
-  return {
-    reportDate: merged.reportDate,
-    annualDate: merged.annualDate,
-    totalCount: merged.holdings.length,
-    holdings: merged.holdings,
-  };
-}
-
-// ═══════════════════════════════════════════════════════
-//  In-memory fund cache (24h TTL)
+//  Load fund holdings from local cache (data/holdings.json)
+//  Run `npm run update-holdings` to refresh the cache
 // ═══════════════════════════════════════════════════════
 let fundsCache = null;
 let fundsCacheTs = 0;
-let loadInFlight = null;
-const FUNDS_TTL = 24 * 60 * 60 * 1000;
 const tickerMarket = {};   // US ticker → eastmoney market id (105/106/107), built from holdings
 
-async function loadAllFunds() {
-  if (loadInFlight) return loadInFlight;
-  loadInFlight = (async () => {
-    console.log('[funds] loading holdings from eastmoney...');
-    const results = await Promise.all(
-      FUND_LIST.map(async (f) => {
-        try {
-          const data = await fetchFundHoldings(f.code);
-          if (!data || data.holdings.length === 0) {
-            console.warn(`  [funds] ${f.name} (${f.code}): empty`);
-            return { name: f.name, code: f.code, holdings: [], reportDate: null, totalCount: null };
-          }
-          console.log(`  [funds] ${f.name} (${f.code}): ${data.holdings.length} holdings`);
-          return { name: f.name, code: f.code, ...data };
-        } catch (e) {
-          console.error(`  [funds] ${f.name} (${f.code}) failed:`, e.message);
-          return { name: f.name, code: f.code, holdings: [], reportDate: null, totalCount: null };
-        }
-      })
-    );
-
-    // Retry empty funds once (eastmoney may rate-limit concurrent requests)
-    const emptyIdxs = results.map((r, i) => (!r.holdings || r.holdings.length === 0) ? i : -1).filter(i => i >= 0);
-    if (emptyIdxs.length > 0 && emptyIdxs.length < results.length) {
-      console.log(`[funds] retrying ${emptyIdxs.length} empty funds...`);
-      for (const i of emptyIdxs) {
-        const f = FUND_LIST[i];
-        try {
-          await new Promise(r => setTimeout(r, 1000)); // delay to avoid rate limit
-          const data = await fetchFundHoldings(f.code);
-          if (data && data.holdings.length > 0) {
-            console.log(`  [funds] retry OK: ${f.name} (${f.code}): ${data.holdings.length} holdings`);
-            results[i] = { name: f.name, code: f.code, ...data };
-          }
-        } catch (e) {
-          console.error(`  [funds] retry failed: ${f.name} (${f.code}):`, e.message);
-        }
-      }
+function loadHoldingsFromFile() {
+  const filePath = path.join(__dirname, 'data', 'holdings.json');
+  if (!fs.existsSync(filePath)) {
+    console.error('[funds] data/holdings.json not found! Run: npm run update-holdings');
+    return;
+  }
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  fundsCache = JSON.parse(raw);
+  fundsCacheTs = fs.statSync(filePath).mtimeMs;
+  // Build ticker→eastmoney market map (US only: 105/106/107) for live quotes
+  for (const f of fundsCache) {
+    for (const h of (f.holdings || [])) {
+      const m = String(h.market);
+      if (m === '105' || m === '106' || m === '107') tickerMarket[h.s] = m;
     }
-
-    fundsCache = results;
-    fundsCacheTs = Date.now();
-    // Build ticker→eastmoney market map (US only: 105/106/107) for live quotes
-    for (const f of results) {
-      for (const h of (f.holdings || [])) {
-        const m = String(h.market);
-        if (m === '105' || m === '106' || m === '107') tickerMarket[h.s] = m;
-      }
-    }
-    return results;
-  })();
-  try { return await loadInFlight; }
-  finally { loadInFlight = null; }
+  }
+  console.log(`[funds] loaded ${fundsCache.length} funds from data/holdings.json`);
 }
 
-app.get('/api/funds', async (req, res) => {
-  try {
-    if (!fundsCache || Date.now() - fundsCacheTs > FUNDS_TTL) {
-      await loadAllFunds();
-    }
-    res.json({ success: true, funds: fundsCache, loadedAt: fundsCacheTs });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+loadHoldingsFromFile();
+
+app.get('/api/funds', (req, res) => {
+  if (!fundsCache) {
+    return res.status(500).json({ error: 'holdings data not loaded. Run: npm run update-holdings' });
   }
+  res.json({ success: true, funds: fundsCache, loadedAt: fundsCacheTs });
 });
 
 // ═══════════════════════════════════════════════════════
