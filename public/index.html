@@ -615,16 +615,16 @@ function effectiveChange(q, opts = {}) {
     // 24h模式：实时显示当前时段数据
     // 盘中：直接用盘中实时涨跌
     if (s === 'REGULAR') return q.regularMarketChangePercent ?? 0;
-    // 盘前：用盘前价 vs 昨收，fallback到regularMarketChangePercent(eastmoney盘前已含实时涨跌)
+    // 盘前：显示盘后涨跌（afterHoursPrice vs 收盘价）
     if (s === 'PRE' || s === 'PREPRE') {
-      const prev = q.regularMarketPreviousClose;
-      if (q.preMarketPrice && prev) {
-        return ((q.preMarketPrice - prev) / prev) * 100;
+      const closePrice = q.closePrice || q.regularMarketPrice;
+      if (q.afterHoursPrice && closePrice) {
+        return ((q.afterHoursPrice - closePrice) / closePrice) * 100;
       }
-      return q.regularMarketChangePercent ?? 0;
+      return q.postMarketChangePercent ?? 0;
     }
-    // 盘后/盘前/已收盘：用盘外最新价 vs 收盘价，显示盘外涨跌
-    const closePrice = q.regularMarketPrice;
+    // 盘后/已收盘：用盘外最新价 vs 收盘价，显示盘外涨跌
+    const closePrice = q.closePrice || q.regularMarketPrice;
     if (q.afterHoursPrice && closePrice) {
       return ((q.afterHoursPrice - closePrice) / closePrice) * 100;
     }

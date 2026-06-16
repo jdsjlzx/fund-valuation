@@ -358,6 +358,7 @@ function parseSinaResponse(text, requestedSymbols) {
       map[symbol] = {
         symbol,
         regularMarketPrice: price,
+        closePrice: price,
         regularMarketChangePercent: chgPct,
         regularMarketPreviousClose: prevClose,
         preMarketChangePercent: chgPct,
@@ -472,13 +473,15 @@ app.get('/api/quotes', async (req, res) => {
       const sina = sinaMap[em.symbol];
       if (sina && sina.postMarketChangePercent !== undefined) {
         // 盘前时段: eastmoney f2/f3 已反映盘前实时价 vs 昨收，
-        // sina fields[21] 可能是过期的旧盘后价，不要覆盖
+        // 保留 sina 收盘价和盘后价供24h视图计算盘后涨跌
         if (usState === 'PRE') {
           return {
             ...em,
-            postMarketChangePercent: 0,
-            afterHoursPrice: null,
             regularMarketPreviousClose: sina.regularMarketPreviousClose || em.regularMarketPreviousClose,
+            postMarketChangePercent: sina.postMarketChangePercent || 0,
+            afterHoursPrice: sina.afterHoursPrice || null,
+            // sina的regularMarketPrice是收盘价，存为closePrice供24h视图使用
+            closePrice: sina.regularMarketPrice || null,
           };
         }
         // 盘后/收盘时段: eastmoney f2 已是实时盘后价，比 sina fields[21] 更新更快。
@@ -486,9 +489,11 @@ app.get('/api/quotes', async (req, res) => {
         // sina.regularMarketPrice 是收盘价(盘中最后价)，用于24h视图计算盘后涨跌。
         const isPostClosed = (usState === 'POST' || usState === 'CLOSED');
         const emAHP = isPostClosed ? em.regularMarketPrice : null;
+        const sinaClose = sina.regularMarketPrice || em.regularMarketPrice;
         return {
           ...em,
-          regularMarketPrice: isPostClosed ? (sina.regularMarketPrice || em.regularMarketPrice) : em.regularMarketPrice,
+          regularMarketPrice: isPostClosed ? sinaClose : em.regularMarketPrice,
+          closePrice: sinaClose,
           postMarketChangePercent: sina.postMarketChangePercent,
           afterHoursPrice: emAHP || sina.afterHoursPrice || null,
           regularMarketPreviousClose: sina.regularMarketPreviousClose || em.regularMarketPreviousClose,
