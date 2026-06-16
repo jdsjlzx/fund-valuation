@@ -607,7 +607,7 @@ function sortedFundIndices(map, fxChg, opts) {
 // ═══════════════════════════════════════════════════
 function allSymbols() {
   // Always include index/forex refs; quote API only handles US tickers right now
-  const set = new Set(['IXIC', 'QQQ', 'SPY', 'VIXY', 'USDCNY=X']);
+  const set = new Set(['IXIC', 'QQQ', 'SPY', 'VIXY', 'USDCNY=X', '159509']);
   FUNDS.forEach(f => (f.holdings || []).forEach(h => {
     if (isUSHolding(h)) set.add(h.s);
   }));
@@ -622,16 +622,24 @@ function effectiveChange(q, opts = {}) {
   const s = q.marketState;
 
   if (mode === '24h') {
-    // 24h模式：优先用盘后价 vs 昨收计算涨幅
-    const prev = q.regularMarketPreviousClose;
-    if (q.afterHoursPrice && prev) {
-      return ((q.afterHoursPrice - prev) / prev) * 100;
+    // 24h模式：实时显示当前时段数据
+    // 盘中：直接用盘中实时涨跌
+    if (s === 'REGULAR') return q.regularMarketChangePercent ?? 0;
+    // 盘前：用盘前价 vs 昨收
+    if (s === 'PRE' || s === 'PREPRE') {
+      const prev = q.regularMarketPreviousClose;
+      if (q.preMarketPrice && prev) {
+        return ((q.preMarketPrice - prev) / prev) * 100;
+      }
+      return 0;
     }
-    // 无盘后价时 fallback
-    if (s === 'REGULAR' || s === 'PRE') return q.regularMarketChangePercent ?? 0;
-    const reg = q.regularMarketChangePercent ?? 0;
-    const post = q.postMarketChangePercent ?? 0;
-    return reg + post * (1 + reg / 100);
+    // 盘后/盘前/已收盘：用盘外最新价 vs 收盘价，显示盘外涨跌
+    const closePrice = q.regularMarketPrice;
+    if (q.afterHoursPrice && closePrice) {
+      return ((q.afterHoursPrice - closePrice) / closePrice) * 100;
+    }
+    // 无盘外价 fallback
+    return q.postMarketChangePercent ?? 0;
   }
 
   if (s === 'REGULAR') return q.regularMarketChangePercent ?? null;
@@ -676,26 +684,34 @@ function usETNow() {
   return { day: et.getUTCDay(), min: et.getUTCHours() * 60 + et.getUTCMinutes() };
 }
 
-// 24h-view session label — 只显示 盘前/盘中/盘后 (美东时间)
-//   数据源参考 bowtie《美股交易时间》:
-//   盘前 04:00–09:30 · 盘中 09:30–16:00 · 盘后 16:00–20:00 (ET)
-//   收盘后(夜盘/隔夜)及周末统一归为「盘后」, 不显示「已收盘」
+// 24h-view session label (美东时间)
 function us24hSession() {
   const { day, min } = usETNow();
   const weekday = day >= 1 && day <= 5;
   if (weekday) {
     if (min >= 240 && min < 570) return '盘前';   // 04:00–09:30
     if (min >= 570 && min < 960) return '盘中';   // 09:30–16:00
+    if (min >= 960 && min < 1200) return '盘后';  // 16:00–20:00
+    if (min >= 1200) return '夜盘';               // 20:00–24:00
   }
-  return '盘后';   // 16:00–次日04:00、夜盘、隔夜及周末统一显示盘后
+  // 00:00–04:00 工作日 or 周末
+  if (weekday && min < 240) return '亚盘';
+  return '亚盘';   // 周末
 }
 
-// 美股是否处于交易时段(盘前/盘中/盘后)：周末休市、隔夜(20:00–次日04:00 ET)休市
-//   交易时段 = 工作日美东 04:00–20:00 (盘前 04:00–09:30 · 盘中 09:30–16:00 · 盘后 16:00–20:00)
+// 首页：工作日北京时间16:00之后显示24h视图，工作日5:00-16:00显示首页(基金列表)
 function usMarketTrading() {
-  const { day, min } = usETNow();
-  if (day === 0 || day === 6) return false;   // 周六/周日 休市
-  return min >= 240 && min < 1200;            // 04:00–20:00 ET
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const bjTime = new Date(utc + 8 * 3600000);
+  const day = bjTime.getDay();
+  const min = bjTime.getHours() * 60 + bjTime.getMinutes();
+  const weekday = day >= 1 && day <= 5;
+  if (!weekday) return true; // 周末显示24h视图
+  // 工作日：16:00之后显示24h，5:00-16:00显示首页
+  if (min >= 960) return true;   // 16:00+ → 24h
+  if (min >= 300) return false;  // 5:00-16:00 → 首页
+  return true; // 0:00-5:00 → 24h（前一天盘后延续）
 }
 
 function marketLabel(qmap, opts = {}) {
@@ -871,7 +887,7 @@ function flashClass(prev, cur) {
   return '';
 }
 
-function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg) {
+function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, etf159509Quote) {
   const chgCls = cls(vixyChg);
   const priceTxt = fmtPrice(vixyPrice);
   const chgTxt = fmtPct(vixyChg);
@@ -880,21 +896,14 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg) {
   const etf159509Chg = ((1 + (qqqChg || 0) / 100) * (1 + (fxChg || 0) / 100) - 1) * 100;
   const etfCls = cls(etf159509Chg);
 
-  // 159509 最新净值
-  const etfPrice = ASHARE_MA?.etf159509?.price;
+  // 159509 最新净值：优先用实时行情（A股开盘时段），fallback K线数据
+  const etfPrice = etf159509Quote?.regularMarketPrice || ASHARE_MA?.etf159509?.price;
   const etfPriceTxt = etfPrice ? etfPrice.toFixed(3) : '--';
 
   // 159509 买入信号
   const sig = calc159509Signal(qqqChg);
   const sigHtml = sig
     ? `<span class="etf-signal ${sig.cls}">${sig.text}(${sig.score}分)</span>`
-    : '';
-  // 159509偏离MA20信息
-  const etfDevInfo = ASHARE_MA?.etf159509
-    ? `<span class="etf-ma">159509偏离MA20: ${ASHARE_MA.etf159509.deviation > 0 ? '+' : ''}${ASHARE_MA.etf159509.deviation}%${ASHARE_MA.etf159509.volRatio >= 1.5 ? ' · 放量' + ASHARE_MA.etf159509.volRatio + 'x' : ''}</span>`
-    : '';
-  const maInfo = ASHARE_MA
-    ? `<span class="etf-ma">沪${ASHARE_MA.sh?.deviation > 0 ? '+' : ''}${ASHARE_MA.sh?.deviation ?? '-'}% · 创${ASHARE_MA.cy?.deviation > 0 ? '+' : ''}${ASHARE_MA.cy?.deviation ?? '-'}%</span>`
     : '';
   const sigTipHtml = sig && sig.amount
     ? `<span class="etf-amount">${sig.tip}，建议：${sig.amount}</span>`
@@ -904,14 +913,10 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg) {
   let scoreDetail = '';
   if (ASHARE_MA) {
     const etfDev = ASHARE_MA.etf159509?.deviation;
-    const shDev = ASHARE_MA.sh?.deviation;
-    const cyDev = ASHARE_MA.cy?.deviation;
     const volR = ASHARE_MA.etf159509?.volRatio;
     const rows = [];
     if (qqqChg && qqqChg < 0) rows.push(`纳指跌${Math.abs(qqqChg).toFixed(1)}%`);
     if (etfDev != null) rows.push(`ETF偏离${etfDev > 0 ? '+' : ''}${etfDev}%`);
-    if (shDev != null) rows.push(`沪${shDev > 0 ? '+' : ''}${shDev}%`);
-    if (cyDev != null) rows.push(`创${cyDev > 0 ? '+' : ''}${cyDev}%`);
     if (volR != null) rows.push(`量比${volR}x`);
     scoreDetail = `<span class="etf-detail">${rows.join(' | ')}</span>`;
   }
@@ -1056,9 +1061,8 @@ function renderList() {
         <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
       </div>
     </div>
-    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg)}
-    <div class="status-bar">
-      基于季报真实持仓计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>), 仅供参考<span class="${dotClass}"></span>
+    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, map['159509'])}
+    <div class="status-bar">基于季报真实持仓计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>), 仅供参考<span class="${dotClass}"></span>
     </div>
     <div class="list-toolbar">
       <span class="sort-header ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">涨跌幅<span class="sort-arrows"><span class="arr ${sortMode === 'asc' ? 'on' : ''}">▲</span><span class="arr ${sortMode === 'desc' ? 'on' : ''}">▼</span></span></span>
@@ -1155,7 +1159,7 @@ function render24h() {
         <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
       </div>
     </div>
-    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal24h, qqqChg, fxChg)}
+    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal24h, qqqChg, fxChg, map['159509'])}
     <div class="status-bar">
       美股盘后/盘前实时估值&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
     </div>

@@ -123,11 +123,11 @@ function toSinaId(symbol) {
   if (symbol === 'INX'  || symbol === '^GSPC') return 'gb_$inx';
   // A-share: 6-digit numeric
   //   6xxxxx, 688xxx, 689xxx → 沪市
-  //   0xxxxx, 3xxxxx         → 深市
+  //   0xxxxx, 1xxxxx, 3xxxxx → 深市 (含ETF 15xxxx)
   //   4xxxxx, 8xxxxx (非688/689) → 北交所
   if (/^\d{6}$/.test(symbol)) {
     if (symbol[0] === '6') return 'sh' + symbol;
-    if (symbol[0] === '0' || symbol[0] === '3') return 'sz' + symbol;
+    if (symbol[0] === '0' || symbol[0] === '1' || symbol[0] === '3') return 'sz' + symbol;
     if (symbol.startsWith('43') || symbol.startsWith('83') ||
         symbol.startsWith('87') || symbol.startsWith('92'))  return 'bj' + symbol;
     return 'sh' + symbol; // safe default
@@ -481,10 +481,13 @@ app.get('/api/quotes', async (req, res) => {
             regularMarketPreviousClose: sina.regularMarketPreviousClose || em.regularMarketPreviousClose,
           };
         }
+        // 盘后/收盘时段: eastmoney f2 已是实时盘后价，比 sina fields[21] 更新更快。
+        // 优先用 eastmoney 的 regularMarketPrice 作为 afterHoursPrice。
+        const emAHP = (usState === 'POST' || usState === 'CLOSED') ? em.regularMarketPrice : null;
         return {
           ...em,
           postMarketChangePercent: sina.postMarketChangePercent,
-          afterHoursPrice: sina.afterHoursPrice || null,
+          afterHoursPrice: emAHP || sina.afterHoursPrice || null,
           regularMarketPreviousClose: sina.regularMarketPreviousClose || em.regularMarketPreviousClose,
         };
       }
@@ -592,5 +595,5 @@ app.get('/api/ashare-ma', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`美股基金估值服务已启动 → http://localhost:${PORT}`);
   // Warm fund cache in background
-  loadAllFunds().catch((e) => console.error('[funds] initial load failed:', e.message));
+  loadHoldingsFromFile();
 });
