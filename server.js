@@ -483,9 +483,12 @@ app.get('/api/quotes', async (req, res) => {
         }
         // 盘后/收盘时段: eastmoney f2 已是实时盘后价，比 sina fields[21] 更新更快。
         // 优先用 eastmoney 的 regularMarketPrice 作为 afterHoursPrice。
-        const emAHP = (usState === 'POST' || usState === 'CLOSED') ? em.regularMarketPrice : null;
+        // sina.regularMarketPrice 是收盘价(盘中最后价)，用于24h视图计算盘后涨跌。
+        const isPostClosed = (usState === 'POST' || usState === 'CLOSED');
+        const emAHP = isPostClosed ? em.regularMarketPrice : null;
         return {
           ...em,
+          regularMarketPrice: isPostClosed ? (sina.regularMarketPrice || em.regularMarketPrice) : em.regularMarketPrice,
           postMarketChangePercent: sina.postMarketChangePercent,
           afterHoursPrice: emAHP || sina.afterHoursPrice || null,
           regularMarketPreviousClose: sina.regularMarketPreviousClose || em.regularMarketPreviousClose,

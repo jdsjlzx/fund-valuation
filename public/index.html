@@ -615,13 +615,13 @@ function effectiveChange(q, opts = {}) {
     // 24h模式：实时显示当前时段数据
     // 盘中：直接用盘中实时涨跌
     if (s === 'REGULAR') return q.regularMarketChangePercent ?? 0;
-    // 盘前：用盘前价 vs 昨收
+    // 盘前：用盘前价 vs 昨收，fallback到regularMarketChangePercent(eastmoney盘前已含实时涨跌)
     if (s === 'PRE' || s === 'PREPRE') {
       const prev = q.regularMarketPreviousClose;
       if (q.preMarketPrice && prev) {
         return ((q.preMarketPrice - prev) / prev) * 100;
       }
-      return 0;
+      return q.regularMarketChangePercent ?? 0;
     }
     // 盘后/盘前/已收盘：用盘外最新价 vs 收盘价，显示盘外涨跌
     const closePrice = q.regularMarketPrice;
@@ -1058,7 +1058,7 @@ function renderList() {
     </div>
     <div class="fund-list">${rows}</div>
     ${entryHtml}
-    <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）<br>5秒自动刷新</div>
+    <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）<br>10秒自动刷新</div>
   `;
 }
 
@@ -1156,7 +1156,7 @@ function render24h() {
       <span class="sort-header ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">涨跌幅<span class="sort-arrows"><span class="arr ${sortMode === 'asc' ? 'on' : ''}">▲</span><span class="arr ${sortMode === 'desc' ? 'on' : ''}">▼</span></span></span>
     </div>
     <div class="fund-list">${rows}</div>
-    <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）<br>5秒自动刷新</div>
+    <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）<br>10秒自动刷新</div>
   `;
 }
 
@@ -1258,7 +1258,7 @@ async function pollLoop() {
     console.error('quotes poll failed:', e);
   }
   clearTimeout(timer);
-  timer = setTimeout(pollLoop, 5000);
+  timer = setTimeout(pollLoop, 10000);
 }
 
 async function bootstrap() {
