@@ -33,6 +33,9 @@ const FUND_LIST = [
   { name: '富国全球科技互联网',    code: '100055' },
   { name: '中银全球策略',          code: '163813' },
   { name: '天弘全球新能源汽车',    code: '016823' },
+  { name: '华夏新时代混合(QDII)', code: '005534' },
+  { name: '摩根太平洋科技对冲',   code: '968061' },
+  { name: '华夏大中华混合(QDII)', code: '002230' },
 ];
 
 const KR_STOCKS = new Set(['000660', '005930']);

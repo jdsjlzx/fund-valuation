@@ -34,6 +34,9 @@ const FUND_LIST = [
   { name: '富国全球科技互联网',    code: '100055' },
   { name: '中银全球策略',          code: '163813' },
   { name: '天弘全球新能源汽车',    code: '016823' },
+  { name: '华夏新时代混合(QDII)', code: '005534' },
+  { name: '摩根太平洋科技对冲',   code: '968061' },
+  { name: '华夏大中华混合(QDII)', code: '002230' },
 ];
 
 // ═══════════════════════════════════════════════════════
@@ -598,10 +601,34 @@ app.get('/api/ashare-ma', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
+//  Keep-alive: self-ping every 5 minutes to prevent sleep
+// ═══════════════════════════════════════════════════════
+function startKeepAlive(port) {
+  const selfUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://fund-valuation-m37d.onrender.com';
+  const INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+  setInterval(() => {
+    const url = selfUrl.startsWith('https') ? selfUrl : selfUrl;
+    const mod = selfUrl.startsWith('https') ? https : http;
+    const req = mod.get(selfUrl + '/', (res) => {
+      console.log(`[keep-alive] ping ${selfUrl} → ${res.statusCode}`);
+    });
+    req.on('error', (err) => {
+      console.warn(`[keep-alive] ping failed: ${err.message}`);
+    });
+    req.end();
+  }, INTERVAL);
+
+  console.log(`[keep-alive] 每5分钟自动访问 ${selfUrl}`);
+}
+
+// ═══════════════════════════════════════════════════════
 //  Startup
 // ═══════════════════════════════════════════════════════
 app.listen(PORT, () => {
   console.log(`美股基金估值服务已启动 → http://localhost:${PORT}`);
   // Warm fund cache in background
   loadHoldingsFromFile();
+  // Self-ping to prevent server sleep
+  startKeepAlive(PORT);
 });
