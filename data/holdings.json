@@ -6665,10 +6665,71 @@
   {
     "name": "摩根太平洋科技对冲",
     "code": "968061",
-    "holdings": [],
-    "reportDate": null,
-    "annualDate": null,
-    "totalCount": 0
+    "holdings": [
+      {
+        "s": "2330.TW",
+        "w": 0.06,
+        "name_cn": "台积电",
+        "market": "TW"
+      },
+      {
+        "s": "2308.TW",
+        "w": 0.038,
+        "name_cn": "台达电子",
+        "market": "TW"
+      },
+      {
+        "s": "000660",
+        "w": 0.034,
+        "name_cn": "SK海力士",
+        "market": "KR"
+      },
+      {
+        "s": "300750",
+        "w": 0.031,
+        "name_cn": "宁德时代",
+        "market": "other"
+      },
+      {
+        "s": "Z74.SI",
+        "w": 0.031,
+        "name_cn": "新加坡电信",
+        "market": "SI"
+      },
+      {
+        "s": "300502",
+        "w": 0.03,
+        "name_cn": "新易盛",
+        "market": "other"
+      },
+      {
+        "s": "KDDIY",
+        "w": 0.03,
+        "name_cn": "KDDI",
+        "market": "other"
+      },
+      {
+        "s": "300308",
+        "w": 0.028,
+        "name_cn": "中际旭创",
+        "market": "other"
+      },
+      {
+        "s": "00700",
+        "w": 0.027,
+        "name_cn": "腾讯控股",
+        "market": "other"
+      },
+      {
+        "s": "BABA",
+        "w": 0.027,
+        "name_cn": "阿里巴巴",
+        "market": "other"
+      }
+    ],
+    "reportDate": "2026-03-31",
+    "annualDate": "2026-03-31",
+    "totalCount": 10
   },
   {
     "name": "华夏大中华混合(QDII)",

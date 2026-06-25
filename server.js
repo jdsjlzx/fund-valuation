@@ -119,6 +119,11 @@ const KR_STOCKS = new Set(['000660', '005930']);  // SK海力士、三星电子
 
 function isKoreanSymbol(s) { return KR_STOCKS.has(s); }
 
+// 台股: 用 TWSE 官方 API (mis.twse.com.tw)，无频率限制
+function isTaiwanSymbol(s) { return /\.TW$/i.test(s); }
+// Yahoo Finance: 日股 (.T)、新加坡 (.SI) 等其他国际市场
+function isYahooSymbol(s) { return /\.(T|SI)$/i.test(s); }
+
 function toSinaId(symbol) {
   if (symbol === 'USDCNY=X') return 'fx_susdcny';
   if (symbol === 'IXIC' || symbol === '^IXIC') return 'gb_$ixic';
@@ -246,6 +251,100 @@ function parseNaverQuote(html, ticker) {
 async function fetchKoreanQuote(ticker) {
   const html = await fetchNaverHtml(ticker);
   return parseNaverQuote(html, ticker);
+}
+
+// ──────────────────────────────────────────
+//  TWSE fetcher (台湾证券交易所，官方实时 API，无频率限制)
+//  ticker 格式: "2330.TW"  → ex_ch: "tse_2330.tw"
+// ──────────────────────────────────────────
+async function fetchTaiwanQuotes(symbols) {
+  // 默认 tse_ (上市)，OTC 上柜用 otc_
+  const exCh = symbols.map((s) => {
+    const code = s.replace(/\.TW$/i, '');
+    return `tse_${code}.tw`;
+  }).join('%7C');
+  const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exCh}&json=1&delay=0`;
+  const text = await httpGet(url, { Referer: 'https://mis.twse.com.tw/' });
+  let j;
+  try { j = JSON.parse(text); } catch { return []; }
+  const arr = (j && j.msgArray) || [];
+  return arr.map((m) => {
+    const code = m.c;
+    const sym = `${code}.TW`;
+    const price = parseFloat(m.z);
+    const prev  = parseFloat(m.y);
+    if (isNaN(price) || isNaN(prev) || price <= 0) return null;
+    const chgPct = ((price - prev) / prev) * 100;
+    return {
+      symbol: sym,
+      regularMarketPrice: price,
+      regularMarketChangePercent: chgPct,
+      regularMarketPreviousClose: prev,
+      preMarketChangePercent: chgPct,
+      postMarketChangePercent: 0,
+      marketState: 'REGULAR',
+    };
+  }).filter(Boolean);
+}
+
+// ──────────────────────────────────────────
+//  Yahoo Finance fetcher (日股 .T / 新加坡 .SI)
+// ──────────────────────────────────────────
+function httpGetWithStatus(url, headers = {}) {
+  const lib = url.startsWith('https:') ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = lib.get(
+      url,
+      {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+          ...headers,
+        },
+        timeout: 12000,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf-8');
+          if (res.statusCode !== 200) {
+            reject(new Error(`HTTP ${res.statusCode}`));
+          } else {
+            resolve(body);
+          }
+        });
+        res.on('error', reject);
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('request timeout')));
+    req.on('error', reject);
+  });
+}
+
+async function fetchYahooQuote(symbol) {
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+    `?interval=1d&range=1d`;
+  const text = await httpGetWithStatus(url, { Accept: 'application/json' });
+  let j;
+  try { j = JSON.parse(text); } catch { return null; }
+  const result = j && j.chart && j.chart.result && j.chart.result[0];
+  if (!result) return null;
+  const meta = result.meta;
+  const price = meta.regularMarketPrice;
+  const prev  = meta.chartPreviousClose || meta.previousClose;
+  if (!price || !prev) return null;
+  const chgPct = ((price - prev) / prev) * 100;
+  return {
+    symbol,
+    regularMarketPrice: price,
+    regularMarketChangePercent: chgPct,
+    regularMarketPreviousClose: prev,
+    preMarketChangePercent: chgPct,
+    postMarketChangePercent: 0,
+    marketState: meta.marketState || 'REGULAR',
+  };
 }
 
 function getUSMarketState() {
@@ -428,10 +527,12 @@ app.get('/api/quotes', async (req, res) => {
     return res.json({ success: true, data: cached.data, cached: true });
   }
 
-  // Route each symbol: eastmoney(US) → Naver(KR) → Sina(forex/HK/A股/兜底)
+  // Route each symbol: eastmoney(US) → Naver(KR) → TWSE(TW) → Yahoo(JP/SG) → Sina(forex/HK/A股/兜底)
   const krSymbols   = symbols.filter((s) =>  isKoreanSymbol(s));
-  const emSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && emSecid(s));
-  const sinaSymbols = symbols.filter((s) => !isKoreanSymbol(s) && !emSecid(s));
+  const twSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && isTaiwanSymbol(s));
+  const yhSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && isYahooSymbol(s));
+  const emSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isYahooSymbol(s) && emSecid(s));
+  const sinaSymbols = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isYahooSymbol(s) && !emSecid(s));
   const secidToSym  = new Map(emSymbols.map((s) => [emSecid(s), s]));
 
   try {
@@ -449,7 +550,7 @@ app.get('/api/quotes', async (req, res) => {
     // Always fetch Sina for all US stocks to get after-hours data (field[21])
     const sinaAll = [...sinaSymbols, ...emMissing, ...emSymbols.filter((s) => emMap[s])];
 
-    const [emData, sinaData, krData] = await Promise.all([
+    const [emData, sinaData, krData, twData, yhData] = await Promise.all([
       emSymbols.map((s) => emMap[s]).filter(Boolean),
       (async () => {
         if (sinaAll.length === 0) return [];
@@ -461,6 +562,20 @@ app.get('/api/quotes', async (req, res) => {
         krSymbols.map((s) =>
           fetchKoreanQuote(s).catch((e) => {
             console.error('[naver]', s, e.message);
+            return null;
+          })
+        )
+      ).then((arr) => arr.filter(Boolean)),
+      twSymbols.length
+        ? fetchTaiwanQuotes(twSymbols).catch((e) => {
+            console.error('[twse]', e.message);
+            return [];
+          })
+        : [],
+      Promise.all(
+        yhSymbols.map((s) =>
+          fetchYahooQuote(s).catch((e) => {
+            console.error('[yahoo]', s, e.message);
             return null;
           })
         )
@@ -509,7 +624,7 @@ app.get('/api/quotes', async (req, res) => {
     const emSymSet = new Set(emSymbols.filter((s) => emMap[s]));
     const puresinaData = (sinaData && sinaData.list || []).filter((q) => !emSymSet.has(q.symbol));
 
-    const data = [...mergedEmData, ...puresinaData, ...krData];
+    const data = [...mergedEmData, ...puresinaData, ...krData, ...twData, ...yhData];
     if (data.length === 0) throw new Error('No quotes returned');
     quoteCache.set(cacheKey, { data, ts: Date.now() });
     res.json({ success: true, data });
