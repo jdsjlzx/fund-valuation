@@ -175,50 +175,23 @@ async function fetchHoldingsRaw(code, year, month, topline = 50) {
 const MIN_WEIGHT = 0.001;
 const MAX_HOLDINGS = 80;
 
-function mergeHoldings(latest, annual) {
-  if (!latest && !annual) return { holdings: [], reportDate: null, annualDate: null };
-  if (!latest) return {
-    holdings: annual.holdings.filter(h => h.w >= MIN_WEIGHT).slice(0, MAX_HOLDINGS),
-    reportDate: annual.date, annualDate: annual.date,
-  };
-  if (!annual) return { holdings: latest.holdings, reportDate: latest.date, annualDate: null };
-
-  const seen = new Set(latest.holdings.map((h) => h.s));
-  const merged = [...latest.holdings];
-  const tail = annual.holdings
-    .filter((h) => !seen.has(h.s) && h.w >= MIN_WEIGHT)
-    .sort((a, b) => b.w - a.w);
-
-  for (const h of tail) {
-    merged.push(h);
-    if (merged.length >= MAX_HOLDINGS) break;
-  }
-  return {
-    holdings: merged,
-    reportDate: latest.date,
-    annualDate: annual.date,
-  };
-}
-
 async function fetchFundHoldings(code) {
-  const annualYear = String(new Date().getUTCFullYear() - 1);
-  const [latestSecs, annualSecs] = await Promise.all([
-    fetchHoldingsRaw(code, '', '').catch(() => []),
-    fetchHoldingsRaw(code, annualYear, '12').catch(() => []),
-  ]);
+  // 只取最新季报，不合并年报
+  let secs = await fetchHoldingsRaw(code, '', '').catch(() => []);
 
-  const latest = latestSecs[0] || null;
-  let annual = null;
-  for (const s of annualSecs) {
-    if (!annual || s.holdings.length > annual.holdings.length) annual = s;
+  if (secs.length === 0) {
+    await new Promise(r => setTimeout(r, 1500));
+    secs = await fetchHoldingsRaw(code, '', '').catch(() => []);
   }
 
-  const merged = mergeHoldings(latest, annual);
+  const latest = secs[0] || null;
+  if (!latest) return { reportDate: null, annualDate: null, totalCount: 0, holdings: [] };
+
   return {
-    reportDate: merged.reportDate,
-    annualDate: merged.annualDate,
-    totalCount: merged.holdings.length,
-    holdings: merged.holdings,
+    reportDate: latest.date,
+    annualDate: null,
+    totalCount: latest.holdings.length,
+    holdings: latest.holdings,
   };
 }
 
@@ -227,22 +200,22 @@ async function fetchFundHoldings(code) {
 // ═══════════════════════════════════════════════════════
 async function main() {
   console.log('[update-holdings] 开始拉取持仓数据...');
-  const results = await Promise.all(
-    FUND_LIST.map(async (f) => {
-      try {
-        const data = await fetchFundHoldings(f.code);
-        if (!data || data.holdings.length === 0) {
-          console.warn(`  ✗ ${f.name} (${f.code}): empty`);
-          return { name: f.name, code: f.code, holdings: [], reportDate: null, annualDate: null, totalCount: 0 };
-        }
+  const results = [];
+  for (const f of FUND_LIST) {
+    try {
+      const data = await fetchFundHoldings(f.code);
+      if (!data || data.holdings.length === 0) {
+        console.warn(`  ✗ ${f.name} (${f.code}): empty`);
+        results.push({ name: f.name, code: f.code, holdings: [], reportDate: null, annualDate: null, totalCount: 0 });
+      } else {
         console.log(`  ✓ ${f.name} (${f.code}): ${data.holdings.length} holdings [${data.reportDate}]`);
-        return { name: f.name, code: f.code, ...data };
-      } catch (e) {
-        console.error(`  ✗ ${f.name} (${f.code}) failed:`, e.message);
-        return { name: f.name, code: f.code, holdings: [], reportDate: null, annualDate: null, totalCount: 0 };
+        results.push({ name: f.name, code: f.code, ...data });
       }
-    })
-  );
+    } catch (e) {
+      console.error(`  ✗ ${f.name} (${f.code}) failed:`, e.message);
+      results.push({ name: f.name, code: f.code, holdings: [], reportDate: null, annualDate: null, totalCount: 0 });
+    }
+  }
 
   // Retry empty funds once
   const emptyIdxs = results.map((r, i) => (!r.holdings || r.holdings.length === 0) ? i : -1).filter(i => i >= 0);
