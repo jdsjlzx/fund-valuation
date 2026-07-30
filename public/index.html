@@ -710,7 +710,7 @@ function sortedFundIndices(map, fxChg, opts) {
 //  HELPERS
 // ═══════════════════════════════════════════════════
 function allSymbols() {
-  // Always include index/forex refs; quote API only handles US tickers right now
+  // Always include index/forex refs and proxy ETFs for uncovered fund weight.
   const set = new Set(['IXIC', 'QQQ', 'SPY', 'VIXY', 'USDCNY=X']);
   FUNDS.forEach(f => (f.holdings || []).forEach(h => {
     if (isUSHolding(h)) set.add(h.s);
@@ -758,7 +758,7 @@ function calcFund(fund, qmap, forexChg, opts = {}) {
   // Per-holding, currency-aware contribution:
   //   USD / HKD (HKD≈USD-pegged): apply USDCNY forex
   //   CNY (A-share):              direct, no forex
-  // Then normalize by covered weight (extrapolate to full fund).
+  // Uncovered fund weight uses a broad index proxy instead of extrapolating holdings.
   const fx = forexChg ?? 0;
   let sumW = 0, sumContrib = 0;
   for (const h of (fund.holdings || [])) {
@@ -774,8 +774,34 @@ function calcFund(fund, qmap, forexChg, opts = {}) {
     sumContrib += h.w * stockReturn;
     sumW       += h.w;
   }
-  if (sumW === 0) return null;
-  return sumContrib / sumW;
+
+  const coverageWeight = Math.min(1, Math.max(0, Number(fund.coverageWeight) || sumW));
+  const uncoveredWeight = Math.max(0, 1 - coverageWeight);
+  const proxyReturn = fundProxyReturn(fund, qmap, fx, opts);
+  if (sumW === 0 && proxyReturn === null) return null;
+  return sumContrib + uncoveredWeight * (proxyReturn ?? 0);
+}
+
+function fundProxyReturn(fund, qmap, forexChg, opts = {}) {
+  const name = `${fund.name || ''} ${fund.code || ''}`;
+  let weights;
+  if (/新能源|电动|汽车|车/.test(name)) {
+    weights = { QQQ: 0.65, SPY: 0.35 };
+  } else if (/标普|S&P|信息科技|纳斯达克|科技|智能|互联|数字/.test(name)) {
+    weights = { QQQ: 0.85, SPY: 0.15 };
+  } else {
+    weights = { QQQ: 0.60, SPY: 0.40 };
+  }
+
+  let total = 0, ret = 0;
+  for (const [sym, w] of Object.entries(weights)) {
+    const chg = effectiveChange(qmap[sym], opts);
+    if (chg === null) continue;
+    const cnyReturn = ((1 + chg / 100) * (1 + forexChg / 100) - 1) * 100;
+    ret += w * cnyReturn;
+    total += w;
+  }
+  return total > 0 ? ret / total : null;
 }
 
 // Mirror server ET calc (server.js getUSMarketState) for client-side labels
@@ -1274,13 +1300,14 @@ function renderDetail(idx, mode) {
 
   const qDate = fund.reportDate || '';
   const yDate = fund.annualDate || '';
+  const coveragePct = ((Number(fund.coverageWeight) || sorted.reduce((s, h) => s + h.w, 0)) * 100).toFixed(1);
   let noteText;
   if (qDate && yDate && qDate !== yDate) {
-    noteText = `基于 ${qDate} 季报结合 ${yDate} 年报持仓计算, 共 ${sorted.length} 支`;
+    noteText = `基于 ${qDate} 最新报告结合 ${yDate} 中报/年报持仓计算, 披露覆盖 ${coveragePct}%, 剩余权重用指数代理, 共 ${sorted.length} 支`;
   } else if (qDate) {
-    noteText = `基于 ${qDate} 季报持仓计算, 共 ${sorted.length} 支`;
+    noteText = `基于 ${qDate} 最新报告持仓计算, 披露覆盖 ${coveragePct}%, 剩余权重用指数代理, 共 ${sorted.length} 支`;
   } else {
-    noteText = `基于季报披露的持仓计算, 共 ${sorted.length} 支`;
+    noteText = `基于公开披露持仓计算, 披露覆盖 ${coveragePct}%, 剩余权重用指数代理, 共 ${sorted.length} 支`;
   }
 
   const mktLabel24h = mode === '24h' ? us24hSession() : '';
@@ -1477,7 +1504,7 @@ async function bootstrap() {
   try {
     const funds = await fetchFunds();
     if (!funds.length) throw new Error('基金列表为空');
-    FUNDS = funds.filter(f => f.holdings && f.holdings.length > 0);
+    FUNDS = funds.filter(f => f && (f.name || f.code));
     if (!FUNDS.length) throw new Error('未获取到任何持仓数据');
     fetchAshareMa();  // 非阻塞加载A股MA数据
     fetchIndexMa();   // 非阻塞加载四大指数均线预警

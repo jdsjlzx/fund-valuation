@@ -5,66 +5,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.6262000000000002,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "NVDA",
         "w": 0.0814,
         "name_cn": "英伟达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MRVL",
         "w": 0.07980000000000001,
         "name_cn": "迈威尔科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AAPL",
         "w": 0.0673,
         "name_cn": "苹果",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MSFT",
         "w": 0.0635,
         "name_cn": "微软",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "NFLX",
         "w": 0.061200000000000004,
         "name_cn": "奈飞",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AVGO",
         "w": 0.058899999999999994,
         "name_cn": "博通",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TSLA",
         "w": 0.056299999999999996,
         "name_cn": "特斯拉",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "META",
         "w": 0.0555,
         "name_cn": "Meta Platforms Inc-A",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMZN",
         "w": 0.0529,
         "name_cn": "亚马逊",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "SMCI",
         "w": 0.049400000000000006,
         "name_cn": "超微电脑",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -74,66 +86,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.6526,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "SNDK",
         "w": 0.09519999999999999,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "285A",
         "w": 0.08810000000000001,
         "name_cn": "KIOXIA",
-        "market": "other"
+        "market": "other",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.085,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "INTC",
         "w": 0.0782,
         "name_cn": "英特尔",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "WDC",
         "w": 0.0758,
         "name_cn": "西部数据",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.0753,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "COHR",
         "w": 0.0395,
         "name_cn": "Coherent Corp",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "TER",
         "w": 0.0395,
         "name_cn": "泰瑞达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "005930",
         "w": 0.0383,
         "name_cn": "三星电子",
-        "market": "KR"
+        "market": "KR",
+        "source": "latest_report"
       },
       {
         "s": "000660",
         "w": 0.0377,
         "name_cn": "SK海力士",
-        "market": "KR"
+        "market": "KR",
+        "source": "latest_report"
       }
     ]
   },
@@ -142,73 +166,79 @@
     "code": "270023",
     "reportDate": "2026-06-30",
     "annualDate": null,
-    "totalCount": 11,
+    "totalCount": 10,
+    "coverageWeight": 0.4569,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "02513",
         "w": 0.0901,
         "name_cn": "智谱",
-        "market": "116"
+        "market": "116",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.0616,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "LRCX",
         "w": 0.045,
         "name_cn": "拉姆研究",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "ASML",
         "w": 0.0435,
         "name_cn": "阿斯麦",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "285A",
         "w": 0.0407,
         "name_cn": "KIOXIA",
-        "market": "other"
+        "market": "other",
+        "source": "latest_report"
       },
       {
         "s": "SNDK",
         "w": 0.038900000000000004,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.0374,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMAT",
         "w": 0.035,
         "name_cn": "应用材料",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GOOG",
         "w": 0.0337,
         "name_cn": "谷歌-C",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "300408",
         "w": 0.031,
         "name_cn": "三环集团",
-        "market": "0"
-      },
-      {
-        "s": "GOOGL",
-        "w": 0.0002,
-        "name_cn": "谷歌-A",
-        "market": "105"
+        "market": "0",
+        "source": "latest_report"
       }
     ]
   },
@@ -217,73 +247,79 @@
     "code": "017730",
     "reportDate": "2026-06-30",
     "annualDate": null,
-    "totalCount": 11,
+    "totalCount": 10,
+    "coverageWeight": 0.30380000000000007,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "AMD",
         "w": 0.0354,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.034,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "KLAC",
         "w": 0.032,
         "name_cn": "科磊",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "688498",
         "w": 0.0316,
         "name_cn": "源杰科技",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "MPWR",
         "w": 0.031400000000000004,
         "name_cn": "Monolithic Power Systems Inc",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TSM",
         "w": 0.0305,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "688361",
         "w": 0.0304,
         "name_cn": "中科飞测",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "688256",
         "w": 0.029300000000000003,
         "name_cn": "寒武纪",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "AVGO",
         "w": 0.029300000000000003,
         "name_cn": "博通",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "03986",
         "w": 0.0199,
         "name_cn": "兆易创新",
-        "market": "116"
-      },
-      {
-        "s": "603986",
-        "w": 0.009000000000000001,
-        "name_cn": "兆易创新",
-        "market": "1"
+        "market": "116",
+        "source": "latest_report"
       }
     ]
   },
@@ -292,73 +328,79 @@
     "code": "000043",
     "reportDate": "2026-06-30",
     "annualDate": null,
-    "totalCount": 11,
+    "totalCount": 10,
+    "coverageWeight": 0.46,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "AAPL",
         "w": 0.08289999999999999,
         "name_cn": "苹果",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "NVDA",
         "w": 0.0781,
         "name_cn": "英伟达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GOOGL",
         "w": 0.056600000000000004,
         "name_cn": "谷歌-A",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AVGO",
         "w": 0.0458,
         "name_cn": "博通",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MSFT",
         "w": 0.0453,
         "name_cn": "微软",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMZN",
         "w": 0.041100000000000005,
         "name_cn": "亚马逊",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "WDC",
         "w": 0.0336,
         "name_cn": "西部数据",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "LRCX",
         "w": 0.0269,
         "name_cn": "拉姆研究",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "LLY",
         "w": 0.026099999999999998,
         "name_cn": "礼来",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "TSLA",
         "w": 0.0236,
         "name_cn": "特斯拉",
-        "market": "105"
-      },
-      {
-        "s": "GOOG",
-        "w": 0.0212,
-        "name_cn": "谷歌-C",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -368,66 +410,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.6759,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "NVDA",
         "w": 0.1805,
         "name_cn": "英伟达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AAPL",
         "w": 0.1583,
         "name_cn": "苹果",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MSFT",
         "w": 0.1032,
         "name_cn": "微软",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AVGO",
         "w": 0.0666,
         "name_cn": "博通",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.048499999999999995,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.0353,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "INTC",
         "w": 0.0246,
         "name_cn": "英特尔",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMAT",
         "w": 0.021400000000000002,
         "name_cn": "应用材料",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "LRCX",
         "w": 0.0202,
         "name_cn": "拉姆研究",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "CSCO",
         "w": 0.0173,
         "name_cn": "思科",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -437,66 +491,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.4747999999999999,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "LRCX",
         "w": 0.0641,
         "name_cn": "拉姆研究",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "285A",
         "w": 0.058899999999999994,
         "name_cn": "KIOXIA",
-        "market": "other"
+        "market": "other",
+        "source": "latest_report"
       },
       {
         "s": "TSM",
         "w": 0.0554,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.0496,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "300502",
         "w": 0.046799999999999994,
         "name_cn": "新易盛",
-        "market": "0"
+        "market": "0",
+        "source": "latest_report"
       },
       {
         "s": "300308",
         "w": 0.0461,
         "name_cn": "中际旭创",
-        "market": "0"
+        "market": "0",
+        "source": "latest_report"
       },
       {
         "s": "SNDK",
         "w": 0.0446,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "INTC",
         "w": 0.0426,
         "name_cn": "英特尔",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "688498",
         "w": 0.0334,
         "name_cn": "源杰科技",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "ASML",
         "w": 0.0333,
         "name_cn": "阿斯麦",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -506,66 +572,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.5258,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "MU",
         "w": 0.0842,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MKSI",
         "w": 0.0747,
         "name_cn": "MKS Inc",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TSM",
         "w": 0.0747,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "INTC",
         "w": 0.0717,
         "name_cn": "英特尔",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GLW",
         "w": 0.0537,
         "name_cn": "康宁",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "SNDK",
         "w": 0.0438,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "LRCX",
         "w": 0.0368,
         "name_cn": "拉姆研究",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GOOG",
         "w": 0.0321,
         "name_cn": "谷歌-C",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "6857",
         "w": 0.0275,
         "name_cn": "爱德万测试",
-        "market": "other"
+        "market": "other",
+        "source": "latest_report"
       },
       {
         "s": "NOK",
         "w": 0.026600000000000002,
         "name_cn": "诺基亚",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       }
     ]
   },
@@ -575,66 +653,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.6222,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "TSM",
         "w": 0.0968,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "NVDA",
         "w": 0.09380000000000001,
         "name_cn": "英伟达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "000660",
         "w": 0.0894,
         "name_cn": "SK海力士",
-        "market": "KR"
+        "market": "KR",
+        "source": "latest_report"
       },
       {
         "s": "005930",
         "w": 0.078,
         "name_cn": "三星电子",
-        "market": "KR"
+        "market": "KR",
+        "source": "latest_report"
       },
       {
         "s": "SNDK",
         "w": 0.0716,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AVGO",
         "w": 0.0418,
         "name_cn": "博通",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "WDC",
         "w": 0.0418,
         "name_cn": "西部数据",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.039900000000000005,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "LITE",
         "w": 0.0356,
         "name_cn": "Lumentum Holdings Inc",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GLW",
         "w": 0.0335,
         "name_cn": "康宁",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       }
     ]
   },
@@ -644,66 +734,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.4539,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "NVDA",
         "w": 0.0774,
         "name_cn": "英伟达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GOOGL",
         "w": 0.0653,
         "name_cn": "谷歌-A",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.0574,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMZN",
         "w": 0.0421,
         "name_cn": "亚马逊",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AAPL",
         "w": 0.0414,
         "name_cn": "苹果",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.0406,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MSFT",
         "w": 0.0355,
         "name_cn": "微软",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TSM",
         "w": 0.0339,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "AVGO",
         "w": 0.030600000000000002,
         "name_cn": "博通",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "INTC",
         "w": 0.0297,
         "name_cn": "英特尔",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -713,66 +815,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.17850000000000002,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "SNDK",
         "w": 0.0311,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.0285,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MRVL",
         "w": 0.016,
         "name_cn": "迈威尔科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TSM",
         "w": 0.015700000000000002,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "UMC",
         "w": 0.0151,
         "name_cn": "联华电子",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "LITE",
         "w": 0.0151,
         "name_cn": "Lumentum Holdings Inc",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "STX",
         "w": 0.0149,
         "name_cn": "希捷科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "WDC",
         "w": 0.0146,
         "name_cn": "西部数据",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "01888",
         "w": 0.0138,
         "name_cn": "建滔积层板",
-        "market": "116"
+        "market": "116",
+        "source": "latest_report"
       },
       {
         "s": "00522",
         "w": 0.0137,
         "name_cn": "ASMPT",
-        "market": "116"
+        "market": "116",
+        "source": "latest_report"
       }
     ]
   },
@@ -782,66 +896,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.5155,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "MU",
         "w": 0.0816,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "SNDK",
         "w": 0.0653,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "ONTO",
         "w": 0.0555,
         "name_cn": "Onto Innovation Inc",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.053,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "INTC",
         "w": 0.049400000000000006,
         "name_cn": "英特尔",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "285A",
         "w": 0.045899999999999996,
         "name_cn": "KIOXIA",
-        "market": "other"
+        "market": "other",
+        "source": "latest_report"
       },
       {
         "s": "LITE",
         "w": 0.0443,
         "name_cn": "Lumentum Holdings Inc",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TSM",
         "w": 0.043,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "STM",
         "w": 0.042800000000000005,
         "name_cn": "意法半导体",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "ALAB",
         "w": 0.0347,
         "name_cn": "Astera Labs Inc",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -851,66 +977,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.5496,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "NVDA",
         "w": 0.0816,
         "name_cn": "英伟达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GOOGL",
         "w": 0.0742,
         "name_cn": "谷歌-A",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AAPL",
         "w": 0.06269999999999999,
         "name_cn": "苹果",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.061399999999999996,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.054299999999999994,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "INTC",
         "w": 0.0541,
         "name_cn": "英特尔",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMZN",
         "w": 0.044500000000000005,
         "name_cn": "亚马逊",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MSFT",
         "w": 0.0431,
         "name_cn": "微软",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AVGO",
         "w": 0.0406,
         "name_cn": "博通",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TSM",
         "w": 0.0331,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       }
     ]
   },
@@ -920,66 +1058,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.5720000000000001,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "TSM",
         "w": 0.08710000000000001,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.0755,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AVGO",
         "w": 0.0603,
         "name_cn": "博通",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "KLAC",
         "w": 0.0596,
         "name_cn": "科磊",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "LRCX",
         "w": 0.0527,
         "name_cn": "拉姆研究",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "SNDK",
         "w": 0.0519,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "ASML",
         "w": 0.051399999999999994,
         "name_cn": "阿斯麦",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GOOGL",
         "w": 0.0489,
         "name_cn": "谷歌-A",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMZN",
         "w": 0.0435,
         "name_cn": "亚马逊",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "NVDA",
         "w": 0.041100000000000005,
         "name_cn": "英伟达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -989,83 +1139,88 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.7614000000000001,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "MRVL",
         "w": 0.0983,
         "name_cn": "迈威尔科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TSLA",
         "w": 0.09609999999999999,
         "name_cn": "特斯拉",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "NIO",
         "w": 0.0917,
         "name_cn": "蔚来",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "RIVN",
         "w": 0.0894,
         "name_cn": "Rivian Automotive Inc-A",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "RACE",
         "w": 0.08439999999999999,
         "name_cn": "法拉利",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "PONY",
         "w": 0.07339999999999999,
         "name_cn": "小马智行",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.063,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.0599,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "03750",
         "w": 0.056100000000000004,
         "name_cn": "宁德时代",
-        "market": "116"
+        "market": "116",
+        "source": "latest_report"
       },
       {
         "s": "AVGO",
         "w": 0.049100000000000005,
         "name_cn": "博通",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
   {
     "name": "华宝海外科技",
     "code": "501312",
-    "reportDate": "2023-09-30",
+    "holdings": [],
+    "reportDate": null,
     "annualDate": null,
-    "totalCount": 1,
-    "holdings": [
-      {
-        "s": "NVDA",
-        "w": 0.0008,
-        "name_cn": "英伟达",
-        "market": "105"
-      }
-    ]
+    "totalCount": 0
   },
   {
     "name": "华宝致远混合",
@@ -1073,66 +1228,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.4272,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "SNDK",
         "w": 0.09119999999999999,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.08460000000000001,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "LRCX",
         "w": 0.036699999999999997,
         "name_cn": "拉姆研究",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TSM",
         "w": 0.0365,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "MKSI",
         "w": 0.0361,
         "name_cn": "MKS Inc",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMAT",
         "w": 0.0353,
         "name_cn": "应用材料",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "ASML",
         "w": 0.0347,
         "name_cn": "阿斯麦",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.024300000000000002,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "NBIS",
         "w": 0.0241,
         "name_cn": "Nebius Group NV-A",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "NVDA",
         "w": 0.023700000000000002,
         "name_cn": "英伟达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -1141,295 +1308,79 @@
     "code": "017091",
     "reportDate": "2023-09-07",
     "annualDate": null,
-    "totalCount": 48,
+    "totalCount": 10,
+    "coverageWeight": 0.4606,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "MSFT",
         "w": 0.0855,
         "name_cn": "微软",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AAPL",
         "w": 0.0809,
         "name_cn": "苹果",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "NVDA",
         "w": 0.0757,
         "name_cn": "英伟达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "META",
         "w": 0.047,
         "name_cn": "Meta Platforms Inc-A",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GOOGL",
         "w": 0.043,
         "name_cn": "谷歌-A",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GOOG",
         "w": 0.042300000000000004,
         "name_cn": "谷歌-C",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AVGO",
         "w": 0.0332,
         "name_cn": "博通",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "ADBE",
         "w": 0.0225,
         "name_cn": "奥多比",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.0161,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "INTC",
         "w": 0.0144,
         "name_cn": "英特尔",
-        "market": "105"
-      },
-      {
-        "s": "NVDA",
-        "w": 0.1041,
-        "name_cn": "英伟达",
-        "market": "105"
-      },
-      {
-        "s": "META",
-        "w": 0.09609999999999999,
-        "name_cn": "Meta Platforms Inc-A",
-        "market": "105"
-      },
-      {
-        "s": "MSFT",
-        "w": 0.08560000000000001,
-        "name_cn": "微软",
-        "market": "105"
-      },
-      {
-        "s": "AAPL",
-        "w": 0.08539999999999999,
-        "name_cn": "苹果",
-        "market": "105"
-      },
-      {
-        "s": "AVGO",
-        "w": 0.0608,
-        "name_cn": "博通",
-        "market": "105"
-      },
-      {
-        "s": "GOOGL",
-        "w": 0.0471,
-        "name_cn": "谷歌-A",
-        "market": "105"
-      },
-      {
-        "s": "GOOG",
-        "w": 0.046900000000000004,
-        "name_cn": "谷歌-C",
-        "market": "105"
-      },
-      {
-        "s": "ADBE",
-        "w": 0.0437,
-        "name_cn": "奥多比",
-        "market": "105"
-      },
-      {
-        "s": "AMD",
-        "w": 0.0292,
-        "name_cn": "超威半导体",
-        "market": "105"
-      },
-      {
-        "s": "INTC",
-        "w": 0.0271,
-        "name_cn": "英特尔",
-        "market": "105"
-      },
-      {
-        "s": "INTU",
-        "w": 0.0264,
-        "name_cn": "财捷",
-        "market": "105"
-      },
-      {
-        "s": "TXN",
-        "w": 0.0254,
-        "name_cn": "德州仪器",
-        "market": "105"
-      },
-      {
-        "s": "AMAT",
-        "w": 0.0212,
-        "name_cn": "应用材料",
-        "market": "105"
-      },
-      {
-        "s": "QCOM",
-        "w": 0.0202,
-        "name_cn": "高通",
-        "market": "105"
-      },
-      {
-        "s": "LRCX",
-        "w": 0.0155,
-        "name_cn": "拉姆研究",
-        "market": "105"
-      },
-      {
-        "s": "ADI",
-        "w": 0.0152,
-        "name_cn": "亚德诺",
-        "market": "105"
-      },
-      {
-        "s": "MU",
-        "w": 0.013000000000000001,
-        "name_cn": "美光科技",
-        "market": "105"
-      },
-      {
-        "s": "PANW",
-        "w": 0.0128,
-        "name_cn": "派拓网络",
-        "market": "105"
-      },
-      {
-        "s": "SNPS",
-        "w": 0.0118,
-        "name_cn": "新思科技",
-        "market": "105"
-      },
-      {
-        "s": "KLAC",
-        "w": 0.0116,
-        "name_cn": "科磊",
-        "market": "105"
-      },
-      {
-        "s": "CDNS",
-        "w": 0.011200000000000002,
-        "name_cn": "铿腾电子",
-        "market": "105"
-      },
-      {
-        "s": "PDD",
-        "w": 0.01,
-        "name_cn": "拼多多",
-        "market": "105"
-      },
-      {
-        "s": "ASML",
-        "w": 0.0095,
-        "name_cn": "阿斯麦",
-        "market": "105"
-      },
-      {
-        "s": "NXPI",
-        "w": 0.009000000000000001,
-        "name_cn": "恩智浦半导体",
-        "market": "105"
-      },
-      {
-        "s": "WDAY",
-        "w": 0.0088,
-        "name_cn": "Workday Inc-A",
-        "market": "105"
-      },
-      {
-        "s": "FTNT",
-        "w": 0.0084,
-        "name_cn": "防特网",
-        "market": "105"
-      },
-      {
-        "s": "MRVL",
-        "w": 0.0083,
-        "name_cn": "迈威尔科技",
-        "market": "105"
-      },
-      {
-        "s": "ADSK",
-        "w": 0.008,
-        "name_cn": "欧特克",
-        "market": "105"
-      },
-      {
-        "s": "MCHP",
-        "w": 0.0073,
-        "name_cn": "微芯科技",
-        "market": "105"
-      },
-      {
-        "s": "ON",
-        "w": 0.0072,
-        "name_cn": "安森美半导体",
-        "market": "105"
-      },
-      {
-        "s": "CRWD",
-        "w": 0.0063,
-        "name_cn": "CrowdStrike Holdings Inc-A",
-        "market": "105"
-      },
-      {
-        "s": "CTSH",
-        "w": 0.0060999999999999995,
-        "name_cn": "高知特",
-        "market": "105"
-      },
-      {
-        "s": "TEAM",
-        "w": 0.0053,
-        "name_cn": "Atlassian Corp-A",
-        "market": "105"
-      },
-      {
-        "s": "GFS",
-        "w": 0.0053,
-        "name_cn": "GLOBALFOUNDRIES Inc",
-        "market": "105"
-      },
-      {
-        "s": "DDOG",
-        "w": 0.0049,
-        "name_cn": "Datadog Inc-A",
-        "market": "105"
-      },
-      {
-        "s": "ANSS",
-        "w": 0.004699999999999999,
-        "name_cn": "安西斯",
-        "market": "105"
-      },
-      {
-        "s": "ZS",
-        "w": 0.004,
-        "name_cn": "Zscaler Inc",
-        "market": "105"
-      },
-      {
-        "s": "ZM",
-        "w": 0.0031,
-        "name_cn": "Zoom Video通讯",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -1439,66 +1390,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.232,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "JP3236330001",
         "w": 0.0388,
         "name_cn": "铠侠控股株式会社",
-        "market": "other"
+        "market": "other",
+        "source": "latest_report"
       },
       {
         "s": "02476",
         "w": 0.0333,
         "name_cn": "胜宏科技",
-        "market": "116"
+        "market": "116",
+        "source": "latest_report"
       },
       {
         "s": "300308",
         "w": 0.0218,
         "name_cn": "中际旭创",
-        "market": "0"
+        "market": "0",
+        "source": "latest_report"
       },
       {
         "s": "NVDA",
         "w": 0.0216,
         "name_cn": "英伟达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TSM",
         "w": 0.0209,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "01347",
         "w": 0.0209,
         "name_cn": "华虹宏力",
-        "market": "116"
+        "market": "116",
+        "source": "latest_report"
       },
       {
         "s": "GLW",
         "w": 0.0202,
         "name_cn": "康宁",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "JP3684400009",
         "w": 0.0187,
         "name_cn": "日东纺织",
-        "market": "other"
+        "market": "other",
+        "source": "latest_report"
       },
       {
         "s": "002384",
         "w": 0.018000000000000002,
         "name_cn": "东山精密",
-        "market": "0"
+        "market": "0",
+        "source": "latest_report"
       },
       {
         "s": "688498",
         "w": 0.0178,
         "name_cn": "源杰科技",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       }
     ]
   },
@@ -1508,66 +1471,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.4746000000000001,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "00522",
         "w": 0.0562,
         "name_cn": "ASMPT",
-        "market": "116"
+        "market": "116",
+        "source": "latest_report"
       },
       {
         "s": "603986",
         "w": 0.055099999999999996,
         "name_cn": "兆易创新",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "SNDK",
         "w": 0.0504,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "600183",
         "w": 0.047,
         "name_cn": "生益科技",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "000660",
         "w": 0.0462,
         "name_cn": "SK海力士",
-        "market": "KR"
+        "market": "KR",
+        "source": "latest_report"
       },
       {
         "s": "005930",
         "w": 0.0458,
         "name_cn": "三星电子",
-        "market": "KR"
+        "market": "KR",
+        "source": "latest_report"
       },
       {
         "s": "285A",
         "w": 0.0458,
         "name_cn": "KIOXIA",
-        "market": "other"
+        "market": "other",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.0431,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "STX",
         "w": 0.042800000000000005,
         "name_cn": "希捷科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "WDC",
         "w": 0.042199999999999994,
         "name_cn": "西部数据",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -1577,66 +1552,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.11490000000000002,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "MU",
         "w": 0.023700000000000002,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "SNDK",
         "w": 0.0233,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMAT",
         "w": 0.0124,
         "name_cn": "应用材料",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "INTC",
         "w": 0.0095,
         "name_cn": "英特尔",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "GLW",
         "w": 0.0087,
         "name_cn": "康宁",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.0079,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "WDC",
         "w": 0.0079,
         "name_cn": "西部数据",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "LRCX",
         "w": 0.0074,
         "name_cn": "拉姆研究",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "ARM",
         "w": 0.0073,
         "name_cn": "Arm Holdings plc ADR",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "ASML",
         "w": 0.0068000000000000005,
         "name_cn": "阿斯麦",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       }
     ]
   },
@@ -1646,66 +1633,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.2902,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "GLW",
         "w": 0.05,
         "name_cn": "康宁",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "MRVL",
         "w": 0.0415,
         "name_cn": "迈威尔科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.0398,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMD",
         "w": 0.0331,
         "name_cn": "超威半导体",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "TER",
         "w": 0.022400000000000003,
         "name_cn": "泰瑞达",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "LITE",
         "w": 0.022000000000000002,
         "name_cn": "Lumentum Holdings Inc",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "AMAT",
         "w": 0.0219,
         "name_cn": "应用材料",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "COHR",
         "w": 0.0203,
         "name_cn": "Coherent Corp",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "STM",
         "w": 0.0197,
         "name_cn": "意法半导体",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       },
       {
         "s": "01347",
         "w": 0.0195,
         "name_cn": "华虹宏力",
-        "market": "116"
+        "market": "116",
+        "source": "latest_report"
       }
     ]
   },
@@ -1715,66 +1714,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.45860000000000006,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "688256",
         "w": 0.06309999999999999,
         "name_cn": "寒武纪",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "688498",
         "w": 0.0571,
         "name_cn": "源杰科技",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.0518,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "SNDK",
         "w": 0.051100000000000007,
         "name_cn": "闪迪",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "300223",
         "w": 0.0489,
         "name_cn": "北京君正",
-        "market": "0"
+        "market": "0",
+        "source": "latest_report"
       },
       {
         "s": "688041",
         "w": 0.0391,
         "name_cn": "海光信息",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "300308",
         "w": 0.0379,
         "name_cn": "中际旭创",
-        "market": "0"
+        "market": "0",
+        "source": "latest_report"
       },
       {
         "s": "285A",
         "w": 0.0373,
         "name_cn": "KIOXIA",
-        "market": "other"
+        "market": "other",
+        "source": "latest_report"
       },
       {
         "s": "000660",
         "w": 0.0371,
         "name_cn": "SK海力士",
-        "market": "KR"
+        "market": "KR",
+        "source": "latest_report"
       },
       {
         "s": "301526",
         "w": 0.0352,
         "name_cn": "国际复材",
-        "market": "0"
+        "market": "0",
+        "source": "latest_report"
       }
     ]
   },
@@ -1792,66 +1803,78 @@
     "reportDate": "2026-06-30",
     "annualDate": null,
     "totalCount": 10,
+    "coverageWeight": 0.4355,
+    "dataMode": "latest_report_only",
     "holdings": [
       {
         "s": "603986",
         "w": 0.0622,
         "name_cn": "兆易创新",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "300308",
         "w": 0.0576,
         "name_cn": "中际旭创",
-        "market": "0"
+        "market": "0",
+        "source": "latest_report"
       },
       {
         "s": "688766",
         "w": 0.0495,
         "name_cn": "普冉股份",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "300502",
         "w": 0.04769999999999999,
         "name_cn": "新易盛",
-        "market": "0"
+        "market": "0",
+        "source": "latest_report"
       },
       {
         "s": "MU",
         "w": 0.0406,
         "name_cn": "美光科技",
-        "market": "105"
+        "market": "105",
+        "source": "latest_report"
       },
       {
         "s": "01888",
         "w": 0.038900000000000004,
         "name_cn": "建滔积层板",
-        "market": "116"
+        "market": "116",
+        "source": "latest_report"
       },
       {
         "s": "600176",
         "w": 0.0371,
         "name_cn": "中国巨石",
-        "market": "1"
+        "market": "1",
+        "source": "latest_report"
       },
       {
         "s": "002463",
         "w": 0.0368,
         "name_cn": "沪电股份",
-        "market": "0"
+        "market": "0",
+        "source": "latest_report"
       },
       {
         "s": "285A",
         "w": 0.0349,
         "name_cn": "KIOXIA",
-        "market": "other"
+        "market": "other",
+        "source": "latest_report"
       },
       {
         "s": "TSM",
         "w": 0.0302,
         "name_cn": "台积电",
-        "market": "106"
+        "market": "106",
+        "source": "latest_report"
       }
     ]
   }

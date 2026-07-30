@@ -162,7 +162,7 @@ function parseAllSections(text) {
   return sections;
 }
 
-async function fetchHoldingsRaw(code, year, month, topline = 50) {
+async function fetchHoldingsRaw(code, year, month, topline = 200) {
   const url =
     `http://fundf10.eastmoney.com/FundArchivesDatas.aspx?` +
     `type=jjcc&code=${code}&topline=${topline}&year=${year || ''}&month=${month || ''}`;
@@ -175,8 +175,40 @@ async function fetchHoldingsRaw(code, year, month, topline = 50) {
 const MIN_WEIGHT = 0.001;
 const MAX_HOLDINGS = 80;
 
+function sectionType(sec) {
+  const label = sec && sec.label ? String(sec.label) : '';
+  if (label.includes('年度')) return 'annual';
+  if (label.includes('中报')) return 'semi';
+  if (label.includes('季度')) return 'quarter';
+  return 'unknown';
+}
+
+function holdingKey(h) {
+  return `${String(h.market || '')}:${String(h.s || '').toUpperCase()}`;
+}
+
+function cleanHoldings(holdings, source) {
+  return (holdings || [])
+    .filter(h => h && h.s && h.w >= MIN_WEIGHT)
+    .map(h => ({ ...h, source }))
+    .sort((a, b) => b.w - a.w)
+    .slice(0, MAX_HOLDINGS);
+}
+
+function mergeLatestWithFull(latest, full) {
+  const map = new Map();
+  for (const h of cleanHoldings(full ? full.holdings : [], 'full_report')) {
+    map.set(holdingKey(h), h);
+  }
+  for (const h of cleanHoldings(latest ? latest.holdings : [], 'latest_report')) {
+    map.set(holdingKey(h), h);
+  }
+  return [...map.values()]
+    .sort((a, b) => b.w - a.w)
+    .slice(0, MAX_HOLDINGS);
+}
+
 async function fetchFundHoldings(code) {
-  // 只取最新季报，不合并年报
   let secs = await fetchHoldingsRaw(code, '', '').catch(() => []);
 
   if (secs.length === 0) {
@@ -187,11 +219,31 @@ async function fetchFundHoldings(code) {
   const latest = secs[0] || null;
   if (!latest) return { reportDate: null, annualDate: null, totalCount: 0, holdings: [] };
 
+  const latestYear = latest.date ? Number(String(latest.date).slice(0, 4)) : new Date().getFullYear();
+  const years = [latestYear, latestYear - 1, latestYear - 2].filter(Boolean);
+  const byYear = [];
+  for (const y of years) {
+    const yearlySecs = await fetchHoldingsRaw(code, y, '').catch(() => []);
+    byYear.push(...yearlySecs);
+  }
+
+  const allSecs = [...secs, ...byYear];
+  const fullReport = allSecs
+    .filter(sec => sectionType(sec) === 'annual' || sectionType(sec) === 'semi')
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0] || null;
+
+  const holdings = fullReport
+    ? mergeLatestWithFull(latest, fullReport)
+    : cleanHoldings(latest.holdings, 'latest_report');
+  const coverageWeight = holdings.reduce((sum, h) => sum + h.w, 0);
+
   return {
     reportDate: latest.date,
-    annualDate: null,
-    totalCount: latest.holdings.length,
-    holdings: latest.holdings,
+    annualDate: fullReport ? fullReport.date : null,
+    totalCount: holdings.length,
+    coverageWeight,
+    dataMode: fullReport ? 'latest_plus_full_report' : 'latest_report_only',
+    holdings,
   };
 }
 
