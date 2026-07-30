@@ -777,10 +777,10 @@ app.get('/api/index-ma', async (req, res) => {
     ]);
 
     const result = {
-      sh:    { name: '上证指数',      ...calcIndexMAs(shKlines)    },
-      cy:    { name: '创业板指数',    ...calcIndexMAs(cyKlines)    },
-      ndx:   { name: '纳斯达克100',   ...calcIndexMAs(ndxKlines)   },
-      kospi: { name: '韩国KOSPI', ...calcIndexMAs(kospiKlines) },
+      sh:    { name: '上证',      ...calcIndexMAs(shKlines)    },
+      cy:    { name: '创业板',    ...calcIndexMAs(cyKlines)    },
+      ndx:   { name: '纳斯达克',  ...calcIndexMAs(ndxKlines)   },
+      kospi: { name: 'KOSPI',    ...calcIndexMAs(kospiKlines) },
     };
 
     INDEX_MA_CACHE.data = result;

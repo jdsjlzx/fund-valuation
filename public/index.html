@@ -545,11 +545,16 @@
     .ma-td-cond { }
     .ma-td-cond span { font-size: 11px; color: #8899aa; white-space: nowrap; }
     /* 操作建议列 */
-    .ma-td-advice { width: 88px; white-space: nowrap; }
+    .ma-td-advice { width: 60px; }
     .ma-td-advice span {
       font-size: 13px;
       font-weight: 800;
-      letter-spacing: 0.3px;
+      letter-spacing: 0;
+      display: inline-block;
+      width: 52px;
+      white-space: normal;
+      word-break: break-all;
+      line-height: 1.4;
     }
     .ma-td-advice span.lv1 { color: #22c55e; }
     .ma-td-advice span.lv2 { color: #f87171; }
@@ -963,7 +968,7 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
     { key: 'ma21',  lv: 'lv1', badge: '一级预警', condition: 'MA5下穿MA21',  advice: '减仓一半'        },
     { key: 'ma60',  lv: 'lv2', badge: '二级预警', condition: 'MA5下穿MA60',  advice: '清仓离场'        },
     { key: 'ma120', lv: 'lv3', badge: '三级预警', condition: 'MA5下穿MA120', advice: '空仓，切勿抄底'  },
-    { key: 'ma250', lv: 'lv4', badge: '四级预警', condition: 'MA5下穿MA250', advice: '进入熊市，空仓'  },
+    { key: 'ma250', lv: 'lv4', badge: '四级预警', condition: 'MA5下穿MA250', advice: '熊市空仓'  },
   ];
   function maTableBody() {
     if (!INDEX_MA) return `<tr><td colspan="4"><span class="ma-loading">均线数据加载中…</span></td></tr>`;
