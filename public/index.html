@@ -1355,15 +1355,6 @@ function renderHistory() {
   const qqqChg  = effectiveChange(map['QQQ']);
   const spyChg  = effectiveChange(map['SPY']);
   const fxChg   = map['USDCNY=X']?.regularMarketChangePercent ?? 0;
-  const vixyChg   = effectiveChange(map['VIXY']);
-  const vixyPrice = effectivePrice(map['VIXY']);
-
-  const vixySignal = vixyPrice >= 40 ? { text: '重仓买入', cls: 'signal-heavy' }
-                   : vixyPrice >= 35 ? { text: '加大仓位', cls: 'signal-heavy' }
-                   : vixyPrice >= 30 ? { text: '逐步买入', cls: 'signal-buy' }
-                   : vixyPrice >= 25 ? { text: '关注机会', cls: 'signal-watch' }
-                   : vixyChg >= 10   ? { text: '恐慌提升', cls: 'signal-panic' }
-                   : { text: '正常', cls: 'signal-normal' };
 
   // 根据当前周期取涨跌幅字段
   const periodKey = historyPeriod === 15 ? 'd15' : historyPeriod === 30 ? 'd30' : 'd60';
@@ -1411,7 +1402,6 @@ function renderHistory() {
         <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
       </div>
     </div>
-    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal, effectiveChange(map['QQQ'], { mode: '24h' }), fxChg, map['159509'], { hideChgLink: true })}
     <div class="status-bar">基于天天基金净值历史计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
     </div>
     <div class="history-toolbar">
