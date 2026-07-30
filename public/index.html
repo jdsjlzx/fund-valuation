@@ -517,6 +517,61 @@
       background: var(--border-header);
       margin: 0;
     }
+
+    /* ── 涨跌幅链接入口 ── */
+    .vixy-chg-link {
+      font-size: 11px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      padding: 2px 6px;
+      border: 1px solid var(--border-badge);
+      border-radius: 3px;
+      background: var(--bg-badge);
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .vixy-chg-link:active { opacity: 0.6; }
+
+    /* ── 历史涨跌幅视图 ── */
+    .history-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+    .period-btn {
+      font-size: 12px;
+      padding: 3px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border-badge);
+      background: var(--bg-badge);
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .period-btn.active {
+      background: var(--up);
+      border-color: var(--up);
+      color: #fff;
+      font-weight: 600;
+    }
+    .period-btn:active { opacity: 0.7; }
+    .history-sort {
+      margin-left: 8px;
+    }
+    .history-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 40px 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
   </style>
 </head>
 <body>
@@ -836,6 +891,7 @@ function calc159509Signal(qqqChg) {
 // ═══════════════════════════════════════════════════
 function currentRoute() {
   const hash = location.hash || '';
+  if (hash === '#/history') return { view: 'history' };
   if (hash === '#/24h') return { view: '24h' };
   const m24h = hash.match(/^#\/24h\/fund\/(\d+)/);
   if (m24h) {
@@ -877,7 +933,8 @@ function flashClass(prev, cur) {
   return '';
 }
 
-function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, etf159509Quote) {
+function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, etf159509Quote, opts = {}) {
+  const showChgLink = !opts.hideChgLink;
   const chgCls = cls(vixyChg);
   const priceTxt = fmtPrice(vixyPrice);
   const chgTxt = fmtPct(vixyChg);
@@ -922,6 +979,7 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, etf159509Quo
         <span class="vixy-price ${chgCls}">${priceTxt}</span>
         <span class="vixy-chg ${chgCls}">${chgTxt}</span>
         <span class="vixy-signal ${vixySignal.cls}">${vixySignal.text}</span>
+        ${showChgLink ? `<span class="vixy-chg-link" onclick="go('#/history')">涨跌幅</span>` : ''}
       </div>
       <div class="vixy-etf">
         <span class="etf-label">159509</span>
@@ -951,6 +1009,7 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, etf159509Quo
         <span class="vixy-price">${priceTxt}</span>
         <span class="vixy-chg ${chgCls}">${chgTxt}</span>
         <span class="vixy-signal ${vixySignal.cls}">${vixySignal.text}</span>
+        ${showChgLink ? `<span class="vixy-chg-link" onclick="go('#/history')">涨跌幅</span>` : ''}
       </div>
       <div class="vixy-action">
         <span class="alert-amount">建议加仓 QQQ：${amount}</span>
@@ -1233,7 +1292,137 @@ function rerender() {
   const r = currentRoute();
   if (r.view === 'detail') renderDetail(r.idx, r.mode);
   else if (r.view === '24h') render24h();
+  else if (r.view === 'history') renderHistory();
   else renderList();
+}
+
+// ═══════════════════════════════════════════════════
+//  RENDER — history view (近15/30/60天涨跌幅)
+// ═══════════════════════════════════════════════════
+let historyData = null;       // 从 /api/fund-history 获取的数据
+let historyPeriod = 15;       // 当前选中周期：15 | 30 | 60
+let historySortMode = 'desc'; // 'desc' | 'asc' | 'default'
+
+async function loadHistoryData() {
+  if (historyData) return;
+  try {
+    const r = await fetch('/api/fund-history');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const json = await r.json();
+    if (!json.success) throw new Error(json.error || 'fund-history failed');
+    historyData = json.data || [];
+    renderHistory();
+  } catch (e) {
+    document.getElementById('app').innerHTML = `
+      <div style="padding:14px"><button class="back-btn" onclick="goBack()">‹ 返回</button></div>
+      <div class="center-msg"><span style="color:var(--text-muted)">数据加载失败: ${e.message}</span>
+      <button class="retry-btn" onclick="historyData=null;loadHistoryData()">重试</button></div>`;
+  }
+}
+
+function toggleHistorySort() {
+  historySortMode = historySortMode === 'default' ? 'desc'
+                 : historySortMode === 'desc' ? 'asc' : 'default';
+  renderHistory();
+}
+
+function setHistoryPeriod(p) {
+  historyPeriod = p;
+  historySortMode = 'desc'; // 切换周期时重置排序
+  renderHistory();
+}
+
+function renderHistory() {
+  const map = LAST_MAP;
+  const mktLabel = marketLabel(map);
+
+  // 如果数据还没加载，显示 loading
+  if (!historyData) {
+    document.getElementById('app').innerHTML = `
+      <div style="padding:14px 14px 0"><button class="back-btn" onclick="goBack()">‹ 返回</button></div>
+      <div class="header">
+        <div class="h-item"><div class="h-label">纳斯达克</div><div class="h-val flat">--</div></div>
+        <div class="h-item"><div class="h-label">纳指100(QQQ)</div><div class="h-val flat">--</div></div>
+        <div class="h-item"><div class="h-label">标普500(SPY)</div><div class="h-val flat">--</div></div>
+        <div class="h-item"><div class="h-label">汇率</div><div class="h-val flat">--</div></div>
+      </div>
+      <div class="history-loading"><div class="spinner"></div><span>加载净值历史…</span></div>`;
+    loadHistoryData();
+    return;
+  }
+
+  const ixicChg = effectiveChange(map['IXIC']);
+  const qqqChg  = effectiveChange(map['QQQ']);
+  const spyChg  = effectiveChange(map['SPY']);
+  const fxChg   = map['USDCNY=X']?.regularMarketChangePercent ?? 0;
+  const vixyChg   = effectiveChange(map['VIXY']);
+  const vixyPrice = effectivePrice(map['VIXY']);
+
+  const vixySignal = vixyPrice >= 40 ? { text: '重仓买入', cls: 'signal-heavy' }
+                   : vixyPrice >= 35 ? { text: '加大仓位', cls: 'signal-heavy' }
+                   : vixyPrice >= 30 ? { text: '逐步买入', cls: 'signal-buy' }
+                   : vixyPrice >= 25 ? { text: '关注机会', cls: 'signal-watch' }
+                   : vixyChg >= 10   ? { text: '恐慌提升', cls: 'signal-panic' }
+                   : { text: '正常', cls: 'signal-normal' };
+
+  // 根据当前周期取涨跌幅字段
+  const periodKey = historyPeriod === 15 ? 'd15' : historyPeriod === 30 ? 'd30' : 'd60';
+
+  // 排序
+  let sortedData = [...historyData];
+  if (historySortMode === 'desc') {
+    sortedData.sort((a, b) => (b[periodKey] ?? -999) - (a[periodKey] ?? -999));
+  } else if (historySortMode === 'asc') {
+    sortedData.sort((a, b) => (a[periodKey] ?? -999) - (b[periodKey] ?? -999));
+  }
+
+  let rows = '';
+  sortedData.forEach(item => {
+    const chg = item[periodKey];
+    rows += `
+      <div class="fund-item">
+        <div class="fund-left">
+          <span class="fund-name">${item.name}</span>
+          <span class="badge">${item.code}</span>
+        </div>
+        <span class="fund-pct ${cls(chg)}">${fmtPct(chg)}</span>
+      </div>`;
+  });
+
+  const dotClass = LAST_STALE ? 'dot' : 'dot live';
+
+  document.getElementById('app').innerHTML = `
+    <div style="padding:10px 14px 0;background:var(--bg-header)"><button class="back-btn" onclick="goBack()">‹ 返回</button></div>
+    <div class="header">
+      <div class="h-item">
+        <div class="h-label">纳斯达克</div>
+        <div class="h-val ${cls(ixicChg)}">${fmtPct(ixicChg)}</div>
+      </div>
+      <div class="h-item">
+        <div class="h-label">纳指100(QQQ)</div>
+        <div class="h-val ${cls(qqqChg)}">${fmtPct(qqqChg)}</div>
+      </div>
+      <div class="h-item">
+        <div class="h-label">标普500(SPY)</div>
+        <div class="h-val ${cls(spyChg)}">${fmtPct(spyChg)}</div>
+      </div>
+      <div class="h-item">
+        <div class="h-label">汇率</div>
+        <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
+      </div>
+    </div>
+    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal, effectiveChange(map['QQQ'], { mode: '24h' }), fxChg, map['159509'], { hideChgLink: true })}
+    <div class="status-bar">基于天天基金净值历史计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
+    </div>
+    <div class="history-toolbar">
+      <span class="period-btn ${historyPeriod === 15 ? 'active' : ''}" onclick="setHistoryPeriod(15)">近15天</span>
+      <span class="period-btn ${historyPeriod === 30 ? 'active' : ''}" onclick="setHistoryPeriod(30)">近30天</span>
+      <span class="period-btn ${historyPeriod === 60 ? 'active' : ''}" onclick="setHistoryPeriod(60)">近60天</span>
+      <span class="sort-header history-sort ${historySortMode !== 'default' ? 'active' : ''}" onclick="toggleHistorySort()">涨跌幅<span class="sort-arrows"><span class="arr ${historySortMode === 'asc' ? 'on' : ''}">▲</span><span class="arr ${historySortMode === 'desc' ? 'on' : ''}">▼</span></span></span>
+    </div>
+    <div class="fund-list">${rows}</div>
+    <div class="footer">数据来源：天天基金（净值历史）<br>净值数据每日更新</div>
+  `;
 }
 
 function renderError(msg) {
@@ -1279,6 +1468,10 @@ window.go = go;
 window.goBack = goBack;
 window.expandAll = expandAll;
 window.bootstrap = bootstrap;
+window.toggleSort = toggleSort;
+window.togglePin = togglePin;
+window.setHistoryPeriod = setHistoryPeriod;
+window.toggleHistorySort = toggleHistorySort;
 
 bootstrap();
 </script>

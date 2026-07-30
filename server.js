@@ -716,6 +716,93 @@ app.get('/api/ashare-ma', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
+//  /api/fund-history — 基金近15/30/60天净值涨跌幅
+//  数据来源：天天基金净值历史 API
+// ═══════════════════════════════════════════════════════
+const HISTORY_CACHE = new Map(); // code → { data, ts }
+const HISTORY_TTL = 3600_000;   // 1小时缓存
+
+// 天天基金净值 API 每页最多 20 条，拉取多页合并
+async function fetchFundNavPage(code, pageIndex) {
+  const url =
+    `https://api.fund.eastmoney.com/f10/lsjz` +
+    `?callback=&fundCode=${code}&pageIndex=${pageIndex}&pageSize=20&startDate=&endDate=&_=${Date.now()}`;
+  const text = await httpGet(url, {
+    Referer: 'https://fund.eastmoney.com/',
+    'Accept': 'application/json, text/javascript, */*',
+  });
+  let j;
+  try { j = JSON.parse(text); } catch { return []; }
+  return (j && j.Data && j.Data.LSJZList) || [];
+}
+
+async function fetchFundNav(code) {
+  // 拉取前4页（共80条记录，约60个交易日）
+  const pages = await Promise.all([1, 2, 3, 4].map(p => fetchFundNavPage(code, p)));
+  const all = pages.flat();
+  if (all.length === 0) return null;
+  // 按日期升序排列（最新在后）
+  all.sort((a, b) => a.FSRQ < b.FSRQ ? -1 : 1);
+  return all; // [{ FSRQ: '2025-01-01', DWJZ: '1.2345', ... }]
+}
+
+function calcNavChg(list, days) {
+  if (!list || list.length < 2) return null;
+  const latest = list[list.length - 1];
+  const latestNav = parseFloat(latest.DWJZ);
+  if (isNaN(latestNav)) return null;
+
+  // 找到 days 个交易日前的净值（往前找最近的那个）
+  const latestDate = new Date(latest.FSRQ);
+  // 按自然日往前推，不是交易日数——找列表里距今约 days 个自然日的最早点
+  // 策略：在列表中找日期差 >= days 的最接近那条
+  const targetDate = new Date(latestDate.getTime() - days * 24 * 3600 * 1000);
+  // 找到第一条 FSRQ >= targetDate 的前一条，即距今 ~days 天的数据
+  let prevNav = null;
+  for (let i = 0; i < list.length - 1; i++) {
+    const d = new Date(list[i].FSRQ);
+    if (d >= targetDate) {
+      // 用前一条（更早的）作为基准，若 i===0 则直接用它
+      const baseIdx = i === 0 ? 0 : i;
+      prevNav = parseFloat(list[baseIdx].DWJZ);
+      break;
+    }
+  }
+  if (prevNav === null) prevNav = parseFloat(list[0].DWJZ);
+  if (isNaN(prevNav) || prevNav === 0) return null;
+  return (latestNav - prevNav) / prevNav * 100;
+}
+
+app.get('/api/fund-history', async (req, res) => {
+  try {
+    const results = await Promise.all(
+      FUND_LIST.map(async ({ name, code }) => {
+        const cached = HISTORY_CACHE.get(code);
+        if (cached && Date.now() - cached.ts < HISTORY_TTL) {
+          return cached.data;
+        }
+        try {
+          const list = await fetchFundNav(code);
+          const d15  = calcNavChg(list, 15);
+          const d30  = calcNavChg(list, 30);
+          const d60  = calcNavChg(list, 60);
+          const item = { code, name, d15, d30, d60 };
+          HISTORY_CACHE.set(code, { data: item, ts: Date.now() });
+          return item;
+        } catch (e) {
+          console.error(`[fund-history] ${code}`, e.message);
+          return { code, name, d15: null, d30: null, d60: null };
+        }
+      })
+    );
+    res.json({ success: true, data: results });
+  } catch (err) {
+    console.error('[fund-history]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
 //  Keep-alive: self-ping every 5 minutes to prevent sleep
 // ═══════════════════════════════════════════════════════
 function startKeepAlive(port) {
