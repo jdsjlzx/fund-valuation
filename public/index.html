@@ -188,56 +188,6 @@
       margin-top: 5px;
       text-align: center;
     }
-    .vixy-bar .vixy-etf {
-      margin-top: 6px;
-      padding-top: 6px;
-      border-top: 1px dashed rgba(128,136,160,0.25);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .vixy-bar .etf-label {
-      font-size: 11px;
-      color: var(--text-secondary);
-    }
-    .vixy-bar .etf-amount {
-      font-size: 12px;
-      font-weight: 600;
-      opacity: 0.85;
-    }
-    .vixy-bar .etf-signal {
-      font-size: 11px;
-      font-weight: 600;
-      padding: 1px 6px;
-      border-radius: 3px;
-    }
-    .etf-signal.sig-strong {
-      color: #fff;
-      background: #e84c3d;
-    }
-    .etf-signal.sig-good {
-      color: #fff;
-      background: #2196f3;
-    }
-    .etf-signal.sig-wait {
-      color: var(--text-secondary);
-      background: rgba(128,136,160,0.15);
-    }
-    .etf-signal.sig-none {
-      color: var(--text-secondary);
-      background: rgba(128,136,160,0.1);
-    }
-    .vixy-bar .etf-ma {
-      font-size: 10px;
-      color: var(--text-secondary);
-      opacity: 0.7;
-    }
-    .vixy-bar .etf-detail {
-      font-size: 11px;
-      color: var(--text-secondary);
-      opacity: 0.85;
-      letter-spacing: 0.3px;
-    }
     .vixy-bar .alert-amount {
       font-size: 14px;
       font-weight: 700;
@@ -518,22 +468,126 @@
       margin: 0;
     }
 
-    /* ── 涨跌幅链接入口 ── */
+    /* ── 均线预警表格 ── */
+    .ma-alert-section {
+      margin-top: 9px;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .ma-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: auto;
+    }
+    .ma-table-head {
+      background: rgba(255,255,255,0.82);
+    }
+    .ma-table-head th {
+      font-size: 10px;
+      color: #1a1a1a;
+      font-weight: 600;
+      padding: 5px 8px;
+      text-align: left;
+      letter-spacing: 0.4px;
+      white-space: nowrap;
+    }
+    .ma-table tbody tr {
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .ma-table td {
+      padding: 6px 8px;
+      vertical-align: top;
+    }
+    /* 左侧色条：lv1绿 lv2红 lv3紫 lv4深橙 */
+    .ma-table tr.lv1 { border-left: 3px solid #22c55e; }
+    .ma-table tr.lv2 { border-left: 3px solid #ef4444; }
+    .ma-table tr.lv3 { border-left: 3px solid #a855f7; }
+    .ma-table tr.lv4 { border-left: 3px solid #f97316; }
+    /* 等级徽章 */
+    .ma-td-badge { width: 56px; white-space: nowrap; }
+    .ma-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
+      letter-spacing: 0.2px;
+      white-space: nowrap;
+    }
+    .ma-badge.lv1 { background: rgba(34,197,94,0.20);  color: #22c55e; border: 1px solid rgba(34,197,94,0.45); }
+    .ma-badge.lv2 { background: rgba(239,68,68,0.20);  color: #f87171; border: 1px solid rgba(239,68,68,0.45);
+      animation: pulse-signal 1.5s ease-in-out infinite; }
+    .ma-badge.lv3 { background: rgba(168,85,247,0.20); color: #c084fc; border: 1px solid rgba(168,85,247,0.45);
+      animation: pulse-signal 1.0s ease-in-out infinite; }
+    .ma-badge.lv4 { background: rgba(249,115,22,0.20); color: #fb923c; border: 1px solid rgba(249,115,22,0.45);
+      animation: pulse-signal 0.8s ease-in-out infinite; }
+    /* 涉及指数列：每两个换行 */
+    .ma-td-indices { width: 110px; }
+    .ma-indices-wrap {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3px;
+    }
+    .ma-idx {
+      font-size: 10px;
+      padding: 2px 5px;
+      border-radius: 3px;
+      font-weight: 600;
+      white-space: nowrap;
+      text-align: center;
+    }
+    .ma-idx.lv1 { color: #22c55e; background: rgba(34,197,94,0.15);  border: 1px solid rgba(34,197,94,0.35); }
+    .ma-idx.lv2 { color: #f87171; background: rgba(239,68,68,0.15);  border: 1px solid rgba(239,68,68,0.35); }
+    .ma-idx.lv3 { color: #c084fc; background: rgba(168,85,247,0.15); border: 1px solid rgba(168,85,247,0.35); }
+    .ma-idx.lv4 { color: #fb923c; background: rgba(249,115,22,0.15); border: 1px solid rgba(249,115,22,0.35); }
+    /* 触发条件列 */
+    .ma-td-cond { }
+    .ma-td-cond span { font-size: 11px; color: #8899aa; white-space: nowrap; }
+    /* 操作建议列 */
+    .ma-td-advice { width: 88px; white-space: nowrap; }
+    .ma-td-advice span {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+    }
+    .ma-td-advice span.lv1 { color: #22c55e; }
+    .ma-td-advice span.lv2 { color: #f87171; }
+    .ma-td-advice span.lv3 { color: #c084fc; }
+    .ma-td-advice span.lv4 { color: #fb923c; }
+    .ma-none {
+      font-size: 11px; color: #7888a0;
+      padding: 7px 8px; display: block; text-align: center;
+    }
+    .ma-loading {
+      font-size: 11px; color: #7888a0;
+      padding: 7px 8px; display: block; text-align: center;
+    }
+
+    /* ── 涨跌幅统计链接入口 ── */
     .vixy-chg-link {
       font-size: 11px;
-      color: var(--text-secondary);
+      color: #7eb8f7;
       text-decoration: none;
-      padding: 2px 6px;
-      border: 1px solid var(--border-badge);
+      padding: 2px 8px;
+      border: 1px solid rgba(126,184,247,0.35);
       border-radius: 3px;
-      background: var(--bg-badge);
+      background: rgba(126,184,247,0.08);
       cursor: pointer;
       white-space: nowrap;
       flex-shrink: 0;
+      font-weight: 500;
     }
     .vixy-chg-link:active { opacity: 0.6; }
 
     /* ── 历史涨跌幅视图 ── */
+    .history-date-range {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      padding: 8px 12px 0;
+      background: var(--bg-card);
+    }
     .history-toolbar {
       display: flex;
       align-items: center;
@@ -652,7 +706,7 @@ function sortedFundIndices(map, fxChg, opts) {
 // ═══════════════════════════════════════════════════
 function allSymbols() {
   // Always include index/forex refs; quote API only handles US tickers right now
-  const set = new Set(['IXIC', 'QQQ', 'SPY', 'VIXY', 'USDCNY=X', '159509']);
+  const set = new Set(['IXIC', 'QQQ', 'SPY', 'VIXY', 'USDCNY=X']);
   FUNDS.forEach(f => (f.holdings || []).forEach(h => {
     if (isUSHolding(h)) set.add(h.s);
   }));
@@ -833,58 +887,23 @@ async function fetchAshareMa() {
     const r = await fetch('/api/ashare-ma');
     if (!r.ok) return;
     const json = await r.json();
-    if (json.success) ASHARE_MA = { sh: json.sh, cy: json.cy, etf159509: json.etf159509 };
+    if (json.success) ASHARE_MA = { sh: json.sh, cy: json.cy };
   } catch (e) { console.error('[ashare-ma]', e); }
 }
 
-// 159509 买入信号打分（基于3/31低点特征增强版）
-function calc159509Signal(qqqChg) {
-  if (!qqqChg || qqqChg >= 0) return null; // 纳指没跌，不触发
-  if (!ASHARE_MA) return null;
-
-  let score = 0;
-
-  // 1) 纳指跌幅（0-30分）
-  const drop = Math.abs(qqqChg);
-  if (drop >= 3) score += 30;
-  else if (drop >= 2) score += 25;
-  else if (drop >= 1) score += 15;
-  else score += 5;
-
-  // 2) 159509 vs MA20 偏离度（0-35分）— 最重要维度
-  const etfDev = ASHARE_MA.etf159509?.deviation;
-  if (etfDev != null && etfDev < 0) {
-    const absDev = Math.abs(etfDev);
-    if (absDev >= 10) score += 35;
-    else if (absDev >= 8) score += 28;
-    else if (absDev >= 5) score += 20;
-    else if (absDev >= 3) score += 10;
-  }
-
-  // 3) 上证 vs MA20（0-20分）
-  const shDev = ASHARE_MA.sh?.deviation;
-  if (shDev != null) {
-    if (shDev >= 1) score += 20;
-    else if (shDev >= -1) score += 10;
-  }
-
-  // 4) 创业板 vs MA20（0-15分）
-  const cyDev = ASHARE_MA.cy?.deviation;
-  if (cyDev != null) {
-    if (cyDev >= 1) score += 15;
-    else if (cyDev >= -1) score += 8;
-  }
-
-  // 5) 成交量加成：放大1.5倍以上额外+15分
-  const volRatio = ASHARE_MA.etf159509?.volRatio;
-  if (volRatio && volRatio >= 1.5) score += 15;
-
-  // 分档信号+操作建议
-  if (score >= 75) return { text: '重仓信号', cls: 'sig-strong', score, amount: '¥5,000+', tip: '跌破MA20深+放量，重仓买入' };
-  if (score >= 55) return { text: '加仓', cls: 'sig-good', score, amount: '¥3,000', tip: '明显低估，加仓买入' };
-  if (score >= 35) return { text: '试探买入', cls: 'sig-wait', score, amount: '¥1,000', tip: '初步信号，小仓试探' };
-  return { text: '观望', cls: 'sig-none', score, amount: null, tip: '跌幅不足，继续观察' };
+// 四大指数均线预警数据
+let INDEX_MA = null;
+async function fetchIndexMa() {
+  try {
+    const r = await fetch('/api/index-ma');
+    if (!r.ok) return;
+    const json = await r.json();
+    if (json.success) {
+      INDEX_MA = { sh: json.sh, cy: json.cy, ndx: json.ndx, kospi: json.kospi };
+    }
+  } catch (e) { console.error('[index-ma]', e); }
 }
+
 
 // ═══════════════════════════════════════════════════
 //  ROUTING
@@ -933,43 +952,49 @@ function flashClass(prev, cur) {
   return '';
 }
 
-function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, etf159509Quote, opts = {}) {
+function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
   const showChgLink = !opts.hideChgLink;
   const chgCls = cls(vixyChg);
   const priceTxt = fmtPrice(vixyPrice);
   const chgTxt = fmtPct(vixyChg);
 
-  // 估算159509(纳指100ETF)次日涨幅 = QQQ涨跌 × 汇率变动
-  const etf159509Chg = ((1 + (qqqChg || 0) / 100) * (1 + (fxChg || 0) / 100) - 1) * 100;
-  const etfCls = cls(etf159509Chg);
-
-  // 159509 最新净值：优先用实时行情（A股开盘时段），fallback K线数据
-  const etfPrice = etf159509Quote?.regularMarketPrice || ASHARE_MA?.etf159509?.price;
-  const etfPriceTxt = etfPrice ? etfPrice.toFixed(3) : '--';
-
-  // 159509 买入信号
-  const sig = calc159509Signal(qqqChg);
-  // 操作建议文本
-  let adviceHtml = '';
-  if (sig) {
-    if (sig.score >= 75) adviceHtml = `<span class="etf-signal sig-strong">重仓买入 ${sig.amount}</span>`;
-    else if (sig.score >= 55) adviceHtml = `<span class="etf-signal sig-good">加仓 ${sig.amount}</span>`;
-    else if (sig.score >= 35) adviceHtml = `<span class="etf-signal sig-wait">轻仓试探 ${sig.amount}</span>`;
-    else adviceHtml = `<span class="etf-signal sig-none">观望</span>`;
-  }
-
-  // 评分维度明细
-  let scoreDetail = '';
-  if (ASHARE_MA) {
-    const etfDev = ASHARE_MA.etf159509?.deviation;
-    const volR = ASHARE_MA.etf159509?.volRatio;
+  // 均线预警表格：三级风险
+  const MA_RULES = [
+    { key: 'ma21',  lv: 'lv1', badge: '一级预警', condition: 'MA5下穿MA21',  advice: '减仓一半'        },
+    { key: 'ma60',  lv: 'lv2', badge: '二级预警', condition: 'MA5下穿MA60',  advice: '清仓离场'        },
+    { key: 'ma120', lv: 'lv3', badge: '三级预警', condition: 'MA5下穿MA120', advice: '空仓，切勿抄底'  },
+    { key: 'ma250', lv: 'lv4', badge: '四级预警', condition: 'MA5下穿MA250', advice: '进入熊市，空仓'  },
+  ];
+  function maTableBody() {
+    if (!INDEX_MA) return `<tr><td colspan="4"><span class="ma-loading">均线数据加载中…</span></td></tr>`;
+    const indices = [INDEX_MA.sh, INDEX_MA.cy, INDEX_MA.ndx, INDEX_MA.kospi];
     const rows = [];
-    if (qqqChg && qqqChg < 0) rows.push(`纳指跌${Math.abs(qqqChg).toFixed(1)}%`);
-    if (etfDev != null) rows.push(`ETF偏离${etfDev > 0 ? '+' : ''}${etfDev}%`);
-    if (volR != null) rows.push(`量比${volR}x`);
-    if (sig) rows.push(`${sig.score}分`);
-    scoreDetail = `<span class="etf-detail">${rows.join(' | ')}</span>`;
+    for (const { key, lv, badge, condition, advice } of MA_RULES) {
+      const hits = indices.filter(d => d && d.crossBelow && d.crossBelow[key]).map(d => d.name);
+      if (!hits.length) continue;
+      const idxTags = hits.map(n => `<span class="ma-idx ${lv}">${n}</span>`).join('');
+      rows.push(`
+        <tr class="${lv}">
+          <td class="ma-td-badge"><span class="ma-badge ${lv}">${badge}</span></td>
+          <td class="ma-td-cond"><span>${condition}</span></td>
+          <td class="ma-td-indices"><div class="ma-indices-wrap">${idxTags}</div></td>
+          <td class="ma-td-advice"><span class="${lv}">${advice}</span></td>
+        </tr>`);
+    }
+    if (!rows.length) return `<tr><td colspan="4"><span class="ma-none">各指数均线正常，持仓安全</span></td></tr>`;
+    return rows.join('');
   }
+  const maAlertHtml = `
+    <div class="ma-alert-section">
+      <table class="ma-table">
+        <thead class="ma-table-head">
+          <tr>
+            <th>等级</th><th>触发条件</th><th>涉及指数</th><th>操作建议</th>
+          </tr>
+        </thead>
+        <tbody>${maTableBody()}</tbody>
+      </table>
+    </div>`;
 
   // VIXY < 25: 正常状态，仅显示价格信息
   if (!vixyPrice || vixyPrice < 25) return `
@@ -979,13 +1004,9 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, etf159509Quo
         <span class="vixy-price ${chgCls}">${priceTxt}</span>
         <span class="vixy-chg ${chgCls}">${chgTxt}</span>
         <span class="vixy-signal ${vixySignal.cls}">${vixySignal.text}</span>
-        ${showChgLink ? `<span class="vixy-chg-link" onclick="go('#/history')">涨跌幅</span>` : ''}
+        ${showChgLink ? `<span class="vixy-chg-link" onclick="go('#/history')">涨跌幅统计</span>` : ''}
       </div>
-      <div class="vixy-etf">
-        <span class="etf-label">159509</span>
-        ${adviceHtml}
-        ${scoreDetail}
-      </div>
+      ${maAlertHtml}
     </div>`;
 
   // VIXY >= 25: 带加仓建议的合并横幅
@@ -1009,17 +1030,13 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, etf159509Quo
         <span class="vixy-price">${priceTxt}</span>
         <span class="vixy-chg ${chgCls}">${chgTxt}</span>
         <span class="vixy-signal ${vixySignal.cls}">${vixySignal.text}</span>
-        ${showChgLink ? `<span class="vixy-chg-link" onclick="go('#/history')">涨跌幅</span>` : ''}
+        ${showChgLink ? `<span class="vixy-chg-link" onclick="go('#/history')">涨跌幅统计</span>` : ''}
       </div>
       <div class="vixy-action">
         <span class="alert-amount">建议加仓 QQQ：${amount}</span>
         <span class="alert-tip">${tip}</span>
       </div>
-      <div class="vixy-etf">
-        <span class="etf-label">159509</span>
-        ${adviceHtml}
-        ${scoreDetail}
-      </div>
+      ${maAlertHtml}
     </div>`;
 }
 
@@ -1109,7 +1126,7 @@ function renderList() {
         <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
       </div>
     </div>
-    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal, effectiveChange(map['QQQ'], { mode: '24h' }), fxChg, map['159509'])}
+    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal, effectiveChange(map['QQQ'], { mode: '24h' }), fxChg)}
     <div class="status-bar">基于季报真实持仓计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>), 仅供参考<span class="${dotClass}"></span>
     </div>
     <div class="list-toolbar">
@@ -1207,7 +1224,7 @@ function render24h() {
         <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
       </div>
     </div>
-    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal24h, qqqChg, fxChg, map['159509'])}
+    ${vixyBarHtml(vixyPrice, vixyChg, vixySignal24h, qqqChg, fxChg)}
     <div class="status-bar">
       美股盘后/盘前实时估值&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
     </div>
@@ -1359,6 +1376,16 @@ function renderHistory() {
   // 根据当前周期取涨跌幅字段
   const periodKey = historyPeriod === 15 ? 'd15' : historyPeriod === 30 ? 'd30' : 'd60';
 
+  // 日期区间：今天往前推 N 天
+  function fmtDateCompact(d) {
+    return d.getFullYear().toString()
+      + String(d.getMonth() + 1).padStart(2, '0')
+      + String(d.getDate()).padStart(2, '0');
+  }
+  const dateEnd   = new Date();
+  const dateStart = new Date(dateEnd.getTime() - historyPeriod * 24 * 3600 * 1000);
+  const dateRangeStr = `${fmtDateCompact(dateStart)} - ${fmtDateCompact(dateEnd)}`;
+
   // 排序
   let sortedData = [...historyData];
   if (historySortMode === 'desc') {
@@ -1404,6 +1431,7 @@ function renderHistory() {
     </div>
     <div class="status-bar">基于天天基金净值历史计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
     </div>
+    <div class="history-date-range">统计区间：${dateRangeStr}</div>
     <div class="history-toolbar">
       <span class="period-btn ${historyPeriod === 15 ? 'active' : ''}" onclick="setHistoryPeriod(15)">近15天</span>
       <span class="period-btn ${historyPeriod === 30 ? 'active' : ''}" onclick="setHistoryPeriod(30)">近30天</span>
@@ -1446,7 +1474,8 @@ async function bootstrap() {
     if (!funds.length) throw new Error('基金列表为空');
     FUNDS = funds.filter(f => f.holdings && f.holdings.length > 0);
     if (!FUNDS.length) throw new Error('未获取到任何持仓数据');
-    fetchAshareMa(); // 非阻塞加载A股MA数据
+    fetchAshareMa();  // 非阻塞加载A股MA数据
+    fetchIndexMa();   // 非阻塞加载四大指数均线预警
     await pollLoop();
   } catch (e) {
     renderError(e.message);

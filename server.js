@@ -716,6 +716,84 @@ app.get('/api/ashare-ma', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
+//  /api/index-ma — 四大指数均线预警
+//  上证(新浪) · 创业板(新浪) · 纳指ETF 513100(新浪) · KOSPI(Naver)
+// ═══════════════════════════════════════════════════════
+const INDEX_MA_CACHE = { data: null, ts: 0 };
+const INDEX_MA_TTL = 3600_000; // 1小时缓存
+
+// 新浪日K（已有 fetchKline，复用）
+// Naver KOSPI 历史 JSON
+async function fetchNaverIndexKline(symbol, startYYYYMMDD) {
+  const url =
+    `https://api.finance.naver.com/siseJson.naver` +
+    `?symbol=${encodeURIComponent(symbol)}&requestType=1` +
+    `&startTime=${startYYYYMMDD}&endTime=20501231&timeframe=day`;
+  const txt = await httpGet(url, { 'Accept-Language': 'ko-KR,en;q=0.9' });
+  const rows = [];
+  const re = /\["(\d{8})"\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/g;
+  let m;
+  while ((m = re.exec(txt)) !== null) {
+    rows.push({ date: m[1], close: parseFloat(m[5]) });
+  }
+  return rows;
+}
+
+function calcIndexMAs(klines) {
+  const periods = [5, 21, 60, 120, 250];
+  const result = {};
+  for (const p of periods) {
+    if (klines.length < p) { result[`ma${p}`] = null; continue; }
+    result[`ma${p}`] = klines.slice(-p).reduce((s, k) => s + k.close, 0) / p;
+  }
+  // 判断 MA5 下穿各均线
+  const ma5 = result.ma5;
+  result.crossBelow = {
+    ma21:  ma5 !== null && result.ma21  !== null && ma5 < result.ma21,
+    ma60:  ma5 !== null && result.ma60  !== null && ma5 < result.ma60,
+    ma120: ma5 !== null && result.ma120 !== null && ma5 < result.ma120,
+    ma250: ma5 !== null && result.ma250 !== null && ma5 < result.ma250,
+  };
+  result.price = klines.length ? klines[klines.length - 1].close : null;
+  return result;
+}
+
+app.get('/api/index-ma', async (req, res) => {
+  if (INDEX_MA_CACHE.data && Date.now() - INDEX_MA_CACHE.ts < INDEX_MA_TTL) {
+    return res.json({ success: true, ...INDEX_MA_CACHE.data });
+  }
+  try {
+    // 需要约2年数据覆盖 MA250，取 startTime = 2年前
+    const start = new Date();
+    start.setFullYear(start.getFullYear() - 2);
+    const startStr = start.toISOString().slice(0, 10).replace(/-/g, '');
+    const sinaLimit = 280; // 日K约280条覆盖250日线
+
+    const [shKlines, cyKlines, ndxKlines, kospiKlines] = await Promise.all([
+      fetchKline('sh000001', sinaLimit),
+      fetchKline('sz399006', sinaLimit),
+      fetchKline('sh513100', sinaLimit),   // 纳指100ETF
+      fetchNaverIndexKline('KOSPI', startStr),
+    ]);
+
+    const result = {
+      sh:    { name: '上证指数',      ...calcIndexMAs(shKlines)    },
+      cy:    { name: '创业板指数',    ...calcIndexMAs(cyKlines)    },
+      ndx:   { name: '纳斯达克100',   ...calcIndexMAs(ndxKlines)   },
+      kospi: { name: '韩国KOSPI', ...calcIndexMAs(kospiKlines) },
+    };
+
+    INDEX_MA_CACHE.data = result;
+    INDEX_MA_CACHE.ts = Date.now();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[index-ma]', err.message);
+    if (INDEX_MA_CACHE.data) return res.json({ success: true, ...INDEX_MA_CACHE.data, stale: true });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
 //  /api/fund-history — 基金近15/30/60天净值涨跌幅
 //  数据来源：天天基金净值历史 API
 // ═══════════════════════════════════════════════════════
