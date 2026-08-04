@@ -54,6 +54,7 @@
       --up: #e84c3d;
       --down: #2ebd85;
       --flat: #666;
+      --dd-text: #9a5a5a;
     }
 
     @media (prefers-color-scheme: light) {
@@ -105,6 +106,7 @@
         --up: #e84c3d;
         --down: #2ebd85;
         --flat: #9ca3af;
+        --dd-text: #b05a5a;
       }
     }
 
@@ -288,17 +290,38 @@
     .fund-item.flash-up   { animation: fund-flash-up 1s ease-out; }
     .fund-item.flash-down { animation: fund-flash-down 1s ease-out; }
 
-    .fund-left { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; }
-    .fund-name { font-size: 14px; color: var(--text-name); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fund-left { flex: 1; display: flex; align-items: center; gap: 0; min-width: 0; }
+    .fund-name-wrap { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+    .fund-name-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .fund-name { font-size: 14px; color: var(--text-name); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4; }
+    .fund-dd { font-size: 10.5px; color: var(--dd-text); white-space: nowrap; letter-spacing: 0.1px; }
     .fund-code { font-size: 13px; color: var(--text-muted); font-variant-numeric: tabular-nums; letter-spacing: 0.4px; flex-shrink: 0; }
+    @keyframes badge-flow {
+      0%   { background-position: 0% 50%; }
+      50%  { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
     .badge {
       flex-shrink: 0;
-      font-size: 11px;
-      padding: 1px 4px;
-      border-radius: 3px;
-      background: var(--bg-badge);
-      color: var(--text-muted);
-      border: 1px solid var(--border-badge);
+      font-size: 10px;
+      border-radius: 0;
+      clip-path: polygon(5px 0%, 100% 0%, calc(100% - 5px) 100%, 0% 100%);
+      background: linear-gradient(120deg, #0d2035, #1a3a60, #1e3a5f, #0d2035, #162840);
+      background-size: 300% 300%;
+      animation: badge-flow 4s ease infinite;
+      color: #6ea8d8;
+      border: none;
+      padding: 1px 8px 1px 7px;
+      letter-spacing: 0.3px;
+    }
+    @media (prefers-color-scheme: light) {
+      .badge {
+        background: linear-gradient(120deg, #cce4ff, #e8f3ff, #d4ebff, #cce4ff, #ddeeff);
+        background-size: 300% 300%;
+        animation: badge-flow 4s ease infinite;
+        color: #2a6aaa;
+        border: none;
+      }
     }
     .fund-pct {
       font-size: 13px;
@@ -310,11 +333,13 @@
       padding: 4px 8px;
       border-radius: 3px;
       color: #fff;
+      align-self: center;
+      flex-shrink: 0;
     }
     .fund-pct.up   { background: #f23a2f; color: #fff; }
     .fund-pct.down { background: #33c85a; color: #fff; }
     .fund-pct.flat { background: var(--bg-active); color: var(--flat); }
-    .chevron { color: var(--chevron); font-size: 16px; margin-left: 6px; }
+    .chevron { color: var(--chevron); font-size: 16px; margin-left: 6px; align-self: center; }
 
     /* Chinese convention: red = up, green = down */
     .up   { color: var(--up); }
@@ -457,6 +482,7 @@
       transition: opacity 0.15s;
       display: inline-flex;
       align-items: center;
+      align-self: center;
     }
     .pin-icon svg { width: 14px; height: 14px; fill: var(--text-muted); }
     .pin-icon.pinned { opacity: 1; }
@@ -1098,12 +1124,19 @@ function renderList() {
     const flash = flashClass(prevFundPct.get(idx), chg);
     const isPinned = pinnedSet.has(idx);
     const pinCls = isPinned ? 'pin-icon pinned' : 'pin-icon';
+    const dd = ddMap[fund.code];
+    const ddHtml = dd != null ? `<span class="fund-dd">近一年最大回撤：${dd.toFixed(1)}%</span>` : '';
     rows += `
       <div class="fund-item ${flash}${isPinned ? ' pinned-item' : ''}" onclick="go('#/fund/${idx}')">
         <span class="${pinCls}" onclick="togglePin(${idx}, event)"><svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5v6h2v-6h5v-2z"/></svg></span>
         <div class="fund-left">
-          <span class="fund-name">${fund.name}</span>
-          <span class="badge">${mktLabel}</span>
+          <div class="fund-name-wrap">
+            <div class="fund-name-row">
+              <span class="fund-name">${fund.name}</span>
+              <span class="badge">${mktLabel}</span>
+            </div>
+            ${ddHtml}
+          </div>
         </div>
         <span class="fund-pct ${cls(chg)}">${fmtPct(chg)}</span>
         <span class="chevron">›</span>
@@ -1205,12 +1238,19 @@ function render24h() {
     const flash = flashClass(prevFundPct24h.get(idx), chg);
     const isPinned = pinnedSet.has(idx);
     const pinCls = isPinned ? 'pin-icon pinned' : 'pin-icon';
+    const dd = ddMap[fund.code];
+    const ddHtml = dd != null ? `<span class="fund-dd">近一年最大回撤：${dd.toFixed(1)}%</span>` : '';
     rows += `
       <div class="fund-item ${flash}${isPinned ? ' pinned-item' : ''}" onclick="go('#/24h/fund/${idx}')">
         <span class="${pinCls}" onclick="togglePin(${idx}, event)"><svg viewBox="0 0 24 24"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5v6h2v-6h5v-2z"/></svg></span>
         <div class="fund-left">
-          <span class="fund-name">${fund.name}</span>
-          <span class="badge">${mktLabel}</span>
+          <div class="fund-name-wrap">
+            <div class="fund-name-row">
+              <span class="fund-name">${fund.name}</span>
+              <span class="badge">${mktLabel}</span>
+            </div>
+            ${ddHtml}
+          </div>
         </div>
         <span class="fund-pct ${cls(chg)}">${fmtPct(chg)}</span>
         <span class="chevron">›</span>
@@ -1351,6 +1391,20 @@ function rerender() {
 let historyData = null;       // 从 /api/fund-history 获取的数据
 let historyPeriod = 15;       // 当前选中周期：15 | 30 | 60
 let historySortMode = 'desc'; // 'desc' | 'asc' | 'default'
+let ddMap = {};               // code → maxDD（近一年最大回撤，负数如 -40.75）
+
+async function loadDrawdownData() {
+  try {
+    const r = await fetch('/api/fund-history');
+    if (!r.ok) return;
+    const json = await r.json();
+    if (!json.success) return;
+    ddMap = {};
+    for (const item of (json.data || [])) {
+      if (item.maxDD != null) ddMap[item.code] = item.maxDD;
+    }
+  } catch (e) { /* 静默失败，不影响主页面 */ }
+}
 
 async function loadHistoryData() {
   if (historyData) return;
@@ -1508,6 +1562,7 @@ async function bootstrap() {
     if (!FUNDS.length) throw new Error('未获取到任何持仓数据');
     fetchAshareMa();  // 非阻塞加载A股MA数据
     fetchIndexMa();   // 非阻塞加载四大指数均线预警
+    loadDrawdownData(); // 非阻塞加载近一年最大回撤
     await pollLoop();
   } catch (e) {
     renderError(e.message);

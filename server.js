@@ -800,6 +800,8 @@ app.get('/api/index-ma', async (req, res) => {
 // ═══════════════════════════════════════════════════════
 const HISTORY_CACHE = new Map(); // code → { data, ts }
 const HISTORY_TTL = 3600_000;   // 1小时缓存
+const DRAWDOWN_CACHE = new Map(); // code → { data, ts }
+const DRAWDOWN_TTL = 6 * 3600_000; // 6小时缓存
 
 // 天天基金净值 API 每页最多 20 条，拉取多页合并
 async function fetchFundNavPage(code, pageIndex) {
@@ -823,6 +825,17 @@ async function fetchFundNav(code) {
   // 按日期升序排列（最新在后）
   all.sort((a, b) => a.FSRQ < b.FSRQ ? -1 : 1);
   return all; // [{ FSRQ: '2025-01-01', DWJZ: '1.2345', ... }]
+}
+
+async function fetchFundNavYear(code) {
+  // 拉取约一年净值数据（约250个交易日，每页20条需13页）
+  const pages = await Promise.all(
+    [1,2,3,4,5,6,7,8,9,10,11,12,13].map(p => fetchFundNavPage(code, p))
+  );
+  const all = pages.flat();
+  if (all.length === 0) return null;
+  all.sort((a, b) => a.FSRQ < b.FSRQ ? -1 : 1);
+  return all;
 }
 
 function calcNavChg(list, days) {
@@ -852,6 +865,23 @@ function calcNavChg(list, days) {
   return (latestNav - prevNav) / prevNav * 100;
 }
 
+function calcMaxDrawdown(list) {
+  if (!list || list.length < 2) return null;
+  const latest = new Date(list[list.length - 1].FSRQ);
+  const oneYearAgo = new Date(latest.getTime() - 365 * 24 * 3600 * 1000);
+  const yearList = list.filter(r => new Date(r.FSRQ) >= oneYearAgo);
+  if (yearList.length < 2) return null;
+  let peak = -Infinity, maxDD = 0;
+  for (const r of yearList) {
+    const nav = parseFloat(r.DWJZ);
+    if (isNaN(nav)) continue;
+    if (nav > peak) peak = nav;
+    const dd = (peak - nav) / peak * 100;
+    if (dd > maxDD) maxDD = dd;
+  }
+  return maxDD < 0.01 ? null : -maxDD; // 返回负数如 -40.75
+}
+
 app.get('/api/fund-history', async (req, res) => {
   try {
     const results = await Promise.all(
@@ -865,12 +895,22 @@ app.get('/api/fund-history', async (req, res) => {
           const d15  = calcNavChg(list, 15);
           const d30  = calcNavChg(list, 30);
           const d60  = calcNavChg(list, 60);
-          const item = { code, name, d15, d30, d60 };
+          // 计算近一年最大回撤（独立缓存，TTL 6小时）
+          const cachedDD = DRAWDOWN_CACHE.get(code);
+          let maxDD;
+          if (cachedDD && Date.now() - cachedDD.ts < DRAWDOWN_TTL) {
+            maxDD = cachedDD.data;
+          } else {
+            const yearList = await fetchFundNavYear(code);
+            maxDD = calcMaxDrawdown(yearList);
+            DRAWDOWN_CACHE.set(code, { data: maxDD, ts: Date.now() });
+          }
+          const item = { code, name, d15, d30, d60, maxDD };
           HISTORY_CACHE.set(code, { data: item, ts: Date.now() });
           return item;
         } catch (e) {
           console.error(`[fund-history] ${code}`, e.message);
-          return { code, name, d15: null, d30: null, d60: null };
+          return { code, name, d15: null, d30: null, d60: null, maxDD: null };
         }
       })
     );
