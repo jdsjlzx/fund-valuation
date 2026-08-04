@@ -648,6 +648,87 @@
     ]
   },
   {
+    "name": "国富亚洲机会股票",
+    "code": "457001",
+    "reportDate": "2026-06-30",
+    "annualDate": null,
+    "totalCount": 10,
+    "coverageWeight": 0.4168,
+    "dataMode": "latest_report_only",
+    "holdings": [
+      {
+        "s": "000660",
+        "w": 0.0795,
+        "name_cn": "SK海力士",
+        "market": "KR",
+        "source": "latest_report"
+      },
+      {
+        "s": "005930",
+        "w": 0.0647,
+        "name_cn": "三星电子",
+        "market": "KR",
+        "source": "latest_report"
+      },
+      {
+        "s": "2330",
+        "w": 0.053,
+        "name_cn": "台积电",
+        "market": "other",
+        "source": "latest_report"
+      },
+      {
+        "s": "TSM",
+        "w": 0.0363,
+        "name_cn": "台积电",
+        "market": "106",
+        "source": "latest_report"
+      },
+      {
+        "s": "ASML",
+        "w": 0.034300000000000004,
+        "name_cn": "阿斯麦",
+        "market": "105",
+        "source": "latest_report"
+      },
+      {
+        "s": "2308",
+        "w": 0.0335,
+        "name_cn": "台达电",
+        "market": "other",
+        "source": "latest_report"
+      },
+      {
+        "s": "2454",
+        "w": 0.0308,
+        "name_cn": "联发科",
+        "market": "other",
+        "source": "latest_report"
+      },
+      {
+        "s": "6981",
+        "w": 0.03,
+        "name_cn": "村田制作所",
+        "market": "other",
+        "source": "latest_report"
+      },
+      {
+        "s": "09988",
+        "w": 0.0275,
+        "name_cn": "阿里巴巴-W",
+        "market": "116",
+        "source": "latest_report"
+      },
+      {
+        "s": "009150",
+        "w": 0.027200000000000002,
+        "name_cn": "Samsung Electro-Mechanics",
+        "market": "other",
+        "source": "latest_report"
+      }
+    ]
+  },
+  {
     "name": "建信新兴市场混合",
     "code": "539002",
     "reportDate": "2026-06-30",
