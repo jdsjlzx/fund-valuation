@@ -500,6 +500,7 @@
       border-radius: 6px;
       overflow: hidden;
       border: 1px solid rgba(255,255,255,0.08);
+      width: 100%;
     }
     .ma-table {
       width: 100%;
@@ -594,6 +595,72 @@
       font-size: 11px; color: #7888a0;
       padding: 7px 8px; display: block; text-align: center;
     }
+    /* 均线区域折叠标题栏 */
+    .ma-toggle-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 8px;
+      background: rgba(255,255,255,0.06);
+      cursor: pointer;
+      user-select: none;
+    }
+    .ma-toggle-bar:hover { background: rgba(255,255,255,0.10); }
+    .ma-toggle-title {
+      font-size: 11px;
+      color: #8899aa;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+    }
+    /* iOS 风格开关 */
+    .ma-toggle-switch {
+      position: relative;
+      width: 34px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .ma-toggle-switch-track {
+      width: 34px;
+      height: 20px;
+      border-radius: 10px;
+      background: #34c759;
+      transition: background 0.25s;
+    }
+    .ma-alert-section.collapsed .ma-toggle-switch-track {
+      background: rgba(255,255,255,0.18);
+    }
+    .ma-toggle-switch-thumb {
+      position: absolute;
+      top: 2px;
+      left: 16px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+      transition: left 0.25s cubic-bezier(.4,0,.2,1);
+    }
+    .ma-alert-section.collapsed .ma-toggle-switch-thumb {
+      left: 2px;
+    }
+    .ma-toggle-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .ma-toggle-label {
+      font-size: 11px;
+      color: #34c759;
+      transition: color 0.25s;
+      white-space: nowrap;
+      width: 52px;
+      text-align: right;
+    }
+    .ma-alert-section.collapsed .ma-toggle-label {
+      color: #8899aa;
+    }
+    .ma-alert-section.collapsed .ma-table { display: none; }
 
     /* ── 涨跌幅统计链接入口 ── */
     .vixy-chg-link {
@@ -961,6 +1028,13 @@ async function fetchIndexMa() {
   } catch (e) { console.error('[index-ma]', e); }
 }
 
+function toggleMaAlert(bar) {
+  const section = bar.closest('.ma-alert-section');
+  const collapsed = section.classList.toggle('collapsed');
+  localStorage.setItem('ma-alert-collapsed', collapsed ? '1' : '0');
+  const label = bar.querySelector('.ma-toggle-label');
+  if (label) label.textContent = collapsed ? '打开均线' : '关闭均线';
+}
 
 // ═══════════════════════════════════════════════════
 //  ROUTING
@@ -1041,8 +1115,19 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
     if (!rows.length) return `<tr><td colspan="4"><span class="ma-none">各指数均线正常，持仓安全</span></td></tr>`;
     return rows.join('');
   }
+  const maCollapsed = localStorage.getItem('ma-alert-collapsed') === '1';
   const maAlertHtml = `
-    <div class="ma-alert-section">
+    <div class="ma-alert-section${maCollapsed ? ' collapsed' : ''}">
+      <div class="ma-toggle-bar" onclick="toggleMaAlert(this)">
+        <span class="ma-toggle-title">均线风险预警</span>
+        <div class="ma-toggle-right">
+          <span class="ma-toggle-label">${maCollapsed ? '打开均线' : '关闭均线'}</span>
+          <div class="ma-toggle-switch">
+            <div class="ma-toggle-switch-track"></div>
+            <div class="ma-toggle-switch-thumb"></div>
+          </div>
+        </div>
+      </div>
       <table class="ma-table">
         <thead class="ma-table-head">
           <tr>
