@@ -360,7 +360,24 @@ function getUSMarketState() {
   if (minOfDay >= 240 && minOfDay < 570) return 'PRE';
   if (minOfDay >= 570 && minOfDay < 960) return 'REGULAR';
   if (minOfDay >= 960 && minOfDay < 1200) return 'POST';
-  return 'CLOSED';
+  // 工作日 00:00-04:00 ET：夜盘（期货持续交易）
+  return 'OVERNIGHT';
+}
+
+// 夜盘：通过 Yahoo Finance 获取纳指期货 NQ=F 涨跌幅，代理美股夜盘行情
+async function fetchNQFutures() {
+  const url = 'https://query2.finance.yahoo.com/v8/finance/chart/NQ%3DF?interval=1d&range=1d';
+  let text;
+  try { text = await httpGetWithStatus(url, { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' }); }
+  catch (e) { console.error('[nq-futures fetch]', e.message); return null; }
+  let j;
+  try { j = JSON.parse(text); } catch { return null; }
+  const meta = j && j.chart && j.chart.result && j.chart.result[0] && j.chart.result[0].meta;
+  if (!meta) return null;
+  const price = meta.regularMarketPrice;
+  const prev  = meta.chartPreviousClose || meta.previousClose;
+  if (!price || !prev) return null;
+  return ((price - prev) / prev) * 100;
 }
 
 // ──────────────────────────────────────────
@@ -550,8 +567,9 @@ app.get('/api/quotes', async (req, res) => {
     const emMissing = emSymbols.filter((s) => !emMap[s]);
     // Always fetch Sina for all US stocks to get after-hours data (field[21])
     const sinaAll = [...sinaSymbols, ...emMissing, ...emSymbols.filter((s) => emMap[s])];
+    const usState = getUSMarketState();
 
-    const [emData, sinaData, krData, twData, yhData] = await Promise.all([
+    const [emData, sinaData, krData, twData, yhData, nqChgPct] = await Promise.all([
       emSymbols.map((s) => emMap[s]).filter(Boolean),
       (async () => {
         if (sinaAll.length === 0) return [];
@@ -581,14 +599,31 @@ app.get('/api/quotes', async (req, res) => {
           })
         )
       ).then((arr) => arr.filter(Boolean)),
+      // 夜盘时段额外获取 NQ 期货涨跌幅
+      usState === 'OVERNIGHT'
+        ? fetchNQFutures().catch((e) => { console.error('[nq-futures]', e.message); return null; })
+        : Promise.resolve(null),
     ]);
 
     // Merge: for symbols that have both eastmoney and sina data,
     // use eastmoney as base but overlay after-hours data from sina.
     // 盘前(PRE)时 eastmoney f2/f3 已是盘前实时价(vs昨收)，不需要叠加 sina 的旧 post 数据。
     const sinaMap = (sinaData && sinaData.map) || {};
-    const usState = getUSMarketState();
     const mergedEmData = emData.map((em) => {
+      // 夜盘时段：用 NQ 期货涨跌幅代理，存入 overnightChangePercent 供 24h 视图使用
+      // regularMarketChangePercent 保留收盘涨跌，首页不受影响
+      if (usState === 'OVERNIGHT' && nqChgPct !== null) {
+        const sina = sinaMap[em.symbol];
+        return {
+          ...em,
+          overnightChangePercent: nqChgPct,
+          marketState: 'OVERNIGHT',
+          closePrice: sina?.regularMarketPrice || em.regularMarketPrice,
+          regularMarketPreviousClose: sina?.regularMarketPreviousClose || em.regularMarketPreviousClose,
+          postMarketChangePercent: sina?.postMarketChangePercent || 0,
+          afterHoursPrice: sina?.afterHoursPrice || null,
+        };
+      }
       const sina = sinaMap[em.symbol];
       if (sina && sina.postMarketChangePercent !== undefined) {
         // 盘前时段: eastmoney f2/f3 已反映盘前实时价 vs 昨收，
@@ -623,7 +658,15 @@ app.get('/api/quotes', async (req, res) => {
 
     // For non-eastmoney symbols, use sina data directly (excluding those already in emData)
     const emSymSet = new Set(emSymbols.filter((s) => emMap[s]));
-    const puresinaData = (sinaData && sinaData.list || []).filter((q) => !emSymSet.has(q.symbol));
+    let puresinaData = (sinaData && sinaData.list || []).filter((q) => !emSymSet.has(q.symbol));
+
+    // 夜盘时段：对 sina fallback 的美股数据也注入 overnightChangePercent
+    if (usState === 'OVERNIGHT' && nqChgPct !== null) {
+      puresinaData = puresinaData.map((q) => {
+        if (!emSecid(q.symbol)) return q;  // 非美股不覆盖
+        return { ...q, overnightChangePercent: nqChgPct, marketState: 'OVERNIGHT' };
+      });
+    }
 
     const data = [...mergedEmData, ...puresinaData, ...krData, ...twData, ...yhData];
     if (data.length === 0) throw new Error('No quotes returned');

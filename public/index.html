@@ -822,13 +822,11 @@ function effectiveChange(q, opts = {}) {
     // 24h模式：实时显示当前时段数据
     // 盘中：直接用盘中实时涨跌
     if (s === 'REGULAR') return q.regularMarketChangePercent ?? 0;
-    // 盘前：显示盘后涨跌（afterHoursPrice vs 收盘价）
+    // 夜盘（ET 00:00-04:00）：用 NQ 期货涨跌代理
+    if (s === 'OVERNIGHT') return q.overnightChangePercent ?? 0;
+    // 盘前：eastmoney 的 regularMarketChangePercent 已是盘前实时价 vs 昨收
     if (s === 'PRE' || s === 'PREPRE') {
-      const closePrice = q.closePrice || q.regularMarketPrice;
-      if (q.afterHoursPrice && closePrice) {
-        return ((q.afterHoursPrice - closePrice) / closePrice) * 100;
-      }
-      return q.postMarketChangePercent ?? 0;
+      return q.regularMarketChangePercent ?? 0;
     }
     // 盘后/已收盘：用盘外最新价 vs 收盘价，显示盘外涨跌
     const closePrice = q.closePrice || q.regularMarketPrice;
@@ -917,8 +915,8 @@ function us24hSession() {
     if (min >= 960 && min < 1200) return '盘后';  // 16:00–20:00
     if (min >= 1200) return '夜盘';               // 20:00–24:00
   }
-  // 00:00–04:00 工作日 or 周末
-  if (weekday && min < 240) return '亚盘';
+  // 00:00–04:00 工作日：期货夜盘持续交易
+  if (weekday && min < 240) return '夜盘';
   return '亚盘';   // 周末
 }
 
