@@ -748,7 +748,8 @@ const CN_NAME = {
 //   105 NASDAQ   106 NYSE   107 NYSE-Arca/AMEX   116 HK
 //   0 SZ A-share   1 SH A-share
 //   KR (synthetic)  Korean KRX, fetched via Naver Finance
-const COVERED_MARKETS = new Set(['105', '106', '107', '116', '0', '1', 'KR']);
+//   JP (synthetic)  Japan TSE, fetched via Tencent Finance
+const COVERED_MARKETS = new Set(['105', '106', '107', '116', '0', '1', 'KR', 'JP']);
 const CNY_MARKETS     = new Set(['0', '1']);  // A-shares are already in CNY
 function isCovered(h) { return COVERED_MARKETS.has(String(h.market)); }
 function isCnyHolding(h) { return CNY_MARKETS.has(String(h.market)); }
@@ -759,6 +760,7 @@ function marketTag(m) {
   if (m === '116') return '港股';
   if (m === '0') return 'A股·深';
   if (m === '1') return 'A股·沪';
+  if (m === 'JP') return '日股';
   if (m === 'KR') return '韩股';
   return '';
 }

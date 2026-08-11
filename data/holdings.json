@@ -100,7 +100,7 @@
         "s": "285A",
         "w": 0.08810000000000001,
         "name_cn": "KIOXIA",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -202,7 +202,7 @@
         "s": "285A",
         "w": 0.0407,
         "name_cn": "KIOXIA",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -505,7 +505,7 @@
         "s": "285A",
         "w": 0.058899999999999994,
         "name_cn": "KIOXIA",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -635,7 +635,7 @@
         "s": "6857",
         "w": 0.0275,
         "name_cn": "爱德万测试",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -709,7 +709,7 @@
         "s": "6981",
         "w": 0.03,
         "name_cn": "村田制作所",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -1019,7 +1019,7 @@
         "s": "285A",
         "w": 0.045899999999999996,
         "name_cn": "KIOXIA",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -1475,10 +1475,10 @@
     "dataMode": "latest_report_only",
     "holdings": [
       {
-        "s": "JP3236330001",
+        "s": "285A",
         "w": 0.0388,
         "name_cn": "铠侠控股株式会社",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -1524,10 +1524,10 @@
         "source": "latest_report"
       },
       {
-        "s": "JP3684400009",
+        "s": "3110",
         "w": 0.0187,
         "name_cn": "日东纺织",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -1601,7 +1601,7 @@
         "s": "285A",
         "w": 0.0458,
         "name_cn": "KIOXIA",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -1851,7 +1851,7 @@
         "s": "285A",
         "w": 0.0373,
         "name_cn": "KIOXIA",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -1947,7 +1947,7 @@
         "s": "285A",
         "w": 0.0349,
         "name_cn": "KIOXIA",
-        "market": "other",
+        "market": "JP",
         "source": "latest_report"
       },
       {

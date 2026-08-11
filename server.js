@@ -79,6 +79,7 @@ function httpGet(url, headers = {}) {
 let fundsCache = null;
 let fundsCacheTs = 0;
 const tickerMarket = {};   // US ticker → eastmoney market id (105/106/107), built from holdings
+const JP_STOCKS_SET = new Set();  // 日股，从 holdings market=JP 填充，用腾讯行情
 
 function loadHoldingsFromFile() {
   const filePath = path.join(__dirname, 'data', 'holdings.json');
@@ -94,6 +95,7 @@ function loadHoldingsFromFile() {
     for (const h of (f.holdings || [])) {
       const m = String(h.market);
       if (m === '105' || m === '106' || m === '107') tickerMarket[h.s] = m;
+      if (m === 'JP') JP_STOCKS_SET.add(h.s);
     }
   }
   console.log(`[funds] loaded ${fundsCache.length} funds from data/holdings.json`);
@@ -122,8 +124,10 @@ function isKoreanSymbol(s) { return KR_STOCKS.has(s); }
 
 // 台股: 用 TWSE 官方 API (mis.twse.com.tw)，无频率限制
 function isTaiwanSymbol(s) { return /\.TW$/i.test(s); }
-// Yahoo Finance: 日股 (.T)、新加坡 (.SI) 等其他国际市场
-function isYahooSymbol(s) { return /\.(T|SI)$/i.test(s); }
+// 日股: market=JP，用腾讯行情 qt.gtimg.cn
+function isJapanSymbol(s) { return JP_STOCKS_SET.has(s); }
+// Yahoo Finance: 新加坡 (.SI) 等其他国际市场
+function isYahooSymbol(s) { return /\.SI$/i.test(s); }
 
 function toSinaId(symbol) {
   if (symbol === 'USDCNY=X') return 'fx_susdcny';
@@ -348,6 +352,38 @@ async function fetchYahooQuote(symbol) {
   };
 }
 
+// ──────────────────────────────────────────
+//  腾讯行情 fetcher (日股，qt.gtimg.cn)
+//  格式: v_jp{code}="351~名称~{code}.T~最新价~昨收~...~时间~..."
+// ──────────────────────────────────────────
+async function fetchJapanQuotes(symbols) {
+  const ids = symbols.map((s) => `jp${s}`).join(',');
+  const url = `https://qt.gtimg.cn/q=${ids}`;
+  const text = await httpGet(url, { Referer: 'https://finance.qq.com/' });
+  const map = {};
+  for (const line of text.split('\n')) {
+    const m = line.match(/v_jp(\w+)="([^"]+)"/);
+    if (!m) continue;
+    const sym = m[1].toUpperCase();
+    const fields = m[2].split('~');
+    // fields[3]=最新价  fields[4]=昨收  fields[5]=涨跌额  fields[37]=涨跌幅(含%)
+    const price    = parseFloat(fields[3]);
+    const prevClose = parseFloat(fields[4]);
+    if (!isFinite(price) || !isFinite(prevClose) || prevClose <= 0) continue;
+    const chgPct = ((price - prevClose) / prevClose) * 100;
+    map[sym] = {
+      symbol: sym,
+      regularMarketPrice: price,
+      regularMarketChangePercent: chgPct,
+      regularMarketPreviousClose: prevClose,
+      preMarketChangePercent: chgPct,
+      postMarketChangePercent: 0,
+      marketState: 'REGULAR',
+    };
+  }
+  return map;
+}
+
 function getUSMarketState() {
   const now = new Date();
   const month = now.getUTCMonth();
@@ -464,26 +500,45 @@ function parseSinaResponse(text, requestedSymbols) {
               : stripped;
       }
       const symbol = symMap.get(upper) || upper;
-      const price = parseFloat(fields[1]);
-      const chgPct = parseFloat(fields[2]);
-      if (isNaN(price) || isNaN(chgPct)) continue;
-      const prevClose = parseFloat(fields[26]) || parseFloat(fields[8]) || null;
-      // After-hours / pre-market price from Sina field[21]
-      const ahPrice = parseFloat(fields[21]);
+      const closePrice = parseFloat(fields[1]);   // 昨日正式收盘价
+      const prevClose  = parseFloat(fields[26]) || parseFloat(fields[8]) || null; // 前收盘(涨跌基准)
+      if (isNaN(closePrice)) continue;
+
+      // fields[21]: 盘前时段=盘前最新价，盘后时段=盘后最新价
+      // fields[5]:  盘前备用价（更新较慢）
+      const f21Price  = parseFloat(fields[21]);
+      const f5Price   = parseFloat(fields[5]);
+
+      // 根据时段选取实时价和涨跌幅
+      let price, chgPct, ahPrice = null;
+      if (usState === 'PRE') {
+        // 盘前：优先 fields[21]，fallback fields[5]
+        const prePrice = (!isNaN(f21Price) && f21Price > 0) ? f21Price
+                       : (!isNaN(f5Price)  && f5Price  > 0) ? f5Price
+                       : closePrice;
+        price  = prePrice;
+        chgPct = closePrice > 0 ? ((prePrice - closePrice) / closePrice) * 100 : 0;
+      } else {
+        price  = closePrice;
+        chgPct = parseFloat(fields[2]);
+        if (isNaN(chgPct)) chgPct = 0;
+        // 盘后：fields[21] 是盘后实时价
+        if (!isNaN(f21Price) && f21Price > 0) ahPrice = f21Price;
+      }
+
       let postChgPct = 0;
-      if (!isNaN(ahPrice) && ahPrice > 0 && price > 0) {
-        // post-market change relative to regular close price
-        postChgPct = ((ahPrice - price) / price) * 100;
+      if (ahPrice && closePrice > 0) {
+        postChgPct = ((ahPrice - closePrice) / closePrice) * 100;
       }
       map[symbol] = {
         symbol,
         regularMarketPrice: price,
-        closePrice: price,
+        closePrice,
         regularMarketChangePercent: chgPct,
         regularMarketPreviousClose: prevClose,
         preMarketChangePercent: chgPct,
         postMarketChangePercent: postChgPct,
-        afterHoursPrice: (!isNaN(ahPrice) && ahPrice > 0) ? ahPrice : null,
+        afterHoursPrice: ahPrice,
         marketState: usState,
       };
       continue;
@@ -545,12 +600,13 @@ app.get('/api/quotes', async (req, res) => {
     return res.json({ success: true, data: cached.data, cached: true });
   }
 
-  // Route each symbol: eastmoney(US) → Naver(KR) → TWSE(TW) → Yahoo(JP/SG) → Sina(forex/HK/A股/兜底)
+  // Route each symbol: eastmoney(US) → Naver(KR) → TWSE(TW) → Tencent(JP) → Yahoo(SG) → Sina(forex/HK/A股/兜底)
   const krSymbols   = symbols.filter((s) =>  isKoreanSymbol(s));
   const twSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && isTaiwanSymbol(s));
-  const yhSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && isYahooSymbol(s));
-  const emSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isYahooSymbol(s) && emSecid(s));
-  const sinaSymbols = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isYahooSymbol(s) && !emSecid(s));
+  const jpSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && isJapanSymbol(s));
+  const yhSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isJapanSymbol(s) && isYahooSymbol(s));
+  const emSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isJapanSymbol(s) && !isYahooSymbol(s) && emSecid(s));
+  const sinaSymbols = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isJapanSymbol(s) && !isYahooSymbol(s) && !emSecid(s));
   const secidToSym  = new Map(emSymbols.map((s) => [emSecid(s), s]));
 
   try {
@@ -569,7 +625,7 @@ app.get('/api/quotes', async (req, res) => {
     const sinaAll = [...sinaSymbols, ...emMissing, ...emSymbols.filter((s) => emMap[s])];
     const usState = getUSMarketState();
 
-    const [emData, sinaData, krData, twData, yhData, nqChgPct] = await Promise.all([
+    const [emData, sinaData, krData, twData, jpData, yhData, nqChgPct] = await Promise.all([
       emSymbols.map((s) => emMap[s]).filter(Boolean),
       (async () => {
         if (sinaAll.length === 0) return [];
@@ -591,6 +647,12 @@ app.get('/api/quotes', async (req, res) => {
             return [];
           })
         : [],
+      jpSymbols.length
+        ? fetchJapanQuotes(jpSymbols).then((m) => Object.values(m)).catch((e) => {
+            console.error('[tencent-jp]', e.message);
+            return [];
+          })
+        : [],
       Promise.all(
         yhSymbols.map((s) =>
           fetchYahooQuote(s).catch((e) => {
@@ -606,8 +668,9 @@ app.get('/api/quotes', async (req, res) => {
     ]);
 
     // Merge: for symbols that have both eastmoney and sina data,
-    // use eastmoney as base but overlay after-hours data from sina.
-    // 盘前(PRE)时 eastmoney f2/f3 已是盘前实时价(vs昨收)，不需要叠加 sina 的旧 post 数据。
+    // use eastmoney as base but overlay sina data by session:
+    // PRE: sina fields[5] 是盘前实时价，EM f2 盘前返回昨收，需用新浪覆盖
+    // POST/CLOSED: EM f2 是盘后实时价，比新浪更新更快，优先用 EM
     const sinaMap = (sinaData && sinaData.map) || {};
     const mergedEmData = emData.map((em) => {
       // 夜盘时段：用 NQ 期货涨跌幅代理，存入 overnightChangePercent 供 24h 视图使用
@@ -626,16 +689,18 @@ app.get('/api/quotes', async (req, res) => {
       }
       const sina = sinaMap[em.symbol];
       if (sina && sina.postMarketChangePercent !== undefined) {
-        // 盘前时段: eastmoney f2/f3 已反映盘前实时价 vs 昨收，
-        // 保留 sina 收盘价和盘后价供24h视图计算盘后涨跌
+        // 盘前时段: sina fields[5] 是盘前实时价，优先用新浪数据
+        // EM f2 在盘前返回的是昨收价，不可用
         if (usState === 'PRE') {
           return {
             ...em,
+            regularMarketPrice: sina.regularMarketPrice,           // 盘前实时价 (fields[5])
+            regularMarketChangePercent: sina.regularMarketChangePercent, // 盘前涨跌幅
+            preMarketChangePercent: sina.regularMarketChangePercent,
+            closePrice: sina.closePrice,                           // 昨收盘价 (fields[1])
             regularMarketPreviousClose: sina.regularMarketPreviousClose || em.regularMarketPreviousClose,
             postMarketChangePercent: sina.postMarketChangePercent || 0,
             afterHoursPrice: sina.afterHoursPrice || null,
-            // sina的regularMarketPrice是收盘价，存为closePrice供24h视图使用
-            closePrice: sina.regularMarketPrice || null,
           };
         }
         // 盘后/收盘时段: eastmoney f2 已是实时盘后价，比 sina fields[21] 更新更快。
@@ -668,7 +733,7 @@ app.get('/api/quotes', async (req, res) => {
       });
     }
 
-    const data = [...mergedEmData, ...puresinaData, ...krData, ...twData, ...yhData];
+    const data = [...mergedEmData, ...puresinaData, ...krData, ...twData, ...jpData, ...yhData];
     if (data.length === 0) throw new Error('No quotes returned');
     quoteCache.set(cacheKey, { data, ts: Date.now() });
     res.json({ success: true, data });
