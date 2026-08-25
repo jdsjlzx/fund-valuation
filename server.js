@@ -903,6 +903,94 @@ app.get('/api/index-ma', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
+//  /api/index-macd — 四大指数 MACD 柱状数据
+//  上证(sh000001) · 创业板(sz399006) · 纳指100ETF(sh513100) · KOSPI(Naver)
+//  日K数据来源：腾讯财经（新浪接口 scale=240 为周K，无日K）
+// ═══════════════════════════════════════════════════════
+
+// 腾讯财经日K：[日期, 开, 收, 高, 低, 量]
+async function fetchTencentDayKline(symbol, limit = 120) {
+  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${symbol},day,,,${limit},qfq`;
+  const txt = await httpGet(url, { Referer: 'https://gu.qq.com/' });
+  let j;
+  try { j = JSON.parse(txt); } catch { return []; }
+  const sym = j && j.data && j.data[symbol];
+  const rows = (sym && (sym.day || sym.qfqday)) || [];
+  return rows.map(r => ({ date: r[0], close: parseFloat(r[1]) }));
+}
+const INDEX_MACD_CACHE = { data: null, ts: 0 };
+const INDEX_MACD_TTL = 3600_000; // 1小时缓存
+
+// 计算 EMA
+function calcEMA(closes, period) {
+  const k = 2 / (period + 1);
+  const result = [];
+  let ema = closes[0];
+  result.push(ema);
+  for (let i = 1; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+    result.push(ema);
+  }
+  return result;
+}
+
+// 计算 MACD: 返回最近 N 根柱状值 [{date, bar, dif, dea}]
+function calcMACD(klines, barCount = 26) {
+  if (klines.length < 35) return [];
+  const closes = klines.map(k => k.close);
+  const ema12 = calcEMA(closes, 12);
+  const ema26 = calcEMA(closes, 26);
+  const dif = ema12.map((v, i) => v - ema26[i]);
+  const dea = calcEMA(dif, 9);
+  const result = [];
+  const start = Math.max(0, klines.length - barCount);
+  for (let i = start; i < klines.length; i++) {
+    result.push({
+      date: klines[i].date,
+      dif: dif[i],
+      dea: dea[i],
+      bar: (dif[i] - dea[i]) * 2,  // MACD 柱 = (DIF - DEA) × 2
+    });
+  }
+  return result;
+}
+
+app.get('/api/index-macd', async (req, res) => {
+  if (INDEX_MACD_CACHE.data && Date.now() - INDEX_MACD_CACHE.ts < INDEX_MACD_TTL) {
+    return res.json({ success: true, ...INDEX_MACD_CACHE.data });
+  }
+  try {
+    const klineLimit = 120; // 足够计算 EMA26 + DEA9（日K）
+    const start = new Date();
+    start.setFullYear(start.getFullYear() - 1);
+    const startStr = start.toISOString().slice(0, 10).replace(/-/g, '');
+
+    const [shKlines, cyKlines, ndxKlines, kospiKlines] = await Promise.all([
+      fetchTencentDayKline('sh000001', klineLimit),
+      fetchTencentDayKline('sz399006', klineLimit),
+      fetchTencentDayKline('sh513100', klineLimit),
+      fetchNaverIndexKline('KOSPI', startStr),
+    ]);
+
+    // 每个指数只返回最近 26 根柱（足够显示趋势）
+    const result = {
+      sh:    { name: '上证',     bars: calcMACD(shKlines,    21) },
+      cy:    { name: '创业板',   bars: calcMACD(cyKlines,    21) },
+      ndx:   { name: '纳斯达克', bars: calcMACD(ndxKlines,   21) },
+      kospi: { name: 'KOSPI',   bars: calcMACD(kospiKlines, 21) },
+    };
+
+    INDEX_MACD_CACHE.data = result;
+    INDEX_MACD_CACHE.ts = Date.now();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[index-macd]', err.message);
+    if (INDEX_MACD_CACHE.data) return res.json({ success: true, ...INDEX_MACD_CACHE.data, stale: true });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
 //  /api/fund-history — 基金近15/30/60天净值涨跌幅
 //  数据来源：天天基金净值历史 API
 // ═══════════════════════════════════════════════════════

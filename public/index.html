@@ -496,11 +496,12 @@
 
     /* ── 均线预警表格 ── */
     .ma-alert-section {
-      margin-top: 9px;
-      border-radius: 6px;
+      border-radius: 0;
       overflow: hidden;
-      border: 1px solid rgba(255,255,255,0.08);
+      border: none;
+      border-bottom: 1px solid var(--border-header);
       width: 100%;
+      background: var(--bg-vixy);
     }
     .ma-table {
       width: 100%;
@@ -600,7 +601,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 5px 8px;
+      padding: 6px 12px;
       background: rgba(255,255,255,0.06);
       cursor: pointer;
       user-select: none;
@@ -661,6 +662,185 @@
       color: #8899aa;
     }
     .ma-alert-section.collapsed .ma-table { display: none; }
+
+    /* ── MACD 柱状图区域 ── */
+    /* ── MACD 柱状图区域 ── */
+    .macd-section {
+      padding: 8px 12px 8px;
+      background: var(--bg-vixy);
+      border-bottom: 1px solid var(--border-header);
+    }
+    .macd-toggle-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 0 7px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .macd-toggle-title {
+      font-size: 11px;
+      color: #8899aa;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+    }
+    .macd-toggle-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .macd-toggle-label {
+      font-size: 11px;
+      color: #34c759;
+      transition: color 0.25s;
+      white-space: nowrap;
+      width: 52px;
+      text-align: right;
+    }
+    .macd-section.collapsed .macd-toggle-label { color: #8899aa; }
+    .macd-section.collapsed .ma-toggle-switch-track { background: rgba(255,255,255,0.18); }
+    .macd-section.collapsed .ma-toggle-switch-thumb { left: 2px; }
+    .macd-body { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .macd-section.collapsed .macd-body { display: none; }
+
+    /* 单个指数卡片 */
+    .macd-card {
+      background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 7px 8px 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 0;
+    }
+    @media (prefers-color-scheme: light) {
+      .macd-card {
+        background: rgba(0,0,0,0.025);
+        border-color: rgba(0,0,0,0.08);
+      }
+    }
+    .macd-card-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 4px;
+    }
+    .macd-card-name {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      letter-spacing: 0.2px;
+    }
+    .macd-card-dif {
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+      opacity: 0.85;
+    }
+    .macd-card-dif.pos { color: #e84c3d; }
+    .macd-card-dif.neg { color: #2ebd85; }
+
+    /* 柱状图容器：上下留出 badge 空间 */
+    .macd-chart-wrap {
+      position: relative;
+      height: 36px;
+      margin: 20px 0 20px;
+      overflow: visible;
+    }
+    .macd-zero-line {
+      position: absolute;
+      left: 0; right: 0;
+      top: 50%;
+      height: 1px;
+      background: rgba(255,255,255,0.12);
+      z-index: 1;
+    }
+    @media (prefers-color-scheme: light) {
+      .macd-zero-line { background: rgba(0,0,0,0.12); }
+    }
+    .macd-bars {
+      position: absolute;
+      left: 0; right: 0; top: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      z-index: 2;
+    }
+    .macd-bar-col {
+      flex: 1;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      min-width: 0;
+      max-width: 9px;
+    }
+    .macd-bar-top {
+      flex: 1;
+      display: flex;
+      align-items: flex-end;
+    }
+    .macd-bar-bot {
+      flex: 1;
+      display: flex;
+      align-items: flex-start;
+    }
+    .macd-bar {
+      width: 100%;
+      border-radius: 2px 2px 0 0;
+      min-height: 2px;
+    }
+    .macd-bar.neg { border-radius: 0 0 2px 2px; }
+    /* 历史柱：半透明 */
+    .macd-bar.pos { background: rgba(232,76,61,0.5); }
+    .macd-bar.neg { background: rgba(46,189,133,0.5); }
+    /* 最新柱：不透明 + 发光 */
+    .macd-bar.pos.latest {
+      background: #e84c3d;
+      box-shadow: 0 0 5px rgba(232,76,61,0.6);
+    }
+    .macd-bar.neg.latest {
+      background: #2ebd85;
+      box-shadow: 0 0 5px rgba(46,189,133,0.6);
+    }
+
+    /* 信号 badge：绝对定位在 macd-bar-col 上，固定在图表上/下边界外 */
+    .macd-signal-pin {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+      z-index: 20;
+      display: flex;
+      justify-content: center;
+    }
+    /* buy：图表上方，bottom 紧贴 chart-wrap 顶边 */
+    .macd-signal-pin.buy  { bottom: calc(100% + 3px); }
+    /* sell：图表下方，top 紧贴 chart-wrap 底边 */
+    .macd-signal-pin.sell { top: calc(100% + 3px); }
+    .macd-inline-signal {
+      display: inline-block;
+      font-size: 8px;
+      font-weight: 800;
+      line-height: 1.2;
+      padding: 3px 2px;
+      border-radius: 3px;
+      writing-mode: vertical-rl;
+      text-orientation: upright;
+      letter-spacing: 1px;
+    }
+    .macd-inline-signal.buy {
+      color: #fff;
+      background: #e84c3d;
+      box-shadow: 0 1px 4px rgba(232,76,61,0.45);
+    }
+    .macd-inline-signal.sell {
+      color: #fff;
+      background: #2ebd85;
+      box-shadow: 0 1px 4px rgba(46,189,133,0.45);
+    }
 
     /* ── 涨跌幅统计链接入口 ── */
     .vixy-chg-link {
@@ -1028,12 +1208,33 @@ async function fetchIndexMa() {
   } catch (e) { console.error('[index-ma]', e); }
 }
 
+// 四大指数 MACD 数据
+let INDEX_MACD = null;
+async function fetchIndexMacd() {
+  try {
+    const r = await fetch('/api/index-macd');
+    if (!r.ok) return;
+    const json = await r.json();
+    if (json.success) {
+      INDEX_MACD = { sh: json.sh, cy: json.cy, ndx: json.ndx, kospi: json.kospi };
+    }
+  } catch (e) { console.error('[index-macd]', e); }
+}
+
 function toggleMaAlert(bar) {
   const section = bar.closest('.ma-alert-section');
   const collapsed = section.classList.toggle('collapsed');
   localStorage.setItem('ma-alert-collapsed', collapsed ? '1' : '0');
   const label = bar.querySelector('.ma-toggle-label');
   if (label) label.textContent = collapsed ? '打开均线' : '关闭均线';
+}
+
+function toggleMacdSection(bar) {
+  const section = bar.closest('.macd-section');
+  const collapsed = section.classList.toggle('collapsed');
+  localStorage.setItem('macd-collapsed', collapsed ? '1' : '0');
+  const label = bar.querySelector('.macd-toggle-label');
+  if (label) label.textContent = collapsed ? '打开MACD' : '关闭MACD';
 }
 
 // ═══════════════════════════════════════════════════
@@ -1081,6 +1282,123 @@ function flashClass(prev, cur) {
   if (d >  FLASH_EPS) return 'flash-up';
   if (d < -FLASH_EPS) return 'flash-down';
   return '';
+}
+
+function macdSectionHtml() {
+  const collapsed = localStorage.getItem('macd-collapsed') === '1';
+
+  const indices = [
+    { key: 'sh',    label: '上证' },
+    { key: 'cy',    label: '创业板' },
+    { key: 'ndx',   label: '纳斯达克' },
+    { key: 'kospi', label: 'KOSPI' },
+  ];
+
+  function renderCard(label, data) {
+    if (!data || !data.bars || !data.bars.length) {
+      return `
+        <div class="macd-card">
+          <div class="macd-card-header">
+            <span class="macd-card-name">${label}</span>
+            <span class="macd-card-dif" style="color:#5a6a7a">--</span>
+          </div>
+          <div class="macd-chart-wrap">
+            <div class="macd-zero-line"></div>
+            <div class="macd-bars" style="justify-content:center"><span style="font-size:9px;color:#5a6a7a">加载中</span></div>
+          </div>
+        </div>`;
+    }
+    const bars = data.bars;
+    const last = bars[bars.length - 1];
+    const difCls = last.dif >= 0 ? 'pos' : 'neg';
+    const difSign = last.dif >= 0 ? '+' : '';
+    const difTxt = `DIF ${difSign}${last.dif.toFixed(2)}`;
+
+    // 预计算每根柱的翻转信号（与前一根对比）
+    const signals = bars.map((b, i) => {
+      if (i === 0) return null;
+      const p = bars[i - 1].bar;
+      if (p < 0 && b.bar >= 0) return 'buy';   // 绿转红
+      if (p >= 0 && b.bar < 0) return 'sell';  // 红转绿
+      return null;
+    });
+
+    const maxAbs = Math.max(...bars.map(b => Math.abs(b.bar)), 0.0001);
+    const MAX_HALF = 18;
+    // 收集所有信号的位置，用于在 chart-wrap 上叠加
+    const pinOverlays = [];
+    const barsHtml = bars.map((b, i) => {
+      const isLatest = i === bars.length - 1;
+      const h = Math.max(1, Math.round(Math.abs(b.bar) / maxAbs * MAX_HALF));
+      const posCls = b.bar >= 0 ? 'pos' : 'neg';
+      const latestCls = isLatest ? ' latest' : '';
+      const sig = signals[i];
+      // 记录信号位置（百分比），稍后在 chart-wrap 层叠加
+      if (sig) {
+        const pct = ((i + 0.5) / bars.length * 100).toFixed(1);
+        pinOverlays.push({ sig, pct });
+      }
+      if (b.bar >= 0) {
+        return `<div class="macd-bar-col"><div class="macd-bar-top"><div class="macd-bar ${posCls}${latestCls}" style="height:${h}px"></div></div><div class="macd-bar-bot"></div></div>`;
+      } else {
+        return `<div class="macd-bar-col"><div class="macd-bar-top"></div><div class="macd-bar-bot"><div class="macd-bar ${posCls}${latestCls}" style="height:${h}px"></div></div></div>`;
+      }
+    }).join('');
+
+    // 把所有 pin 渲染为相对 chart-wrap 绝对定位的元素
+    const pinsHtml = pinOverlays.map(({ sig, pct }) => {
+      if (sig === 'buy') {
+        return `<div class="macd-signal-pin buy" style="left:${pct}%"><span class="macd-inline-signal buy">▲加仓</span></div>`;
+      } else {
+        return `<div class="macd-signal-pin sell" style="left:${pct}%"><span class="macd-inline-signal sell">▼减仓</span></div>`;
+      }
+    }).join('');
+
+    return `
+      <div class="macd-card">
+        <div class="macd-card-header">
+          <span class="macd-card-name">${label}</span>
+          <span class="macd-card-dif ${difCls}">${difTxt}</span>
+        </div>
+        <div class="macd-chart-wrap">
+          <div class="macd-zero-line"></div>
+          <div class="macd-bars">${barsHtml}</div>
+          ${pinsHtml}
+        </div>
+      </div>`;
+  }
+
+  // 从第一个有数据的指数取日期区间
+  let dateRangeStr = '';
+  for (const { key } of indices) {
+    const bars = INDEX_MACD && INDEX_MACD[key] && INDEX_MACD[key].bars;
+    if (bars && bars.length >= 2) {
+      const fmt = d => d.length === 8
+        ? `${d.slice(4,6)}/${d.slice(6,8)}`
+        : `${d.slice(5,7)}/${d.slice(8,10)}`;
+      dateRangeStr = `${fmt(bars[0].date)}～${fmt(bars[bars.length-1].date)}`;
+      break;
+    }
+  }
+
+  const cardsHtml = indices.map(({ key, label }) =>
+    renderCard(label, INDEX_MACD ? INDEX_MACD[key] : null)
+  ).join('');
+
+  return `
+    <div class="macd-section${collapsed ? ' collapsed' : ''}">
+      <div class="macd-toggle-bar" onclick="toggleMacdSection(this)">
+        <span class="macd-toggle-title">MACD 柱状图${dateRangeStr ? `<span style="font-weight:400;color:#5a6a7a;margin-left:6px;">${dateRangeStr}</span>` : ''}</span>
+        <div class="macd-toggle-right">
+          <span class="macd-toggle-label">${collapsed ? '打开MACD' : '关闭MACD'}</span>
+          <div class="ma-toggle-switch">
+            <div class="ma-toggle-switch-track"></div>
+            <div class="ma-toggle-switch-thumb"></div>
+          </div>
+        </div>
+      </div>
+      <div class="macd-body">${cardsHtml}</div>
+    </div>`;
 }
 
 function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
@@ -1138,6 +1456,8 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
       </table>
     </div>`;
 
+  const macdHtml = macdSectionHtml();
+
   // VIXY < 25: 正常状态，仅显示价格信息
   if (!vixyPrice || vixyPrice < 25) return `
     <div class="vixy-bar">
@@ -1148,8 +1468,9 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
         <span class="vixy-signal ${vixySignal.cls}">${vixySignal.text}</span>
         ${showChgLink ? `<span class="vixy-chg-link" onclick="go('#/history')">涨跌幅统计</span>` : ''}
       </div>
-      ${maAlertHtml}
-    </div>`;
+    </div>
+    ${macdHtml}
+    ${maAlertHtml}`;
 
   // VIXY >= 25: 带加仓建议的合并横幅
   let alertCls, amount, tip;
@@ -1178,8 +1499,9 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
         <span class="alert-amount">建议加仓 QQQ：${amount}</span>
         <span class="alert-tip">${tip}</span>
       </div>
-      ${maAlertHtml}
-    </div>`;
+    </div>
+    ${macdHtml}
+    ${maAlertHtml}`;
 }
 
 function renderList() {
@@ -1645,8 +1967,9 @@ async function bootstrap() {
     if (!funds.length) throw new Error('基金列表为空');
     FUNDS = funds.filter(f => f && (f.name || f.code));
     if (!FUNDS.length) throw new Error('未获取到任何持仓数据');
-    fetchAshareMa();  // 非阻塞加载A股MA数据
-    fetchIndexMa();   // 非阻塞加载四大指数均线预警
+    fetchAshareMa();   // 非阻塞加载A股MA数据
+    fetchIndexMa();    // 非阻塞加载四大指数均线预警
+    fetchIndexMacd();  // 非阻塞加载四大指数MACD数据
     loadDrawdownData(); // 非阻塞加载近一年最大回撤
     await pollLoop();
   } catch (e) {
@@ -1663,6 +1986,7 @@ window.toggleSort = toggleSort;
 window.togglePin = togglePin;
 window.setHistoryPeriod = setHistoryPeriod;
 window.toggleHistorySort = toggleHistorySort;
+window.toggleMacdSection = toggleMacdSection;
 
 bootstrap();
 </script>
