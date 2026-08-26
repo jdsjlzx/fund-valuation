@@ -765,7 +765,7 @@
       left: 0; right: 0; top: 0; bottom: 0;
       display: flex;
       align-items: center;
-      gap: 2px;
+      gap: 5px;
       z-index: 2;
     }
     .macd-bar-col {
@@ -775,7 +775,8 @@
       flex-direction: column;
       align-items: stretch;
       min-width: 0;
-      max-width: 9px;
+      max-width: 6px;
+      position: relative;
     }
     .macd-bar-top {
       flex: 1;
@@ -805,8 +806,20 @@
       background: #2ebd85;
       box-shadow: 0 0 5px rgba(46,189,133,0.6);
     }
+    .macd-bar.pos.intraday {
+      background: rgba(232,76,61,0.3);
+      border: 1px dashed #e84c3d;
+      box-sizing: border-box;
+      box-shadow: none;
+    }
+    .macd-bar.neg.intraday {
+      background: rgba(46,189,133,0.3);
+      border: 1px dashed #2ebd85;
+      box-sizing: border-box;
+      box-shadow: none;
+    }
 
-    /* 信号 badge：绝对定位在 macd-bar-col 上，固定在图表上/下边界外 */
+    /* 信号 badge：绝对定位在 macd-bar-col 内，水平居中对齐柱子 */
     .macd-signal-pin {
       position: absolute;
       left: 50%;
@@ -816,30 +829,32 @@
       display: flex;
       justify-content: center;
     }
-    /* buy：图表上方，bottom 紧贴 chart-wrap 顶边 */
+    /* buy：柱子上方 */
     .macd-signal-pin.buy  { bottom: calc(100% + 3px); }
-    /* sell：图表下方，top 紧贴 chart-wrap 底边 */
+    /* sell：柱子下方 */
     .macd-signal-pin.sell { top: calc(100% + 3px); }
     .macd-inline-signal {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 11px;
+      height: 11px;
       font-size: 8px;
-      font-weight: 800;
-      line-height: 1.2;
-      padding: 3px 2px;
-      border-radius: 3px;
-      writing-mode: vertical-rl;
-      text-orientation: upright;
-      letter-spacing: 1px;
+      font-weight: 900;
+      line-height: 1;
+      border-radius: 50%;
+      font-family: 'Arial', sans-serif;
+      letter-spacing: 0;
     }
     .macd-inline-signal.buy {
       color: #fff;
       background: #e84c3d;
-      box-shadow: 0 1px 4px rgba(232,76,61,0.45);
+      box-shadow: 0 1px 5px rgba(232,76,61,0.55);
     }
     .macd-inline-signal.sell {
       color: #fff;
       background: #2ebd85;
-      box-shadow: 0 1px 4px rgba(46,189,133,0.45);
+      box-shadow: 0 1px 5px rgba(46,189,133,0.55);
     }
 
     /* ── 涨跌幅统计链接入口 ── */
@@ -1314,43 +1329,22 @@ function macdSectionHtml() {
     const difSign = last.dif >= 0 ? '+' : '';
     const difTxt = `DIF ${difSign}${last.dif.toFixed(2)}`;
 
-    // 预计算每根柱的翻转信号（与前一根对比）
-    const signals = bars.map((b, i) => {
-      if (i === 0) return null;
-      const p = bars[i - 1].bar;
-      if (p < 0 && b.bar >= 0) return 'buy';   // 绿转红
-      if (p >= 0 && b.bar < 0) return 'sell';  // 红转绿
-      return null;
-    });
-
     const maxAbs = Math.max(...bars.map(b => Math.abs(b.bar)), 0.0001);
     const MAX_HALF = 18;
-    // 收集所有信号的位置，用于在 chart-wrap 上叠加
-    const pinOverlays = [];
     const barsHtml = bars.map((b, i) => {
       const isLatest = i === bars.length - 1;
       const h = Math.max(1, Math.round(Math.abs(b.bar) / maxAbs * MAX_HALF));
       const posCls = b.bar >= 0 ? 'pos' : 'neg';
-      const latestCls = isLatest ? ' latest' : '';
-      const sig = signals[i];
-      // 记录信号位置（百分比），稍后在 chart-wrap 层叠加
-      if (sig) {
-        const pct = ((i + 0.5) / bars.length * 100).toFixed(1);
-        pinOverlays.push({ sig, pct });
-      }
+      const intradayCls = b.intraday ? ' intraday' : '';
+      const latestCls = (isLatest && !b.intraday) ? ' latest' : '';
+      const sig = b.signal || null;
+      const pinHtml = sig
+        ? `<span class="macd-signal-pin ${sig}"><span class="macd-inline-signal ${sig}">${sig === 'buy' ? 'B' : 'S'}</span></span>`
+        : '';
       if (b.bar >= 0) {
-        return `<div class="macd-bar-col"><div class="macd-bar-top"><div class="macd-bar ${posCls}${latestCls}" style="height:${h}px"></div></div><div class="macd-bar-bot"></div></div>`;
+        return `<div class="macd-bar-col">${pinHtml}<div class="macd-bar-top"><div class="macd-bar ${posCls}${latestCls}${intradayCls}" style="height:${h}px"></div></div><div class="macd-bar-bot"></div></div>`;
       } else {
-        return `<div class="macd-bar-col"><div class="macd-bar-top"></div><div class="macd-bar-bot"><div class="macd-bar ${posCls}${latestCls}" style="height:${h}px"></div></div></div>`;
-      }
-    }).join('');
-
-    // 把所有 pin 渲染为相对 chart-wrap 绝对定位的元素
-    const pinsHtml = pinOverlays.map(({ sig, pct }) => {
-      if (sig === 'buy') {
-        return `<div class="macd-signal-pin buy" style="left:${pct}%"><span class="macd-inline-signal buy">▲加仓</span></div>`;
-      } else {
-        return `<div class="macd-signal-pin sell" style="left:${pct}%"><span class="macd-inline-signal sell">▼减仓</span></div>`;
+        return `<div class="macd-bar-col">${pinHtml}<div class="macd-bar-top"></div><div class="macd-bar-bot"><div class="macd-bar ${posCls}${latestCls}${intradayCls}" style="height:${h}px"></div></div></div>`;
       }
     }).join('');
 
@@ -1363,7 +1357,6 @@ function macdSectionHtml() {
         <div class="macd-chart-wrap">
           <div class="macd-zero-line"></div>
           <div class="macd-bars">${barsHtml}</div>
-          ${pinsHtml}
         </div>
       </div>`;
   }
@@ -1376,7 +1369,9 @@ function macdSectionHtml() {
       const fmt = d => d.length === 8
         ? `${d.slice(4,6)}/${d.slice(6,8)}`
         : `${d.slice(5,7)}/${d.slice(8,10)}`;
-      dateRangeStr = `${fmt(bars[0].date)}～${fmt(bars[bars.length-1].date)}`;
+      const lastBar = bars[bars.length - 1];
+      const endLabel = fmt(lastBar.date) + (lastBar.intraday ? '<span style="color:#e8a03d;font-size:9px;margin-left:2px;">盘中</span>' : '');
+      dateRangeStr = `${fmt(bars[0].date)}～${endLabel}`;
       break;
     }
   }

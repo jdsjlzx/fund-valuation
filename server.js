@@ -908,6 +908,43 @@ app.get('/api/index-ma', async (req, res) => {
 //  日K数据来源：腾讯财经（新浪接口 scale=240 为周K，无日K）
 // ═══════════════════════════════════════════════════════
 
+// 判断当前是否在 A 股交易时间（北京时间 9:30~11:30 或 13:00~15:00，周一至周五）
+function isAShareTradingTime() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const day = now.getDay();
+  if (day === 0 || day === 6) return false;
+  const t = now.getHours() * 60 + now.getMinutes();
+  return (t >= 570 && t <= 690) || (t >= 780 && t <= 900);
+}
+
+// 获取 Sina 实时行情（用于 MACD 盘中柱），返回 { sinaId: { price, date } }
+async function fetchSinaRealtimePrice(sinaIds) {
+  const txt = await new Promise((resolve, reject) => {
+    const url = `https://hq.sinajs.cn/list=${sinaIds.join(',')}`;
+    const req = https.get(url, {
+      headers: { Referer: 'https://finance.sina.com.cn/', 'User-Agent': 'Mozilla/5.0' },
+      timeout: 8000,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('latin1')));
+      res.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+  });
+  const result = {};
+  for (const line of txt.split('\n')) {
+    const m = line.match(/hq_str_([^=]+)="([^"]*)"/);
+    if (!m) continue;
+    const fields = m[2].split(',');
+    const price = parseFloat(fields[3]);
+    const date = fields[30] && fields[30].trim();
+    if (price > 0 && date) result[m[1]] = { price, date };
+  }
+  return result;
+}
+
 // 腾讯财经日K：[日期, 开, 收, 高, 低, 量]
 async function fetchTencentDayKline(symbol, limit = 120) {
   const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${symbol},day,,,${limit},qfq`;
@@ -919,7 +956,8 @@ async function fetchTencentDayKline(symbol, limit = 120) {
   return rows.map(r => ({ date: r[0], close: parseFloat(r[1]) }));
 }
 const INDEX_MACD_CACHE = { data: null, ts: 0 };
-const INDEX_MACD_TTL = 3600_000; // 1小时缓存
+const INDEX_MACD_TTL_NORMAL  = 3600_000; // 非交易时间：1小时
+const INDEX_MACD_TTL_TRADING =  180_000; // 交易时间内：3分钟
 
 // 计算 EMA
 function calcEMA(closes, period) {
@@ -934,7 +972,10 @@ function calcEMA(closes, period) {
   return result;
 }
 
-// 计算 MACD: 返回最近 N 根柱状值 [{date, bar, dif, dea}]
+// 计算 MACD: 返回最近 N 根柱状值 [{date, bar, dif, dea, signal?, intraday?}]
+// 信号算法：方案三（柱缩短）+ 方案四（MA5/MA21 趋势过滤）
+//   买入：MA5 < MA21（空头/超跌）且绿柱连续缩短 → 超跌反弹买点
+//   卖出：MA5 > MA21（多头/高位）且红柱连续缩短 → 高位回调卖点
 function calcMACD(klines, barCount = 26) {
   if (klines.length < 35) return [];
   const closes = klines.map(k => k.close);
@@ -942,21 +983,62 @@ function calcMACD(klines, barCount = 26) {
   const ema26 = calcEMA(closes, 26);
   const dif = ema12.map((v, i) => v - ema26[i]);
   const dea = calcEMA(dif, 9);
-  const result = [];
+
+  // 计算每根柱对应位置的 MA5 / MA21
+  const ma5arr  = closes.map((_, i) => i >= 4  ? closes.slice(i - 4,  i + 1).reduce((s, v) => s + v, 0) / 5  : null);
+  const ma21arr = closes.map((_, i) => i >= 20 ? closes.slice(i - 20, i + 1).reduce((s, v) => s + v, 0) / 21 : null);
+
+  const bars = [];
   const start = Math.max(0, klines.length - barCount);
   for (let i = start; i < klines.length; i++) {
-    result.push({
+    const entry = {
       date: klines[i].date,
       dif: dif[i],
       dea: dea[i],
-      bar: (dif[i] - dea[i]) * 2,  // MACD 柱 = (DIF - DEA) × 2
-    });
+      bar: (dif[i] - dea[i]) * 2,
+    };
+    if (klines[i].intraday) entry.intraday = true;
+    bars.push(entry);
   }
-  return result;
+
+  // 标记信号：遍历 bars（i 对应全局索引 start+j）
+  for (let j = 2; j < bars.length; j++) {
+    const gi = start + j; // 在 klines 中的全局索引
+    const cur  = bars[j];
+    const prev = bars[j - 1];
+    const prev2 = bars[j - 2];
+    const ma5  = ma5arr[gi];
+    const ma21 = ma21arr[gi];
+    if (ma5 === null || ma21 === null) continue;
+
+    const bullTrend = ma5 > ma21;  // 多头排列（高位）
+    const bearTrend = ma5 < ma21;  // 空头排列（超跌）
+
+    // 方案三：绿柱（bar<0）连续缩短 = 绝对值连续减小
+    const negShrinking =
+      cur.bar < 0 && prev.bar < 0 && prev2.bar < 0 &&
+      Math.abs(cur.bar) < Math.abs(prev.bar) &&
+      Math.abs(prev.bar) < Math.abs(prev2.bar);
+
+    // 方案三：红柱（bar>0）连续缩短
+    const posShrinking =
+      cur.bar > 0 && prev.bar > 0 && prev2.bar > 0 &&
+      Math.abs(cur.bar) < Math.abs(prev.bar) &&
+      Math.abs(prev.bar) < Math.abs(prev2.bar);
+
+    // 超跌反弹买点：空头排列 + 绿柱收敛
+    if (bearTrend && negShrinking) cur.signal = 'buy';
+    // 高位回调卖点：多头排列 + 红柱收敛
+    else if (bullTrend && posShrinking) cur.signal = 'sell';
+  }
+
+  return bars;
 }
 
 app.get('/api/index-macd', async (req, res) => {
-  if (INDEX_MACD_CACHE.data && Date.now() - INDEX_MACD_CACHE.ts < INDEX_MACD_TTL) {
+  const trading = isAShareTradingTime();
+  const ttl = trading ? INDEX_MACD_TTL_TRADING : INDEX_MACD_TTL_NORMAL;
+  if (INDEX_MACD_CACHE.data && Date.now() - INDEX_MACD_CACHE.ts < ttl) {
     return res.json({ success: true, ...INDEX_MACD_CACHE.data });
   }
   try {
@@ -966,13 +1048,37 @@ app.get('/api/index-macd', async (req, res) => {
     const startStr = start.toISOString().slice(0, 10).replace(/-/g, '');
 
     const [shKlines, cyKlines, ndxKlines, kospiKlines] = await Promise.all([
-      fetchTencentDayKline('sh000001', klineLimit),
-      fetchTencentDayKline('sz399006', klineLimit),
-      fetchTencentDayKline('sh513100', klineLimit),
+      fetchKline('sh000001', klineLimit),
+      fetchKline('sz399006', klineLimit),
+      fetchKline('sh513100', klineLimit),
       fetchNaverIndexKline('KOSPI', startStr),
     ]);
 
-    // 每个指数只返回最近 26 根柱（足够显示趋势）
+    // 交易时间内：追加盘中实时柱（上证、创业板、纳指ETF）
+    if (trading) {
+      try {
+        const rt = await fetchSinaRealtimePrice(['sh000001', 'sz399006', 'sh513100']);
+        const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }); // YYYY-MM-DD
+        const pairs = [
+          { klines: shKlines,  id: 'sh000001' },
+          { klines: cyKlines,  id: 'sz399006' },
+          { klines: ndxKlines, id: 'sh513100' },
+        ];
+        for (const { klines, id } of pairs) {
+          const q = rt[id];
+          if (!q) continue;
+          const lastDate = klines.length ? klines[klines.length - 1].date : '';
+          // 只有当历史K末尾不是今天才追加
+          if (q.date === todayStr && lastDate !== todayStr) {
+            klines.push({ date: todayStr, close: q.price, intraday: true });
+          }
+        }
+      } catch (e) {
+        console.warn('[index-macd] realtime fetch failed:', e.message);
+      }
+    }
+
+    // 每个指数只返回最近 21 根柱（足够显示趋势）
     const result = {
       sh:    { name: '上证',     bars: calcMACD(shKlines,    21) },
       cy:    { name: '创业板',   bars: calcMACD(cyKlines,    21) },
