@@ -1008,7 +1008,7 @@ function allSymbols() {
   return [...set];
 }
 
-// mode: 'default' (homepage) — REGULAR shows realtime, all other states show last reg+post
+// mode: 'default' (homepage) — REGULAR shows realtime, all other states show last reg only
 //       '24h' — 实时价格 vs 前收盘：盘中用regular涨跌，盘后/隔夜用 reg+post 累计
 function effectiveChange(q, opts = {}) {
   if (!q) return null;
@@ -1019,8 +1019,13 @@ function effectiveChange(q, opts = {}) {
     // 24h模式：实时显示当前时段数据
     // 盘中：直接用盘中实时涨跌
     if (s === 'REGULAR') return q.regularMarketChangePercent ?? 0;
-    // 夜盘（ET 00:00-04:00）：用 NQ 期货涨跌代理
-    if (s === 'OVERNIGHT') return q.overnightChangePercent ?? 0;
+    // 夜盘（ET 00:00-04:00）：优先用 NQ 期货涨跌，失败时 fallback 到盘后涨跌
+    if (s === 'OVERNIGHT') {
+      if (q.overnightChangePercent != null) return q.overnightChangePercent;
+      const closePrice = q.closePrice || q.regularMarketPrice;
+      if (q.afterHoursPrice && closePrice) return ((q.afterHoursPrice - closePrice) / closePrice) * 100;
+      return q.postMarketChangePercent ?? 0;
+    }
     // 盘前：eastmoney 的 regularMarketChangePercent 已是盘前实时价 vs 昨收
     if (s === 'PRE' || s === 'PREPRE') {
       return q.regularMarketChangePercent ?? 0;
@@ -1036,10 +1041,8 @@ function effectiveChange(q, opts = {}) {
 
   if (s === 'REGULAR') return q.regularMarketChangePercent ?? null;
 
-  // POST / PRE-in-default / CLOSED: yesterday's regular + after-hours
-  const reg = q.regularMarketChangePercent ?? 0;
-  const post = q.postMarketChangePercent ?? 0;
-  return reg + post * (1 + reg / 100);
+  // 夜盘/盘前/盘后/已收盘：只显示正规盘涨跌幅，不叠加盘后
+  return q.regularMarketChangePercent ?? 0;
 }
 
 function calcFund(fund, qmap, forexChg, opts = {}) {

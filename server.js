@@ -400,20 +400,19 @@ function getUSMarketState() {
   return 'OVERNIGHT';
 }
 
-// 夜盘：通过 Yahoo Finance 获取纳指期货 NQ=F 涨跌幅，代理美股夜盘行情
+// 夜盘：通过东方财富获取小型纳指期货 NQ00Y 涨跌幅，代理美股夜盘行情
 async function fetchNQFutures() {
-  const url = 'https://query2.finance.yahoo.com/v8/finance/chart/NQ%3DF?interval=1d&range=1d';
+  const url = 'https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=103.NQ00Y&fields=f2,f3,f12,f13,f14,f18&fltt=2';
   let text;
-  try { text = await httpGetWithStatus(url, { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' }); }
+  try { text = await httpGet(url, { Referer: 'https://quote.eastmoney.com/' }); }
   catch (e) { console.error('[nq-futures fetch]', e.message); return null; }
   let j;
   try { j = JSON.parse(text); } catch { return null; }
-  const meta = j && j.chart && j.chart.result && j.chart.result[0] && j.chart.result[0].meta;
-  if (!meta) return null;
-  const price = meta.regularMarketPrice;
-  const prev  = meta.chartPreviousClose || meta.previousClose;
-  if (!price || !prev) return null;
-  return ((price - prev) / prev) * 100;
+  const diff = j && j.data && j.data.diff && j.data.diff[0];
+  if (!diff) return null;
+  const chg = Number(diff.f3);
+  if (!isFinite(chg)) return null;
+  return chg;
 }
 
 // ──────────────────────────────────────────
