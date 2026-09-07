@@ -703,6 +703,20 @@
     .macd-section.collapsed .ma-toggle-switch-thumb { left: 2px; }
     .macd-body { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
     .macd-section.collapsed .macd-body { display: none; }
+    .macd-legend {
+      display: flex;
+      gap: 10px;
+      padding: 5px 2px 2px;
+      flex-wrap: wrap;
+    }
+    .macd-section.collapsed .macd-legend { display: none; }
+    .macd-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 9px;
+      color: #5a6a7a;
+    }
 
     /* 单个指数卡片 */
     .macd-card {
@@ -1435,6 +1449,13 @@ function macdSectionHtml() {
         </div>
       </div>
       <div class="macd-body">${cardsHtml}</div>
+      <div class="macd-legend">
+        <span class="macd-legend-item"><span class="macd-inline-signal buy">B</span>强买</span>
+        <span class="macd-legend-item"><span class="macd-inline-signal buy_weak">B</span>弱买</span>
+        <span class="macd-legend-item"><span class="macd-inline-signal sell">S</span>强卖</span>
+        <span class="macd-legend-item"><span class="macd-inline-signal sell_weak">S</span>弱卖</span>
+        <span class="macd-legend-item"><span class="macd-inline-signal sell_ma">S</span>破MA21</span>
+      </div>
     </div>`;
 }
 
