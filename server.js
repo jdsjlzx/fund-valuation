@@ -916,6 +916,15 @@ function isAShareTradingTime() {
   return (t >= 570 && t <= 690) || (t >= 780 && t <= 900);
 }
 
+// 判断当前是否在 A 股收盘后的工作日（北京时间 15:00~23:59，周一至周五）
+function isAShareAfterHours() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const day = now.getDay();
+  if (day === 0 || day === 6) return false;
+  const t = now.getHours() * 60 + now.getMinutes();
+  return t >= 900; // 15:00 之后
+}
+
 // 获取 Sina 实时行情（用于 MACD 盘中柱），返回 { sinaId: { price, date } }
 async function fetchSinaRealtimePrice(sinaIds) {
   const txt = await new Promise((resolve, reject) => {
@@ -972,9 +981,13 @@ function calcEMA(closes, period) {
 }
 
 // 计算 MACD: 返回最近 N 根柱状值 [{date, bar, dif, dea, signal?, intraday?}]
-// 信号算法：方案三（柱缩短）+ 方案四（MA5/MA21 趋势过滤）
-//   买入：MA5 < MA21（空头/超跌）且绿柱连续缩短 → 超跌反弹买点
-//   卖出：MA5 > MA21（多头/高位）且红柱连续缩短 → 高位回调卖点
+// 信号算法：金叉/死叉 + 零轴位置 + MA5/MA21 趋势过滤
+//   金叉（DIF 上穿 DEA）：
+//     零轴上方金叉 + MA5>MA21（多头）→ 强买入 'buy'
+//     零轴下方金叉 + MA5<MA21（空头）→ 弱买入 'buy_weak'
+//   死叉（DIF 下穿 DEA）：
+//     零轴上方死叉 + MA5>MA21（多头）→ 强卖出 'sell'
+//     零轴下方死叉 + MA5<MA21（空头）→ 弱卖出忽略（已在跌，意义不大）
 function calcMACD(klines, barCount = 26) {
   if (klines.length < 35) return [];
   const closes = klines.map(k => k.close);
@@ -1001,34 +1014,30 @@ function calcMACD(klines, barCount = 26) {
   }
 
   // 标记信号：遍历 bars（i 对应全局索引 start+j）
-  for (let j = 2; j < bars.length; j++) {
-    const gi = start + j; // 在 klines 中的全局索引
+  // 从 j=1 开始，需要前一根判断交叉方向
+  for (let j = 1; j < bars.length; j++) {
+    const gi = start + j;
     const cur  = bars[j];
     const prev = bars[j - 1];
-    const prev2 = bars[j - 2];
     const ma5  = ma5arr[gi];
     const ma21 = ma21arr[gi];
     if (ma5 === null || ma21 === null) continue;
 
-    const bullTrend = ma5 > ma21;  // 多头排列（高位）
-    const bearTrend = ma5 < ma21;  // 空头排列（超跌）
+    // 金叉：prev.dif < prev.dea 且 cur.dif >= cur.dea（DIF 上穿 DEA）
+    const goldenCross = prev.dif < prev.dea && cur.dif >= cur.dea;
+    // 死叉：prev.dif > prev.dea 且 cur.dif <= cur.dea（DIF 下穿 DEA）
+    const deathCross  = prev.dif > prev.dea && cur.dif <= cur.dea;
 
-    // 方案三：绿柱（bar<0）连续缩短 = 绝对值连续减小
-    const negShrinking =
-      cur.bar < 0 && prev.bar < 0 && prev2.bar < 0 &&
-      Math.abs(cur.bar) < Math.abs(prev.bar) &&
-      Math.abs(prev.bar) < Math.abs(prev2.bar);
+    const aboveZero = cur.dif > 0; // 金叉/死叉发生在零轴上方
+    const bullTrend = ma5 > ma21;
+    const bearTrend = ma5 < ma21;
 
-    // 方案三：红柱（bar>0）连续缩短
-    const posShrinking =
-      cur.bar > 0 && prev.bar > 0 && prev2.bar > 0 &&
-      Math.abs(cur.bar) < Math.abs(prev.bar) &&
-      Math.abs(prev.bar) < Math.abs(prev2.bar);
-
-    // 超跌反弹买点：空头排列 + 绿柱收敛
-    if (bearTrend && negShrinking) cur.signal = 'buy';
-    // 高位回调卖点：多头排列 + 红柱收敛
-    else if (bullTrend && posShrinking) cur.signal = 'sell';
+    if (goldenCross) {
+      if (aboveZero && bullTrend) cur.signal = 'buy';       // 零轴上方金叉 + 多头：强买
+      else if (!aboveZero && bearTrend) cur.signal = 'buy_weak'; // 零轴下方金叉 + 空头：弱买（超跌反弹）
+    } else if (deathCross) {
+      if (aboveZero && bullTrend) cur.signal = 'sell';      // 零轴上方死叉 + 多头：强卖
+    }
   }
 
   return bars;
@@ -1053,8 +1062,10 @@ app.get('/api/index-macd', async (req, res) => {
       fetchNaverIndexKline('KOSPI', startStr),
     ]);
 
-    // 交易时间内：追加盘中实时柱（上证、创业板、纳指ETF）
-    if (trading) {
+    // 交易时间内或盘后：追加今日实时/收盘柱（上证、创业板、纳指ETF）
+    // 盘中标记 intraday，盘后不标（视为已收盘的当日K线）
+    const afterHours = isAShareAfterHours();
+    if (trading || afterHours) {
       try {
         const rt = await fetchSinaRealtimePrice(['sh000001', 'sz399006', 'sh513100']);
         const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }); // YYYY-MM-DD
@@ -1069,7 +1080,9 @@ app.get('/api/index-macd', async (req, res) => {
           const lastDate = klines.length ? klines[klines.length - 1].date : '';
           // 只有当历史K末尾不是今天才追加
           if (q.date === todayStr && lastDate !== todayStr) {
-            klines.push({ date: todayStr, close: q.price, intraday: true });
+            const entry = { date: todayStr, close: q.price };
+            if (trading) entry.intraday = true; // 盘中才标虚线样式
+            klines.push(entry);
           }
         }
       } catch (e) {

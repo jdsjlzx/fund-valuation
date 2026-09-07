@@ -829,8 +829,9 @@
       display: flex;
       justify-content: center;
     }
-    /* buy：柱子上方 */
-    .macd-signal-pin.buy  { bottom: calc(100% + 3px); }
+    /* buy / buy_weak：柱子上方 */
+    .macd-signal-pin.buy      { bottom: calc(100% + 3px); }
+    .macd-signal-pin.buy_weak { bottom: calc(100% + 3px); }
     /* sell：柱子下方 */
     .macd-signal-pin.sell { top: calc(100% + 3px); }
     .macd-inline-signal {
@@ -846,10 +847,17 @@
       font-family: 'Arial', sans-serif;
       letter-spacing: 0;
     }
+    /* 强买：实心红 */
     .macd-inline-signal.buy {
       color: #fff;
       background: #e84c3d;
       box-shadow: 0 1px 5px rgba(232,76,61,0.55);
+    }
+    /* 弱买（超跌反弹）：空心红 */
+    .macd-inline-signal.buy_weak {
+      color: #e84c3d;
+      background: transparent;
+      border: 1.5px solid #e84c3d;
     }
     .macd-inline-signal.sell {
       color: #fff;
@@ -1342,7 +1350,7 @@ function macdSectionHtml() {
       const latestCls = (isLatest && !b.intraday) ? ' latest' : '';
       const sig = b.signal || null;
       const pinHtml = sig
-        ? `<span class="macd-signal-pin ${sig}"><span class="macd-inline-signal ${sig}">${sig === 'buy' ? 'B' : 'S'}</span></span>`
+        ? `<span class="macd-signal-pin ${sig}"><span class="macd-inline-signal ${sig}">${sig.startsWith('buy') ? 'B' : 'S'}</span></span>`
         : '';
       if (b.bar >= 0) {
         return `<div class="macd-bar-col">${pinHtml}<div class="macd-bar-top"><div class="macd-bar ${posCls}${latestCls}${intradayCls}" style="height:${h}px"></div></div><div class="macd-bar-bot"></div></div>`;
