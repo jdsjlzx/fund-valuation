@@ -1032,16 +1032,31 @@ function calcMACD(klines, barCount = 26) {
       else if (!aboveZero && bearTrend) sig = 'buy_weak';
     } else if (deathCross) {
       if (aboveZero && bullTrend) sig = 'sell';
+      else if (!aboveZero && bearTrend) sig = 'sell_weak'; // 零轴下方死叉 + 空头：弱卖
     }
     if (!sig) continue;
 
     if (i >= start) {
-      // 交叉在窗口内：直接标在对应柱
       bars[i - start].signal = sig;
     } else {
-      // 交叉在窗口外：把信号补标到 bars[0]，表示"当前仍处于该信号延续中"
-      // 只保留最近一次窗口外信号（后面的窗口内信号会覆盖）
       bars[0].signal = sig;
+    }
+  }
+
+  // 跌破 MA21 卖点：收盘价从上方下穿 MA21（前一天>=MA21，当天<MA21）
+  for (let i = 1; i < klines.length; i++) {
+    const ma21cur  = ma21arr[i];
+    const ma21prev = ma21arr[i - 1];
+    if (ma21cur === null || ma21prev === null) continue;
+    const breakBelow = closes[i - 1] >= ma21prev && closes[i] < ma21cur;
+    if (!breakBelow) continue;
+
+    if (i >= start) {
+      // sell_ma 优先级最高，直接覆盖同一柱上的其他卖出信号
+      const bar = bars[i - start];
+      if (!bar.signal || bar.signal.startsWith('sell')) bar.signal = 'sell_ma';
+    } else {
+      if (!bars[0].signal || bars[0].signal.startsWith('sell')) bars[0].signal = 'sell_ma';
     }
   }
 

@@ -832,8 +832,10 @@
     /* buy / buy_weak：柱子上方 */
     .macd-signal-pin.buy      { bottom: calc(100% + 3px); }
     .macd-signal-pin.buy_weak { bottom: calc(100% + 3px); }
-    /* sell：柱子下方 */
-    .macd-signal-pin.sell { top: calc(100% + 3px); }
+    /* sell 系列：柱子下方 */
+    .macd-signal-pin.sell      { top: calc(100% + 3px); }
+    .macd-signal-pin.sell_weak { top: calc(100% + 3px); }
+    .macd-signal-pin.sell_ma   { top: calc(100% + 3px); }
     .macd-inline-signal {
       display: inline-flex;
       align-items: center;
@@ -864,6 +866,18 @@
       background: #2ebd85;
       box-shadow: 0 1px 5px rgba(46,189,133,0.55);
     }
+    /* 弱卖（零轴下方死叉）：空心绿 */
+    .macd-inline-signal.sell_weak {
+      color: #2ebd85;
+      background: transparent;
+      border: 1.5px solid #2ebd85;
+    }
+    /* 跌破MA21卖点：实心橙，区别于普通卖出 */
+    .macd-inline-signal.sell_ma {
+      color: #fff;
+      background: #e8a03d;
+      box-shadow: 0 1px 5px rgba(232,160,61,0.55);
+    }
     .macd-signal-date {
       font-size: 8px;
       font-variant-numeric: tabular-nums;
@@ -872,8 +886,10 @@
       opacity: 0.85;
     }
     .macd-signal-pin.buy .macd-signal-date,
-    .macd-signal-pin.buy_weak .macd-signal-date { color: #e84c3d; }
-    .macd-signal-pin.sell .macd-signal-date      { color: #2ebd85; }
+    .macd-signal-pin.buy_weak .macd-signal-date  { color: #e84c3d; }
+    .macd-signal-pin.sell .macd-signal-date,
+    .macd-signal-pin.sell_weak .macd-signal-date { color: #2ebd85; }
+    .macd-signal-pin.sell_ma .macd-signal-date   { color: #e8a03d; }
 
     /* ── 涨跌幅统计链接入口 ── */
     .vixy-chg-link {
