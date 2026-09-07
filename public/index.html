@@ -864,6 +864,16 @@
       background: #2ebd85;
       box-shadow: 0 1px 5px rgba(46,189,133,0.55);
     }
+    .macd-signal-date {
+      font-size: 8px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      margin-left: 2px;
+      opacity: 0.85;
+    }
+    .macd-signal-pin.buy .macd-signal-date,
+    .macd-signal-pin.buy_weak .macd-signal-date { color: #e84c3d; }
+    .macd-signal-pin.sell .macd-signal-date      { color: #2ebd85; }
 
     /* ── 涨跌幅统计链接入口 ── */
     .vixy-chg-link {
@@ -1349,9 +1359,14 @@ function macdSectionHtml() {
       const intradayCls = b.intraday ? ' intraday' : '';
       const latestCls = (isLatest && !b.intraday) ? ' latest' : '';
       const sig = b.signal || null;
-      const pinHtml = sig
-        ? `<span class="macd-signal-pin ${sig}"><span class="macd-inline-signal ${sig}">${sig.startsWith('buy') ? 'B' : 'S'}</span></span>`
-        : '';
+      const pinHtml = sig ? (() => {
+        const fmtDate = d => d.length === 8
+          ? `${+d.slice(4,6)}/${+d.slice(6,8)}`
+          : `${+d.slice(5,7)}/${+d.slice(8,10)}`;
+        const label = sig.startsWith('buy') ? 'B' : 'S';
+        const dateStr = fmtDate(b.date);
+        return `<span class="macd-signal-pin ${sig}"><span class="macd-inline-signal ${sig}">${label}</span><span class="macd-signal-date">${dateStr}</span></span>`;
+      })() : '';
       if (b.bar >= 0) {
         return `<div class="macd-bar-col">${pinHtml}<div class="macd-bar-top"><div class="macd-bar ${posCls}${latestCls}${intradayCls}" style="height:${h}px"></div></div><div class="macd-bar-bot"></div></div>`;
       } else {
