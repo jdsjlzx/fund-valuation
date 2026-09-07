@@ -1013,30 +1013,35 @@ function calcMACD(klines, barCount = 26) {
     bars.push(entry);
   }
 
-  // 标记信号：遍历 bars（i 对应全局索引 start+j）
-  // 从 j=1 开始，需要前一根判断交叉方向
-  for (let j = 1; j < bars.length; j++) {
-    const gi = start + j;
-    const cur  = bars[j];
-    const prev = bars[j - 1];
-    const ma5  = ma5arr[gi];
-    const ma21 = ma21arr[gi];
+  // 标记信号：在完整 klines 上检测所有金叉/死叉（从第1根开始）
+  for (let i = 1; i < klines.length; i++) {
+    const goldenCross = dif[i - 1] < dea[i - 1] && dif[i] >= dea[i];
+    const deathCross  = dif[i - 1] > dea[i - 1] && dif[i] <= dea[i];
+    if (!goldenCross && !deathCross) continue;
+
+    const aboveZero = dif[i] > 0;
+    const ma5  = ma5arr[i];
+    const ma21 = ma21arr[i];
     if (ma5 === null || ma21 === null) continue;
-
-    // 金叉：prev.dif < prev.dea 且 cur.dif >= cur.dea（DIF 上穿 DEA）
-    const goldenCross = prev.dif < prev.dea && cur.dif >= cur.dea;
-    // 死叉：prev.dif > prev.dea 且 cur.dif <= cur.dea（DIF 下穿 DEA）
-    const deathCross  = prev.dif > prev.dea && cur.dif <= cur.dea;
-
-    const aboveZero = cur.dif > 0; // 金叉/死叉发生在零轴上方
     const bullTrend = ma5 > ma21;
     const bearTrend = ma5 < ma21;
 
+    let sig = null;
     if (goldenCross) {
-      if (aboveZero && bullTrend) cur.signal = 'buy';       // 零轴上方金叉 + 多头：强买
-      else if (!aboveZero && bearTrend) cur.signal = 'buy_weak'; // 零轴下方金叉 + 空头：弱买（超跌反弹）
+      if (aboveZero && bullTrend) sig = 'buy';
+      else if (!aboveZero && bearTrend) sig = 'buy_weak';
     } else if (deathCross) {
-      if (aboveZero && bullTrend) cur.signal = 'sell';      // 零轴上方死叉 + 多头：强卖
+      if (aboveZero && bullTrend) sig = 'sell';
+    }
+    if (!sig) continue;
+
+    if (i >= start) {
+      // 交叉在窗口内：直接标在对应柱
+      bars[i - start].signal = sig;
+    } else {
+      // 交叉在窗口外：把信号补标到 bars[0]，表示"当前仍处于该信号延续中"
+      // 只保留最近一次窗口外信号（后面的窗口内信号会覆盖）
+      bars[0].signal = sig;
     }
   }
 
