@@ -1065,8 +1065,19 @@ function calcMACD(klines, barCount = 26) {
 
 app.get('/api/index-macd', async (req, res) => {
   const trading = isAShareTradingTime();
+  const afterHours = isAShareAfterHours();
   const ttl = trading ? INDEX_MACD_TTL_TRADING : INDEX_MACD_TTL_NORMAL;
-  if (INDEX_MACD_CACHE.data && Date.now() - INDEX_MACD_CACHE.ts < ttl) {
+  // 缓存有效性：TTL 未过期，且若当前是交易日则缓存数据必须包含今天的柱
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+  const cacheHasToday = () => {
+    const shBars = INDEX_MACD_CACHE.data && INDEX_MACD_CACHE.data.sh && INDEX_MACD_CACHE.data.sh.bars;
+    if (!shBars || !shBars.length) return false;
+    return shBars[shBars.length - 1].date === todayStr;
+  };
+  const needRefresh = !INDEX_MACD_CACHE.data
+    || Date.now() - INDEX_MACD_CACHE.ts >= ttl
+    || ((trading || afterHours) && !cacheHasToday());
+  if (!needRefresh) {
     return res.json({ success: true, ...INDEX_MACD_CACHE.data });
   }
   try {
@@ -1084,11 +1095,9 @@ app.get('/api/index-macd', async (req, res) => {
 
     // 交易时间内或盘后：追加今日实时/收盘柱（上证、创业板、纳指ETF）
     // 盘中标记 intraday，盘后不标（视为已收盘的当日K线）
-    const afterHours = isAShareAfterHours();
     if (trading || afterHours) {
       try {
         const rt = await fetchSinaRealtimePrice(['sh000001', 'sz399006', 'sh513100']);
-        const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }); // YYYY-MM-DD
         const pairs = [
           { klines: shKlines,  id: 'sh000001' },
           { klines: cyKlines,  id: 'sz399006' },
