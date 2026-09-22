@@ -1060,6 +1060,68 @@ function calcMACD(klines, barCount = 26) {
     }
   }
 
+  // 柱子缩量见底预警：在负值区间缩量最小那根打 buy_pre，正值区间同理打 sell_pre
+  // 逻辑：遍历每一次从翻负到翻正的完整下行波段，找波段内 bar 绝对值最小的那根（缩量底）
+  //        在那根柱上打 buy_pre；sell_pre 同理找正值区间的缩量顶
+  const barVals = new Array(klines.length).fill(0);
+  for (let i = 0; i < klines.length; i++) barVals[i] = (dif[i] - dea[i]) * 2;
+  // 动态阈值：整体均值 * 0.15，避免零轴附近微弱波段
+  const absWindow = barVals.slice(Math.max(0, klines.length - 60)).map(Math.abs);
+  const avgAbs = absWindow.reduce((s, v) => s + v, 0) / absWindow.length;
+  const minAbs = Math.max(avgAbs * 0.15, 0.001);
+
+  // 找负值波段缩量底 → buy_pre（标在翻红前一天，即缩量最小那根）
+  let negStart = -1;
+  for (let i = 0; i <= klines.length; i++) {
+    const val = i < klines.length ? barVals[i] : null;
+    if (val !== null && val < 0) {
+      if (negStart < 0) negStart = i; // 波段开始
+    } else {
+      // 波段结束（val >= 0 或越界）
+      if (negStart >= 0) {
+        const segEnd = i - 1; // 最后一根负值柱
+        // 找波段内绝对值最小的那根（即缩量见底）
+        let minIdx = negStart;
+        for (let j = negStart + 1; j <= segEnd; j++) {
+          if (Math.abs(barVals[j]) < Math.abs(barVals[minIdx])) minIdx = j;
+        }
+        // 波段幅度需超过阈值（排除零轴微弱抖动）
+        const waveMax = Math.max(...barVals.slice(negStart, segEnd + 1).map(v => Math.abs(v)));
+        if (waveMax >= minAbs && minIdx >= start) {
+          const b = bars[minIdx - start];
+          if (!b.signal) {
+            b.signal = 'buy_pre';
+            console.log('[buy_pre]', b.date, 'waveMax='+waveMax.toFixed(3), 'minAbs='+minAbs.toFixed(3), 'barVal='+barVals[minIdx].toFixed(4));
+          }
+        }
+        negStart = -1;
+      }
+    }
+  }
+
+  // 找正值波段缩量顶 → sell_pre（标在翻绿前一天，即缩量最小那根）
+  let posStart = -1;
+  for (let i = 0; i <= klines.length; i++) {
+    const val = i < klines.length ? barVals[i] : null;
+    if (val !== null && val > 0) {
+      if (posStart < 0) posStart = i;
+    } else {
+      if (posStart >= 0) {
+        const segEnd = i - 1;
+        let minIdx = posStart;
+        for (let j = posStart + 1; j <= segEnd; j++) {
+          if (Math.abs(barVals[j]) < Math.abs(barVals[minIdx])) minIdx = j;
+        }
+        const waveMax = Math.max(...barVals.slice(posStart, segEnd + 1).map(v => Math.abs(v)));
+        if (waveMax >= minAbs && minIdx >= start) {
+          const b = bars[minIdx - start];
+          if (!b.signal) b.signal = 'sell_pre';
+        }
+        posStart = -1;
+      }
+    }
+  }
+
   return bars;
 }
 
