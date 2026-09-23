@@ -1148,22 +1148,26 @@ app.get('/api/index-macd', async (req, res) => {
     start.setFullYear(start.getFullYear() - 1);
     const startStr = start.toISOString().slice(0, 10).replace(/-/g, '');
 
-    const [shKlines, cyKlines, ndxKlines, kospiKlines] = await Promise.all([
+    const [shKlines, cyKlines, ndxKlines, kospiKlines, goldKlines, kcKlines] = await Promise.all([
       fetchKline('sh000001', klineLimit),
       fetchKline('sz399006', klineLimit),
       fetchKline('sh513100', klineLimit),
       fetchNaverIndexKline('KOSPI', startStr),
+      fetchKline('sh518880', klineLimit),                  // 黄金ETF
+      fetchKline('sh000688', klineLimit),                // 科创50
     ]);
 
     // 交易时间内或盘后：追加今日实时/收盘柱（上证、创业板、纳指ETF）
     // 盘中标记 intraday，盘后不标（视为已收盘的当日K线）
     if (trading || afterHours) {
       try {
-        const rt = await fetchSinaRealtimePrice(['sh000001', 'sz399006', 'sh513100']);
+        const rt = await fetchSinaRealtimePrice(['sh000001', 'sz399006', 'sh513100', 'sh000688', 'sh518880']);
         const pairs = [
-          { klines: shKlines,  id: 'sh000001' },
-          { klines: cyKlines,  id: 'sz399006' },
-          { klines: ndxKlines, id: 'sh513100' },
+          { klines: shKlines,   id: 'sh000001' },
+          { klines: cyKlines,   id: 'sz399006' },
+          { klines: ndxKlines,  id: 'sh513100' },
+          { klines: kcKlines,   id: 'sh000688' },
+          { klines: goldKlines, id: 'sh518880' },
         ];
         for (const { klines, id } of pairs) {
           const q = rt[id];
@@ -1187,6 +1191,8 @@ app.get('/api/index-macd', async (req, res) => {
       cy:    { name: '创业板',   bars: calcMACD(cyKlines,    21) },
       ndx:   { name: '纳斯达克', bars: calcMACD(ndxKlines,   21) },
       kospi: { name: 'KOSPI',   bars: calcMACD(kospiKlines, 21) },
+      gold:  { name: '黄金ETF',  bars: calcMACD(goldKlines,  21) },
+      kc:    { name: '科创50',   bars: calcMACD(kcKlines,    21) },
     };
 
     INDEX_MACD_CACHE.data = result;

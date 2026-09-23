@@ -1301,7 +1301,7 @@ async function fetchIndexMacd() {
     if (!r.ok) return;
     const json = await r.json();
     if (json.success) {
-      INDEX_MACD = { sh: json.sh, cy: json.cy, ndx: json.ndx, kospi: json.kospi };
+      INDEX_MACD = { sh: json.sh, cy: json.cy, ndx: json.ndx, kospi: json.kospi, gold: json.gold, kc: json.kc };
     }
   } catch (e) { console.error('[index-macd]', e); }
 }
@@ -1377,6 +1377,8 @@ function macdSectionHtml() {
     { key: 'cy',    label: '创业板' },
     { key: 'ndx',   label: '纳斯达克' },
     { key: 'kospi', label: 'KOSPI' },
+    { key: 'gold',  label: '黄金ETF' },
+    { key: 'kc',    label: '科创50' },
   ];
 
   function renderCard(label, data) {
@@ -1512,7 +1514,7 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
     if (!rows.length) return `<tr><td colspan="4"><span class="ma-none">各指数均线正常，持仓安全</span></td></tr>`;
     return rows.join('');
   }
-  const maCollapsed = localStorage.getItem('ma-alert-collapsed') === '1';
+  const maCollapsed = localStorage.getItem('ma-alert-collapsed') !== '0';
   const maAlertHtml = `
     <div class="ma-alert-section${maCollapsed ? ' collapsed' : ''}">
       <div class="ma-toggle-bar" onclick="toggleMaAlert(this)">
