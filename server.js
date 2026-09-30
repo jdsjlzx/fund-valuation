@@ -400,19 +400,19 @@ function getUSMarketState() {
   return 'OVERNIGHT';
 }
 
-// 夜盘：通过东方财富获取小型纳指期货 NQ00Y 涨跌幅，代理美股夜盘行情
+// 夜盘：通过新浪获取纳指期货 NQ 涨跌幅，代理美股夜盘行情。
+// 东方财富 push2/push2delay 在部分网络环境会直接重置连接（socket hang up）。
 async function fetchNQFutures() {
-  const url = 'https://push2delay.eastmoney.com/api/qt/ulist.np/get?secids=103.NQ00Y&fields=f2,f3,f12,f13,f14,f18&fltt=2';
   let text;
-  try { text = await httpGet(url, { Referer: 'https://quote.eastmoney.com/' }); }
+  try { text = await fetchSina(['hf_NQ']); }
   catch (e) { console.error('[nq-futures fetch]', e.message); return null; }
-  let j;
-  try { j = JSON.parse(text); } catch { return null; }
-  const diff = j && j.data && j.data.diff && j.data.diff[0];
-  if (!diff) return null;
-  const chg = Number(diff.f3);
-  if (!isFinite(chg)) return null;
-  return chg;
+  const match = text.match(/var\s+hq_str_hf_NQ\s*=\s*"([^"]*)"/i);
+  if (!match) return null;
+  const fields = match[1].split(',');
+  const price = Number(fields[0]);
+  const prevClose = Number(fields[7]);
+  if (!isFinite(price) || !isFinite(prevClose) || prevClose <= 0) return null;
+  return ((price - prevClose) / prevClose) * 100;
 }
 
 // ──────────────────────────────────────────

@@ -1086,12 +1086,11 @@ function effectiveChange(q, opts = {}) {
     // 24h模式：实时显示当前时段数据
     // 盘中：直接用盘中实时涨跌
     if (s === 'REGULAR') return q.regularMarketChangePercent ?? 0;
-    // 夜盘（ET 00:00-04:00）：优先用 NQ 期货涨跌，失败时 fallback 到盘后涨跌
+    // 夜盘（ET 00:00-04:00）：使用 NQ 期货涨跌代理。
+    // 夜盘源不可用时不能回退到上一盘后价格，否则会把已经结束的盘后涨跌
+    // 误报为当前夜盘涨跌（例如 QQQ 显示过期的 +0.32%）。
     if (s === 'OVERNIGHT') {
-      if (q.overnightChangePercent != null) return q.overnightChangePercent;
-      const closePrice = q.closePrice || q.regularMarketPrice;
-      if (q.afterHoursPrice && closePrice) return ((q.afterHoursPrice - closePrice) / closePrice) * 100;
-      return q.postMarketChangePercent ?? 0;
+      return q.overnightChangePercent ?? 0;
     }
     // 盘前：eastmoney 的 regularMarketChangePercent 已是盘前实时价 vs 昨收
     if (s === 'PRE' || s === 'PREPRE') {
