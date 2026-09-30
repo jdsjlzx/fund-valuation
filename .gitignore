@@ -21,3 +21,6 @@ npm-debug.log*
 .claude/
 .vscode/
 .idea/
+
+# WorkBuddy workspace memory (本地会话数据，不入库)
+.workbuddy/

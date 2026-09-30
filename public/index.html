@@ -133,6 +133,17 @@
       box-shadow: var(--shadow-header);
       position: relative;
     }
+    .header.header-3col {
+      display: block;
+      padding: 12px 6px 10px;
+    }
+    .header.header-3col .header-inner {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      max-width: 75%;
+      margin: 0 auto;
+      gap: 2px;
+    }
     .header::after {
       content: '';
       position: absolute;
@@ -1706,11 +1717,7 @@ function render24h() {
   const qqqPrice  = effectivePrice(map['QQQ']);
   const spyPrice  = effectivePrice(map['SPY']);
   const fxChg     = map['USDCNY=X']?.regularMarketChangePercent ?? 0;
-  // IXIC 指数无盘后数据，用 QQQ 作为代理
-  const ixicRaw   = effectiveChange(map['IXIC'], opts);
-  const ixicChg   = (ixicRaw === 0 && qqqChg !== 0) ? qqqChg : ixicRaw;
 
-  const fIxic = flashClass(prevHeaderVal24h.IXIC, ixicChg);
   const fQqq  = flashClass(prevHeaderVal24h.QQQ,  qqqChg);
   const fSpy  = flashClass(prevHeaderVal24h.SPY,  spyChg);
   const fFx   = flashClass(prevHeaderVal24h.FX,   fxChg);
@@ -1746,7 +1753,6 @@ function render24h() {
     prevFundPct24h.set(idx, chg);
   });
 
-  prevHeaderVal24h.IXIC = ixicChg;
   prevHeaderVal24h.QQQ  = qqqChg;
   prevHeaderVal24h.SPY  = spyChg;
   prevHeaderVal24h.VIXY = vixyChg;
@@ -1764,22 +1770,20 @@ function render24h() {
   const isHome = !location.hash || location.hash === '#' || location.hash === '#/';
   document.getElementById('app').innerHTML = `
     ${!isHome ? `<div class="h24-topbar"><button class="back-btn" onclick="goBack()">‹ 返回</button></div>` : ''}
-    <div class="header">
-      <div class="h-item ${fIxic}">
-        <div class="h-label">纳斯达克</div>
-        <div class="h-val ${cls(ixicChg)}">${fmtPct(ixicChg)}</div>
-      </div>
-      <div class="h-item ${fQqq}">
-        <div class="h-label">纳指100(QQQ)</div>
-        <div class="h-val ${cls(qqqChg)}">${fmtPct(qqqChg)}</div>
-      </div>
-      <div class="h-item ${fSpy}">
-        <div class="h-label">标普500(SPY)</div>
-        <div class="h-val ${cls(spyChg)}">${fmtPct(spyChg)}</div>
-      </div>
-      <div class="h-item ${fFx}">
-        <div class="h-label">汇率</div>
-        <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
+    <div class="header header-3col">
+      <div class="header-inner">
+        <div class="h-item ${fQqq}">
+          <div class="h-label">纳指100(QQQ)</div>
+          <div class="h-val ${cls(qqqChg)}">${fmtPct(qqqChg)}</div>
+        </div>
+        <div class="h-item ${fSpy}">
+          <div class="h-label">标普500(SPY)</div>
+          <div class="h-val ${cls(spyChg)}">${fmtPct(spyChg)}</div>
+        </div>
+        <div class="h-item ${fFx}">
+          <div class="h-label">汇率</div>
+          <div class="h-val ${cls(fxChg)}">${fmtPct(fxChg)}</div>
+        </div>
       </div>
     </div>
     ${vixyBarHtml(vixyPrice, vixyChg, vixySignal24h, qqqChg, fxChg)}

@@ -115,6 +115,9 @@ app.get('/api/funds', (req, res) => {
 // ═══════════════════════════════════════════════════════
 const quoteCache = new Map();
 const QUOTE_TTL = 4 * 1000;
+// Yahoo extended-hours 缓存（夜盘用，fulldayPrice 数据 60s 内复用，避免 Yahoo 限流）
+const yahooExtCache = new Map();
+const YAHOO_EXT_TTL = 60_000;
 
 // Known international tickers handled by a non-Sina fetcher
 // (国内财经 API 不覆盖韩/日/台/欧实时行情，需要单独走 Naver/Yahoo Japan 等)
@@ -353,6 +356,86 @@ async function fetchYahooQuote(symbol) {
 }
 
 // ──────────────────────────────────────────
+//  Yahoo Finance extended-hours fetcher (美股夜盘 fulldayPrice)
+//  通过 includePrePost=true 拿到 hasPrePostMarketData + fulldayPrice 等字段，
+//   解决新浪 fields[21] 滞后一日的问题，与富途/各行情终端一致。
+//   限流友好：60s 缓存 + 5 并发。
+// ──────────────────────────────────────────
+async function fetchYahooFulldayOne(symbol) {
+  const cached = yahooExtCache.get(symbol);
+  if (cached && Date.now() - cached.ts < YAHOO_EXT_TTL) return cached.data;
+
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+    `?interval=1d&range=1d&includePrePost=true`;
+  let text;
+  try {
+    text = await httpGetWithStatus(url, { Accept: 'application/json' });
+  } catch (e) {
+    // Yahoo 429/503 限流：backoff 5 分钟；其他错误 backoff 30s
+    const isRateLimited = /HTTP\s+(429|503)/i.test(e.message);
+    if (isRateLimited) {
+      console.warn('[yahoo-ext]', symbol, 'rate limited, backoff 5min');
+      yahooExtCache.set(symbol, { data: null, ts: Date.now() - YAHOO_EXT_TTL * 5 / 6 });
+    } else {
+      console.error('[yahoo-ext]', symbol, 'http fail:', e.message);
+      yahooExtCache.set(symbol, { data: null, ts: Date.now() - YAHOO_EXT_TTL / 2 });
+    }
+    return null;
+  }
+  let j;
+  try { j = JSON.parse(text); } catch (e) {
+    console.error('[yahoo-ext]', symbol, 'parse fail:', e.message, 'snippet:', text.slice(0, 100));
+    yahooExtCache.set(symbol, { data: null, ts: Date.now() - YAHOO_EXT_TTL / 2 });
+    return null;
+  }
+  const result = j && j.chart && j.chart.result && j.chart.result[0];
+  if (!result || !result.meta) {
+    console.error('[yahoo-ext]', symbol, 'no meta, snippet:', text.slice(0, 200));
+    return null;
+  }
+  const meta = result.meta;
+  // hasPrePostMarketData=false 时该股当前没有盘前/盘后活动，fulldayPrice 不可用
+  if (!meta.hasPrePostMarketData) {
+    yahooExtCache.set(symbol, { data: null, ts: Date.now() });
+    return null;
+  }
+  const data = {
+    fulldayPrice: meta.fulldayPrice,
+    fulldayChange: meta.fulldayChange,
+    fulldayChangePercent: meta.fulldayChangePercent,
+    previousClose: meta.chartPreviousClose || meta.previousClose,
+    regularMarketPrice: meta.regularMarketPrice,
+  };
+  console.log('[yahoo-ext]', symbol, 'OK fulldayPrice=', data.fulldayPrice);
+  yahooExtCache.set(symbol, { data, ts: Date.now() });
+  return data;
+}
+
+async function fetchYahooExtended(symbols) {
+  const map = new Map();
+  if (!symbols || symbols.length === 0) return map;
+  // Yahoo 限流较严：2 并发 + 250ms 间隔避免触发 429
+  const CONCURRENCY = 2;
+  const REQ_DELAY_MS = 250;
+  let i = 0;
+  async function worker() {
+    while (i < symbols.length) {
+      const sym = symbols[i++];
+      try {
+        const data = await fetchYahooFulldayOne(sym);
+        if (data) map.set(sym, data);
+      } catch (e) {
+        console.error('[yahoo-ext]', sym, e.message);
+      }
+      if (i < symbols.length) await new Promise((r) => setTimeout(r, REQ_DELAY_MS));
+    }
+  }
+  await Promise.all(Array(Math.min(CONCURRENCY, symbols.length)).fill(0).map(worker));
+  return map;
+}
+
+// ──────────────────────────────────────────
 //  腾讯行情 fetcher (日股，qt.gtimg.cn)
 //  格式: v_jp{code}="351~名称~{code}.T~最新价~昨收~...~时间~..."
 // ──────────────────────────────────────────
@@ -398,21 +481,6 @@ function getUSMarketState() {
   if (minOfDay >= 960 && minOfDay < 1200) return 'POST';
   // 工作日 00:00-04:00 ET：夜盘（期货持续交易）
   return 'OVERNIGHT';
-}
-
-// 夜盘：通过新浪获取纳指期货 NQ 涨跌幅，代理美股夜盘行情。
-// 东方财富 push2/push2delay 在部分网络环境会直接重置连接（socket hang up）。
-async function fetchNQFutures() {
-  let text;
-  try { text = await fetchSina(['hf_NQ']); }
-  catch (e) { console.error('[nq-futures fetch]', e.message); return null; }
-  const match = text.match(/var\s+hq_str_hf_NQ\s*=\s*"([^"]*)"/i);
-  if (!match) return null;
-  const fields = match[1].split(',');
-  const price = Number(fields[0]);
-  const prevClose = Number(fields[7]);
-  if (!isFinite(price) || !isFinite(prevClose) || prevClose <= 0) return null;
-  return ((price - prevClose) / prevClose) * 100;
 }
 
 // ──────────────────────────────────────────
@@ -624,7 +692,7 @@ app.get('/api/quotes', async (req, res) => {
     const sinaAll = [...sinaSymbols, ...emMissing, ...emSymbols.filter((s) => emMap[s])];
     const usState = getUSMarketState();
 
-    const [emData, sinaData, krData, twData, jpData, yhData, nqChgPct] = await Promise.all([
+    const [emData, sinaData, krData, twData, jpData, yhData, yhExtData] = await Promise.all([
       emSymbols.map((s) => emMap[s]).filter(Boolean),
       (async () => {
         if (sinaAll.length === 0) return [];
@@ -660,10 +728,13 @@ app.get('/api/quotes', async (req, res) => {
           })
         )
       ).then((arr) => arr.filter(Boolean)),
-      // 夜盘时段额外获取 NQ 期货涨跌幅
-      usState === 'OVERNIGHT'
-        ? fetchNQFutures().catch((e) => { console.error('[nq-futures]', e.message); return null; })
-        : Promise.resolve(null),
+      // 夜盘时段：拉取所有美股的 Yahoo fulldayPrice（实时盘前/夜盘价，与富途一致）
+      usState === 'OVERNIGHT' && emSymbols.length
+        ? fetchYahooExtended(emSymbols).catch((e) => {
+            console.error('[yahoo-ext bulk]', e.message);
+            return new Map();
+          })
+        : Promise.resolve(new Map()),
     ]);
 
     // Merge: for symbols that have both eastmoney and sina data,
@@ -672,13 +743,23 @@ app.get('/api/quotes', async (req, res) => {
     // POST/CLOSED: EM f2 是盘后实时价，比新浪更新更快，优先用 EM
     const sinaMap = (sinaData && sinaData.map) || {};
     const mergedEmData = emData.map((em) => {
-      // 夜盘时段：用 NQ 期货涨跌幅代理，存入 overnightChangePercent 供 24h 视图使用
-      // regularMarketChangePercent 保留收盘涨跌，首页不受影响
-      if (usState === 'OVERNIGHT' && nqChgPct !== null) {
+      // 夜盘时段（ET 20:00 - 04:00，个股无盘后交易）：
+      //   个股夜盘涨跌改用 sina 的盘后/盘前最新价 (fields[21]) 对应涨跌幅，
+      //   与富途/各行情终端一致。避免之前用 NQ 期货涨跌覆盖所有美股，导致
+      //   半导体/AI 龙头股与大盘明显背离时被错报（如 TSM 真实 -0.28% 被显示 +0.23%）。
+      //   regularMarketChangePercent 仍保留正规盘收盘涨跌，首页不受影响。
+      if (usState === 'OVERNIGHT') {
         const sina = sinaMap[em.symbol];
+        const yahoo = yhExtData && yhExtData.get(em.symbol);   // Yahoo fulldayPrice（实时盘前/夜盘价）
+        // 优先级：Yahoo fulldayPrice（实时）> sina postMarketChangePercent（昨日盘后价，滞后）
+        const overnightChg = yahoo?.fulldayChangePercent
+          ?? sina?.postMarketChangePercent
+          ?? 0;
+        const overnightPrice = yahoo?.fulldayPrice ?? sina?.afterHoursPrice ?? null;
         return {
           ...em,
-          overnightChangePercent: nqChgPct,
+          overnightChangePercent: overnightChg,
+          overnightPrice,
           marketState: 'OVERNIGHT',
           closePrice: sina?.regularMarketPrice || em.regularMarketPrice,
           regularMarketPreviousClose: sina?.regularMarketPreviousClose || em.regularMarketPreviousClose,
@@ -725,10 +806,19 @@ app.get('/api/quotes', async (req, res) => {
     let puresinaData = (sinaData && sinaData.list || []).filter((q) => !emSymSet.has(q.symbol));
 
     // 夜盘时段：对 sina fallback 的美股数据也注入 overnightChangePercent
-    if (usState === 'OVERNIGHT' && nqChgPct !== null) {
+    //   优先 Yahoo fulldayPrice（实时），其次 sina postMarketChangePercent（昨日盘后价，滞后）
+    if (usState === 'OVERNIGHT') {
       puresinaData = puresinaData.map((q) => {
         if (!emSecid(q.symbol)) return q;  // 非美股不覆盖
-        return { ...q, overnightChangePercent: nqChgPct, marketState: 'OVERNIGHT' };
+        const yahoo = yhExtData && yhExtData.get(q.symbol);
+        const overnightChg = yahoo?.fulldayChangePercent ?? q.postMarketChangePercent ?? 0;
+        const overnightPrice = yahoo?.fulldayPrice ?? q.afterHoursPrice ?? null;
+        return {
+          ...q,
+          overnightChangePercent: overnightChg,
+          overnightPrice,
+          marketState: 'OVERNIGHT',
+        };
       });
     }
 
@@ -743,6 +833,19 @@ app.get('/api/quotes', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// 调试端点：直接调用 Yahoo fullday fetcher 验证夜盘数据源
+// 用法: GET /api/_debug/yahoo-ext?symbols=TSM,NVDA,AAPL
+if (process.env.DEBUG_YAHOO === '1') {
+  app.get('/api/_debug/yahoo-ext', async (req, res) => {
+    const symbols = (req.query.symbols || 'TSM,NVDA,AAPL,QQQ')
+      .split(',').map((s) => s.trim()).filter(Boolean);
+    const map = await fetchYahooExtended(symbols);
+    const out = {};
+    for (const [sym, data] of map) out[sym] = data;
+    res.json({ symbols, result: out, count: map.size });
+  });
+}
 
 // ═══════════════════════════════════════════════════════
 //  /api/ashare-ma — 上证指数 & 创业板指数 MA20 数据
