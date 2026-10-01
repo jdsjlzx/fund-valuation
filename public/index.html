@@ -1176,6 +1176,16 @@ function allSymbols() {
   return [...set];
 }
 
+// 夜盘成交时间戳（毫秒）→ "HH:MM ET"
+// DST 规则与后端 getUSMarketState 保持一致（3-9 月为 -4，其余 -5）
+function fmtEtHm(ms) {
+  if (!ms) return '';
+  const m = new Date(ms).getUTCMonth();
+  const off = (m > 2 && m < 10) ? -4 : -5;
+  const et = new Date(ms + off * 3600000);
+  return `${String(et.getUTCHours()).padStart(2, '0')}:${String(et.getUTCMinutes()).padStart(2, '0')} ET`;
+}
+
 // mode: 'default' (homepage) — REGULAR shows realtime, all other states show last reg only
 //       '24h' — 实时价格 vs 前收盘：盘中用regular涨跌，盘后/隔夜用 reg+post 累计
 function effectiveChange(q, opts = {}) {
@@ -1992,12 +2002,19 @@ function renderDetail(idx, mode) {
     // 休市（节假日/周末）：该市场今日无交易，涨幅按 0 计，并标注出来避免误解
     const closed = !!(mode === '24h' && q && q.tradingToday === false);
     const closedTip = closed ? `该市场今日休市，涨幅按 0 计（行情源最近报价日 ${q.sessionDate}）` : '';
+    // 夜盘实测值：夜盘尾声成交稀少，数据可能滞后数十分钟，标注成交时间避免被误读为实时
+    const nightAsOf = (mode === '24h' && !approx && q && q.marketState === 'OVERNIGHT' && q.overnightAsOf)
+      ? q.overnightAsOf : null;
+    const nightTip = nightAsOf
+      ? `夜盘成交价（富途同源口径），数据时间 ${fmtEtHm(nightAsOf)}${q.overnightLagMin > 1 ? `，约 ${q.overnightLagMin} 分钟前` : ''}`
+      : '';
+    const chgTip = approx ? '夜盘实时源暂不可用，此值为模型估算' : (nightTip || closedTip);
     const tag = marketTag(h.market);
     return `
       <div class="holding-row">
         <span class="holding-name">${holdingDisplayName(h)}${tag ? `<span class="holding-mkt-tag">${tag}</span>` : ''}${closed ? `<span class="holding-closed-tag" title="${closedTip}">休市</span>` : ''}</span>
         <span class="holding-weight">${(h.w * 100).toFixed(2)}%</span>
-        <span class="holding-chg ${cls(chg)}"${approx ? ' title="夜盘实时源暂不可用，此值为模型估算"' : (closed ? ` title="${closedTip}"` : '')}>${approx ? '≈' : ''}${fmtPct(chg)}</span>
+        <span class="holding-chg ${cls(chg)}"${chgTip ? ` title="${chgTip}"` : ''}>${approx ? '≈' : ''}${fmtPct(chg)}</span>
       </div>`;
   }).join('');
 

@@ -471,12 +471,9 @@ const XUEQIU_COOKIE_TTL = 30 * 60_000;  // 30 分钟
 const xueqiuQuoteCache = new Map();
 const XUEQIU_QUOTE_TTL = 10_000;  // 10 秒
 
-// 雪球夜盘数据新鲜度阈值：
-// 雪球在 ET 00:00 之后不再推送夜盘（其自身市场状态已是"已收盘"），
-// 而富途的夜盘（Blue Ocean，20:00-04:00 ET）仍在实时跳动。
-// 若不校验，会把几小时前的旧价当实时夜盘价 → 与富途出现巨大偏差。
-// 判定方式：取本轮全部标的里"最新的夜盘时间戳"，超过阈值即认为该数据源已停更。
-const OVERNIGHT_FEED_MAX_AGE_MS = Number(process.env.OVERNIGHT_FEED_MAX_AGE_MS || 20 * 60_000);
+// 注：雪球夜盘数据不做"距今多少分钟"式的过期判定。
+// 夜盘尾声（约 03:30 ET 后）成交稀少，推送间隔会自然拉长，但最后一条仍是
+// 真实成交价。改用"时间戳是否落在本轮夜盘内"判定，见 usOvernightSessionStart()。
 
 function fetchXueqiuRaw(url, extraHeaders = {}, depth = 0) {
   return new Promise((resolve, reject) => {
@@ -637,6 +634,27 @@ function getUSMarketState() {
   if (minOfDay >= 960 && minOfDay < 1200) return 'POST';
   // 工作日 00:00-04:00 ET：夜盘（期货持续交易）
   return 'OVERNIGHT';
+}
+
+// 本轮美股夜盘（20:00-04:00 ET）的起点时间戳（毫秒）。
+// 用途：判断雪球夜盘数据是否属于"当前这一轮夜盘"。
+// 背景：夜盘尾声（约 03:30 ET 之后）Blue Ocean 通道成交稀少，雪球的推送间隔
+//       会从几分钟拉长到几十分钟甚至更久。若按"距今多少分钟"判定，
+//       会把它误判为"数据源停更"而回退到 β 模型估算 —— 而那个估算
+//       在个股上偏差极大（实测闪迪：真实 +1.89% vs 估算 -0.21%）。
+//       最后一条雪球推送仍是真实成交价，只滞后不失效，因此判据应为
+//       "时间戳落在本轮夜盘内"，而非"距今多久"。
+function usOvernightSessionStart() {
+  const now = new Date();
+  const isDST = now.getUTCMonth() > 2 && now.getUTCMonth() < 10;
+  const etOffsetMin = isDST ? -240 : -300;
+  const et = new Date(now.getTime() + etOffsetMin * 60000);
+  const minOfDay = et.getUTCHours() * 60 + et.getUTCMinutes();
+  // ET 当天 00:00 对应的 UTC 毫秒
+  const etMidnightUtc = Date.UTC(et.getUTCFullYear(), et.getUTCMonth(), et.getUTCDate()) - etOffsetMin * 60000;
+  // ET 20:00（1200 分）之前 → 本轮夜盘起于前一日 20:00
+  const dayShift = minOfDay < 1200 ? -1 : 0;
+  return etMidnightUtc + (1200 + dayShift * 1440) * 60000;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -907,7 +925,7 @@ function computeOvernightQuote({
   yahoo,
   xq,
   etfFut,
-  xqNightFeedAlive,
+  overnightSessionStart,
   esDelta,
   nqDelta,
 }) {
@@ -921,14 +939,24 @@ function computeOvernightQuote({
     Math.abs(yahooFullday - (closeForOvernight || 0)) > 1e-6 &&
     (!sina?.afterHoursPrice || Math.abs(yahooFullday - sina.afterHoursPrice) > 1e-4);
 
+  // 雪球夜盘（富途同款 Blue Ocean 通道）是否可用：
+  //   判据 = 时间戳落在"本轮夜盘"内（30 分钟时钟容差），而不是"距今多少分钟"。
+  //   夜盘尾声成交稀少导致推送间隔变长，不代表数据失效。
+  const xqTs = xq && xq.timestampNight != null ? xq.timestampNight : null;
+  const xqInSession = xqTs != null && xqTs >= overnightSessionStart - 30 * 60000;
+  const xqPrice = xq && xq.currentNight != null ? xq.currentNight : null;
+
   let chg = null;
   let price = null;
   let source = null;
 
-  if (xqNightFeedAlive && xq?.currentNight != null && closeForOvernight > 0) {
-    // 雪球夜盘（富途同款数据源）——仅在数据源仍在更新时采用
-    chg = ((xq.currentNight - closeForOvernight) / closeForOvernight) * 100;
-    price = xq.currentNight;
+  if (xqInSession && xqPrice != null && closeForOvernight > 0) {
+    // 雪球自带的 percent_night_session 即"相对正股收盘价"的夜盘涨跌幅，
+    // 与富途 App 完全同口径，优先直接采用，避免自行换算再引入偏差。
+    chg = isFinite(xq.percentNight)
+      ? xq.percentNight
+      : ((xqPrice - closeForOvernight) / closeForOvernight) * 100;
+    price = xqPrice;
     source = 'xueqiu';
   } else if (yahooCoversOvernight) {
     // Yahoo fullday（含盘前/盘后/隔夜），海外网络可达时为实时值
@@ -952,13 +980,15 @@ function computeOvernightQuote({
   }
   if (!isFinite(chg)) chg = 0;
 
+  // 实测值（xueqiu/yahoo）即便略有滞后也不加"≈"——它是真实成交价；
+  // 只有 futures/proxy 这类模型推算值才需要标注为估算。
   return {
     overnightChangePercent: chg,
     overnightPrice: price,
     overnightSource: source,
-    // xueqiu/yahoo 为实测值，futures/proxy 为模型估算值（前端据此加"≈"标记）
     overnightEstimated: source !== 'xueqiu' && source !== 'yahoo',
-    overnightAsOf: source === 'xueqiu' ? (xq?.timestampNight ?? null) : null,
+    overnightAsOf: source === 'xueqiu' ? (xqTs ?? null) : null,
+    overnightLagMin: source === 'xueqiu' && xqTs ? Math.max(0, Math.round((Date.now() - xqTs) / 60000)) : null,
   };
 }
 
@@ -1078,20 +1108,22 @@ app.get('/api/quotes', async (req, res) => {
       if (isFinite(nqNow) && isFinite(qqq20)) nqDelta = nqNow - qqq20;
       if (isFinite(esNow) && isFinite(spy20)) esDelta = esNow - spy20;
     }
-    // 雪球夜盘源是否仍在更新（详见 OVERNIGHT_FEED_MAX_AGE_MS 说明）
-    let xqNightFeedTs = 0;
+    // 本轮夜盘起点 + 雪球夜盘覆盖情况（判定逻辑详见 usOvernightSessionStart 说明）
+    const overnightSessionStart = usOvernightSessionStart();
+    let xqNightLatestTs = 0;
+    let xqInSessionCount = 0;
     if (xueqiuData && xueqiuData.size) {
       for (const v of xueqiuData.values()) {
-        if (v && v.timestampNight && v.timestampNight > xqNightFeedTs) xqNightFeedTs = v.timestampNight;
+        if (!v || !v.timestampNight) continue;
+        if (v.timestampNight > xqNightLatestTs) xqNightLatestTs = v.timestampNight;
+        if (v.timestampNight >= overnightSessionStart - 30 * 60000) xqInSessionCount++;
       }
     }
-    const xqNightFeedAlive =
-      xqNightFeedTs > 0 && (Date.now() - xqNightFeedTs) <= OVERNIGHT_FEED_MAX_AGE_MS;
-    if (usState === 'OVERNIGHT' && xueqiuData && xueqiuData.size && !xqNightFeedAlive) {
-      const ageMin = xqNightFeedTs ? Math.round((Date.now() - xqNightFeedTs) / 60000) : -1;
-      console.warn(
-        `[overnight] 雪球夜盘源已停更（最新夜盘时间戳 ${xqNightFeedTs ? new Date(xqNightFeedTs).toISOString() : 'n/a'}` +
-        `，距今 ${ageMin} 分钟），本次回退到 Yahoo/期货代理估算`
+    if (usState === 'OVERNIGHT') {
+      const ageMin = xqNightLatestTs ? Math.round((Date.now() - xqNightLatestTs) / 60000) : -1;
+      console.log(
+        `[overnight] 雪球夜盘：${xqInSessionCount}/${xueqiuData ? xueqiuData.size : 0} 个标的处于本轮夜盘内` +
+        `，最新推送 ${xqNightLatestTs ? new Date(xqNightLatestTs).toISOString() : 'n/a'}（距今 ${ageMin} 分钟）`
       );
     }
 
@@ -1112,7 +1144,7 @@ app.get('/api/quotes', async (req, res) => {
             yahoo: yhExtData && yhExtData.get(em.symbol),
             xq: xueqiuData && xueqiuData.get(em.symbol),
             etfFut: emFutSym ? futuresData[emFutSym] : null,
-            xqNightFeedAlive,
+            overnightSessionStart,
             esDelta,
             nqDelta,
           }),
@@ -1182,7 +1214,7 @@ app.get('/api/quotes', async (req, res) => {
             yahoo: yhExtData && yhExtData.get(q.symbol),
             xq: xueqiuData && xueqiuData.get(q.symbol),
             etfFut: futSym ? futuresData[futSym] : null,
-            xqNightFeedAlive,
+            overnightSessionStart,
             esDelta,
             nqDelta,
           }),
@@ -1208,9 +1240,10 @@ app.get('/api/quotes', async (req, res) => {
           sinaRequested: sinaAll.length,
           yahooExtCount: yhExtData ? yhExtData.size : 0,
           xueqiuCount: xueqiuData ? xueqiuData.size : 0,
-          xqNightFeedTs: xqNightFeedTs ? new Date(xqNightFeedTs).toISOString() : null,
-          xqNightFeedAlive,
-          xqFeedMaxAgeMin: Math.round(OVERNIGHT_FEED_MAX_AGE_MS / 60000),
+          xqNightLatestTs: xqNightLatestTs ? new Date(xqNightLatestTs).toISOString() : null,
+          xqNightInSessionCount: xqInSessionCount,
+          overnightSessionStart: new Date(overnightSessionStart).toISOString(),
+          xueqiuUsedCount: data.filter((q) => q.overnightSource === 'xueqiu').length,
           futuresKeys: Object.keys(futuresData || {}),
           esDelta,
           nqDelta,
