@@ -447,6 +447,8 @@ async function fetchJapanQuotes(symbols) {
     const chgPct = ((price - prevClose) / prevClose) * 100;
     // 日期字段位置在不同品种间会漂移，直接按内容找 'YYYY-MM-DD HH:mm:ss'
     const dateField = fields.find((f) => /^\d{4}-\d{2}-\d{2}[ T]/.test(f));
+    // 时区偏移传 8（北京时间）：腾讯时间戳为北京时间，收盘后定格在收盘时刻（北京
+    // 14:00 = JST 15:00）；若按 JP(+9) 判定，北京时间 23:00 后 JST 已跨日，会误判休市
     map[sym] = withTradingDay({
       symbol: sym,
       regularMarketPrice: price,
@@ -455,7 +457,46 @@ async function fetchJapanQuotes(symbols) {
       preMarketChangePercent: chgPct,
       postMarketChangePercent: 0,
       marketState: 'REGULAR',
-    }, 'JP', dateField);
+    }, 8, dateField);
+  }
+  return map;
+}
+
+// ──────────────────────────────────────────
+//  Tencent fetcher (Korean stocks) — 韩股主源
+//  背景：Naver 的 /basic 与 fchart 日线在收盘后都不会更新为 15:30 KST 定盘价，
+//        而是冻结在收盘竞价开始前（约 15:20）的最后成交价 —— 实测三星电子
+//        2026-10-01 定盘 276000(+2.79%)，Naver 始终返回 273000(+1.68%)。
+//        腾讯 qt.gtimg.cn 的 kr 前缀通道返回定盘价（东财"收涨2.79%"与之吻合），
+//        故韩股主源切到腾讯，Naver 降为兜底。
+//  字段与日股同构: [3]现价 [4]昨收；[30]为日期时间，注意是**北京时间**(KST-1h)
+// ──────────────────────────────────────────
+async function fetchTencentKrQuotes(symbols) {
+  const ids = symbols.map((s) => `kr${s}`).join(',');
+  const url = `https://qt.gtimg.cn/q=${ids}`;
+  const text = await httpGet(url, { Referer: 'https://finance.qq.com/' });
+  const map = {};
+  for (const line of text.split('\n')) {
+    const m = line.match(/v_kr(\w+)="([^"]+)"/);
+    if (!m) continue;
+    const sym = m[1].toUpperCase();
+    const fields = m[2].split('~');
+    const price = parseFloat(fields[3]);
+    const prevClose = parseFloat(fields[4]);
+    if (!isFinite(price) || !isFinite(prevClose) || prevClose <= 0) continue;
+    const chgPct = ((price - prevClose) / prevClose) * 100;
+    const dateField = fields.find((f) => /^\d{4}-\d{2}-\d{2}[ T]/.test(f));
+    // 时区偏移传 8（北京时间）：腾讯收盘后时间戳定格在收盘时刻（北京 14:30 = KST 15:30），
+    // 若按 KR(+9) 判定，北京时间 23:00 后 KST 已跨日，会把"今日已交易"误判为休市
+    map[sym] = withTradingDay({
+      symbol: sym,
+      regularMarketPrice: price,
+      regularMarketChangePercent: chgPct,
+      regularMarketPreviousClose: prevClose,
+      preMarketChangePercent: chgPct,
+      postMarketChangePercent: 0,
+      marketState: 'REGULAR',
+    }, 8, dateField);
   }
   return map;
 }
@@ -688,10 +729,12 @@ function toDateKey(s) {
 function withTradingDay(quote, marketKey, rawDate) {
   const key = toDateKey(rawDate);
   if (!key) return quote;
+  // marketKey 可传市场标识（'KR'）或直接的 UTC 偏移小时数（腾讯源的时间戳统一为北京时间）
+  const tz = typeof marketKey === 'number' ? marketKey : (MARKET_TZ_OFFSET[marketKey] ?? 8);
   return {
     ...quote,
     sessionDate: key,
-    tradingToday: key === marketToday(MARKET_TZ_OFFSET[marketKey] ?? 8),
+    tradingToday: key === marketToday(tz),
   };
 }
 
@@ -1038,14 +1081,27 @@ app.get('/api/quotes', async (req, res) => {
         const m = parseSinaResponse(text, sinaAll);
         return { map: m, list: sinaAll.map((s) => m[s]).filter(Boolean) };
       })(),
-      Promise.all(
-        krSymbols.map((s) =>
-          fetchKoreanQuote(s).catch((e) => {
-            console.error('[naver]', s, e.message);
-            return null;
-          })
-        )
-      ).then((arr) => arr.filter(Boolean)),
+      // 韩股主源：腾讯 kr 通道（收盘后返回 15:30 KST 定盘价）；Naver 兜底
+      // （Naver 的 /basic 与 fchart 收盘后冻结在竞价前价格，见 fetchTencentKrQuotes 注释）
+      (async () => {
+        if (!krSymbols.length) return [];
+        const tencentKr = await fetchTencentKrQuotes(krSymbols).catch((e) => {
+          console.error('[tencent-kr]', e.message);
+          return {};
+        });
+        const missing = krSymbols.filter((s) => !tencentKr[s]);
+        const naverList = missing.length
+          ? (await Promise.all(
+              missing.map((s) =>
+                fetchKoreanQuote(s).catch((e) => {
+                  console.error('[naver]', s, e.message);
+                  return null;
+                })
+              )
+            )).filter(Boolean)
+          : [];
+        return [...Object.values(tencentKr), ...naverList];
+      })(),
       twSymbols.length
         ? fetchTaiwanQuotes(twSymbols).catch((e) => {
             console.error('[twse]', e.message);
