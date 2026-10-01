@@ -266,6 +266,46 @@
       50% { opacity: 0.85; }
     }
 
+    /* ── 顶部 TabBar ── */
+    .tabbar {
+      display: flex;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--border-header);
+      box-shadow: var(--shadow-header);
+    }
+    .tab-item {
+      flex: 1;
+      text-align: center;
+      padding: 12px 0 10px;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      position: relative;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: color 0.15s;
+    }
+    .tab-item:active { opacity: 0.7; }
+    .tab-item.active { color: var(--text-primary); }
+    .tab-item::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%) scaleX(0);
+      bottom: 0;
+      width: 30px;
+      height: 3px;
+      border-radius: 3px 3px 0 0;
+      background: var(--up);
+      transition: transform 0.2s ease-out;
+    }
+    .tab-item.active::after { transform: translateX(-50%) scaleX(1); }
+
     .status-bar {
       text-align: center;
       padding: 6px 12px;
@@ -1302,19 +1342,15 @@ function us24hSession() {
   return '亚盘';   // 周末
 }
 
-// 首页：工作日北京时间16:00之后显示24h视图，工作日5:00-16:00显示首页(基金列表)
+// QDII估值 tab 内的时段切换：
+//   北京时间 16:00 之后（含次日 0:00–4:00）→ 24h 视图
+//   北京时间 4:00–16:00 → 默认首页（盘后/季报列表）
 function usMarketTrading() {
   const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const bjTime = new Date(utc + 8 * 3600000);
-  const day = bjTime.getDay();
-  const min = bjTime.getHours() * 60 + bjTime.getMinutes();
-  const weekday = day >= 1 && day <= 5;
-  if (!weekday) return true; // 周末显示24h视图
-  // 工作日：16:00之后显示24h，5:00-16:00显示首页
-  if (min >= 960) return true;   // 16:00+ → 24h
-  if (min >= 300) return false;  // 5:00-16:00 → 首页
-  return true; // 0:00-5:00 → 24h（前一天盘后延续）
+  // 换算到北京时间（UTC+8）再判断，不受设备时区影响
+  const bj = new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000);
+  const min = bj.getHours() * 60 + bj.getMinutes();
+  return min >= 960 || min < 240;   // 16:00–24:00 与 0:00–4:00 → 24h 视图
 }
 
 function marketLabel(qmap, opts = {}) {
@@ -1443,6 +1479,7 @@ function toggleMacdSection(bar) {
 function currentRoute() {
   const hash = location.hash || '';
   if (hash === '#/history') return { view: 'history' };
+  if (hash === '#/macd') return { view: 'macd' };
   if (hash === '#/24h') return { view: '24h' };
   const m24h = hash.match(/^#\/24h\/fund\/(\d+)/);
   if (m24h) {
@@ -1454,8 +1491,8 @@ function currentRoute() {
     const idx = parseInt(m[1], 10);
     if (idx >= 0 && idx < FUNDS.length) return { view: 'detail', idx };
   }
-  // 首页：美股交易时段(盘前/盘中/盘后)显示24h实时估值；休市(隔夜/周末)显示季报列表
-  return usMarketTrading() ? { view: '24h' } : { view: 'list' };
+  // 首页默认 tab：QDII估值（美股基金列表）
+  return { view: 'list' };
 }
 
 window.addEventListener('hashchange', () => {
@@ -1626,19 +1663,24 @@ function macdSectionHtml() {
       </div>`;
   }
 
-  // 从第一个有数据的指数取日期区间
+  // 日期区间固定显示「最近30天」，截止日为当天。
+  // 不再取数据柱的实际日期：休市时（如A股国庆）最后一根柱停在上一交易日，
+  // 用它当截止日会让人误以为数据停在那天。
   let dateRangeStr = '';
-  for (const { key } of indices) {
-    const bars = INDEX_MACD && INDEX_MACD[key] && INDEX_MACD[key].bars;
-    if (bars && bars.length >= 2) {
-      const fmt = d => d.length === 8
-        ? `${d.slice(4,6)}/${d.slice(6,8)}`
-        : `${d.slice(5,7)}/${d.slice(8,10)}`;
-      const lastBar = bars[bars.length - 1];
-      const endLabel = fmt(lastBar.date) + (lastBar.intraday ? '<span style="color:#e8a03d;font-size:9px;margin-left:2px;">盘中</span>' : '');
-      dateRangeStr = `${fmt(bars[0].date)}～${endLabel}`;
-      break;
+  {
+    const fmtMd = d => `${d.getMonth() + 1}/${d.getDate()}`;
+    const end = new Date();
+    const start = new Date(end.getTime() - 30 * 24 * 3600 * 1000);
+    let endLabel = fmtMd(end);
+    // 盘中标记：取第一个有数据指数的最后一根柱
+    for (const { key } of indices) {
+      const bars = INDEX_MACD && INDEX_MACD[key] && INDEX_MACD[key].bars;
+      if (bars && bars.length) {
+        if (bars[bars.length - 1].intraday) endLabel += '<span style="color:#e8a03d;font-size:9px;margin-left:2px;">盘中</span>';
+        break;
+      }
     }
+    dateRangeStr = `${fmtMd(start)}～${endLabel}`;
   }
 
   const cardsHtml = indices.map(({ key, label }) =>
@@ -1679,57 +1721,6 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
   const priceTxt = fmtPrice(vixyPrice);
   const chgTxt = fmtPct(vixyChg);
 
-  // 均线预警表格：三级风险
-  const MA_RULES = [
-    { key: 'ma21',  lv: 'lv1', badge: '一级预警', condition: 'MA5下穿MA21',  advice: '减仓一半'        },
-    { key: 'ma60',  lv: 'lv2', badge: '二级预警', condition: 'MA5下穿MA60',  advice: '清仓离场'        },
-    { key: 'ma120', lv: 'lv3', badge: '三级预警', condition: 'MA5下穿MA120', advice: '空仓，切勿抄底'  },
-    { key: 'ma250', lv: 'lv4', badge: '四级预警', condition: 'MA5下穿MA250', advice: '熊市空仓'  },
-  ];
-  function maTableBody() {
-    if (!INDEX_MA) return `<tr><td colspan="4"><span class="ma-loading">均线数据加载中…</span></td></tr>`;
-    const indices = [INDEX_MA.sh, INDEX_MA.cy, INDEX_MA.ndx, INDEX_MA.kospi];
-    const rows = [];
-    for (const { key, lv, badge, condition, advice } of MA_RULES) {
-      const hits = indices.filter(d => d && d.crossBelow && d.crossBelow[key]).map(d => d.name);
-      if (!hits.length) continue;
-      const idxTags = hits.map(n => `<span class="ma-idx ${lv}">${n}</span>`).join('');
-      rows.push(`
-        <tr class="${lv}">
-          <td class="ma-td-badge"><span class="ma-badge ${lv}">${badge}</span></td>
-          <td class="ma-td-cond"><span>${condition}</span></td>
-          <td class="ma-td-indices"><div class="ma-indices-wrap">${idxTags}</div></td>
-          <td class="ma-td-advice"><span class="${lv}">${advice}</span></td>
-        </tr>`);
-    }
-    if (!rows.length) return `<tr><td colspan="4"><span class="ma-none">各指数均线正常，持仓安全</span></td></tr>`;
-    return rows.join('');
-  }
-  const maCollapsed = localStorage.getItem('ma-alert-collapsed') !== '0';
-  const maAlertHtml = `
-    <div class="ma-alert-section${maCollapsed ? ' collapsed' : ''}">
-      <div class="ma-toggle-bar" onclick="toggleMaAlert(this)">
-        <span class="ma-toggle-title">均线风险预警</span>
-        <div class="ma-toggle-right">
-          <span class="ma-toggle-label">${maCollapsed ? '打开均线' : '关闭均线'}</span>
-          <div class="ma-toggle-switch">
-            <div class="ma-toggle-switch-track"></div>
-            <div class="ma-toggle-switch-thumb"></div>
-          </div>
-        </div>
-      </div>
-      <table class="ma-table">
-        <thead class="ma-table-head">
-          <tr>
-            <th>等级</th><th>触发条件</th><th>涉及指数</th><th>操作建议</th>
-          </tr>
-        </thead>
-        <tbody>${maTableBody()}</tbody>
-      </table>
-    </div>`;
-
-  const macdHtml = macdSectionHtml();
-
   // VIXY < 25: 正常状态，仅显示价格信息
   if (!vixyPrice || vixyPrice < 25) return `
     <div class="vixy-bar">
@@ -1740,9 +1731,7 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
         <span class="vixy-signal ${vixySignal.cls}">${vixySignal.text}</span>
         ${showChgLink ? `<span class="vixy-chg-link" onclick="go('#/history')">涨跌幅统计</span>` : ''}
       </div>
-    </div>
-    ${macdHtml}
-    ${maAlertHtml}`;
+    </div>`;
 
   // VIXY >= 25: 带加仓建议的合并横幅
   let alertCls, amount, tip;
@@ -1771,9 +1760,82 @@ function vixyBarHtml(vixyPrice, vixyChg, vixySignal, qqqChg, fxChg, opts = {}) {
         <span class="alert-amount">建议加仓 QQQ：${amount}</span>
         <span class="alert-tip">${tip}</span>
       </div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════
+//  RENDER — macd买卖 tab（MACD柱状图 + 均线风险预警）
+// ═══════════════════════════════════════════════════
+
+// 均线风险预警表格：三级风险
+function maAlertSectionHtml() {
+  const MA_RULES = [
+    { key: 'ma21',  lv: 'lv1', badge: '一级预警', condition: 'MA5下穿MA21',  advice: '减仓一半'        },
+    { key: 'ma60',  lv: 'lv2', badge: '二级预警', condition: 'MA5下穿MA60',  advice: '清仓离场'        },
+    { key: 'ma120', lv: 'lv3', badge: '三级预警', condition: 'MA5下穿MA120', advice: '空仓，切勿抄底'  },
+    { key: 'ma250', lv: 'lv4', badge: '四级预警', condition: 'MA5下穿MA250', advice: '熊市空仓'  },
+  ];
+  function maTableBody() {
+    if (!INDEX_MA) return `<tr><td colspan="4"><span class="ma-loading">均线数据加载中…</span></td></tr>`;
+    const indices = [INDEX_MA.sh, INDEX_MA.cy, INDEX_MA.ndx, INDEX_MA.kospi];
+    const rows = [];
+    for (const { key, lv, badge, condition, advice } of MA_RULES) {
+      const hits = indices.filter(d => d && d.crossBelow && d.crossBelow[key]).map(d => d.name);
+      if (!hits.length) continue;
+      const idxTags = hits.map(n => `<span class="ma-idx ${lv}">${n}</span>`).join('');
+      rows.push(`
+        <tr class="${lv}">
+          <td class="ma-td-badge"><span class="ma-badge ${lv}">${badge}</span></td>
+          <td class="ma-td-cond"><span>${condition}</span></td>
+          <td class="ma-td-indices"><div class="ma-indices-wrap">${idxTags}</div></td>
+          <td class="ma-td-advice"><span class="${lv}">${advice}</span></td>
+        </tr>`);
+    }
+    if (!rows.length) return `<tr><td colspan="4"><span class="ma-none">各指数均线正常，持仓安全</span></td></tr>`;
+    return rows.join('');
+  }
+  // 仅当用户主动关闭过才折叠，独立 tab 下默认展开
+  const maCollapsed = localStorage.getItem('ma-alert-collapsed') === '1';
+  return `
+    <div class="ma-alert-section${maCollapsed ? ' collapsed' : ''}">
+      <div class="ma-toggle-bar" onclick="toggleMaAlert(this)">
+        <span class="ma-toggle-title">均线风险预警</span>
+        <div class="ma-toggle-right">
+          <span class="ma-toggle-label">${maCollapsed ? '打开均线' : '关闭均线'}</span>
+          <div class="ma-toggle-switch">
+            <div class="ma-toggle-switch-track"></div>
+            <div class="ma-toggle-switch-thumb"></div>
+          </div>
+        </div>
+      </div>
+      <table class="ma-table">
+        <thead class="ma-table-head">
+          <tr>
+            <th>等级</th><th>触发条件</th><th>涉及指数</th><th>操作建议</th>
+          </tr>
+        </thead>
+        <tbody>${maTableBody()}</tbody>
+      </table>
+    </div>`;
+}
+
+function tabbarHtml(active) {
+  return `
+    <div class="tabbar">
+      <div class="tab-item ${active === 'qdii' ? 'active' : ''}" onclick="go('#/')">QDII估值</div>
+      <div class="tab-item ${active === 'macd' ? 'active' : ''}" onclick="go('#/macd')">macd买卖</div>
+    </div>`;
+}
+
+function renderMacdView() {
+  document.getElementById('app').innerHTML = `
+    ${tabbarHtml('macd')}
+    <div class="status-bar">MACD 买卖信号与均线风险预警&ensp;更新于 ${nowStr()}<span class="${LAST_STALE ? 'dot' : 'dot live'}"></span>
     </div>
-    ${macdHtml}
-    ${maAlertHtml}`;
+    ${macdSectionHtml()}
+    ${maAlertSectionHtml()}
+    <div class="footer">数据来源：新浪财经 · 腾讯财经<br>10秒自动刷新</div>
+  `;
 }
 
 function renderList() {
@@ -1832,9 +1894,8 @@ function renderList() {
   prevHeaderVal.FX   = fxChg;
 
   const dotClass = LAST_STALE ? 'dot' : 'dot live';
-  // 美股盘中(REGULAR)隐藏入口；盘前/盘后/已收盘时显示
-  const isRegular = map['QQQ']?.marketState === 'REGULAR';
-  const entryHtml = isRegular ? '' : `
+  // 24h 视图入口（首页已改为 tab 结构，不再自动切 24h，故入口常驻）
+  const entryHtml = `
     <div class="entry-row" onclick="go('#/24h')">
       <div class="entry-main">
         <span class="entry-label">美股24小时</span>
@@ -1851,6 +1912,7 @@ function renderList() {
                    : { text: '正常', cls: 'signal-normal' };
 
   document.getElementById('app').innerHTML = `
+    ${tabbarHtml('qdii')}
     <div class="header">
       <div class="h-item ${fIxic}">
         <div class="h-label">纳斯达克</div>
@@ -1950,7 +2012,7 @@ function render24h() {
 
   const isHome = !location.hash || location.hash === '#' || location.hash === '#/';
   document.getElementById('app').innerHTML = `
-    ${!isHome ? `<div class="h24-topbar"><button class="back-btn" onclick="goBack()">‹ 返回</button></div>` : ''}
+    ${!isHome ? `<div class="h24-topbar"><button class="back-btn" onclick="goBack()">‹ 返回</button></div>` : tabbarHtml('qdii')}
     <div class="header header-3col">
       <div class="header-inner">
         <div class="h-item ${fQqq}">
@@ -2066,6 +2128,8 @@ function rerender() {
   if (r.view === 'detail') renderDetail(r.idx, r.mode);
   else if (r.view === '24h') render24h();
   else if (r.view === 'history') renderHistory();
+  else if (r.view === 'macd') renderMacdView();
+  else if (r.view === 'list' && usMarketTrading()) render24h();  // QDII tab：北京时间16:00后 → 24h视图
   else renderList();
 }
 
