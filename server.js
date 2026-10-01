@@ -179,10 +179,11 @@ function fetchSina(sinaIds) {
 
 // ──────────────────────────────────────────
 //  Naver Finance fetcher (Korean stocks)
-//  Sina/Tencent/eastmoney 都不覆盖 KRX；Naver 是 EUC-KR 编码的纯 HTML 页面
+//  旧的 finance.naver.com/item/main.naver HTML 页已被 302 重定向到 SPA；
+//  改用 m.stock.naver.com 的 JSON API，字段干净稳定。
 // ──────────────────────────────────────────
-function fetchNaverHtml(ticker) {
-  const url = `https://finance.naver.com/item/main.naver?code=${encodeURIComponent(ticker)}`;
+function fetchNaverBasicJson(ticker) {
+  const url = `https://m.stock.naver.com/api/stock/${encodeURIComponent(ticker)}/basic`;
   return new Promise((resolve, reject) => {
     const req = https.get(
       url,
@@ -190,7 +191,9 @@ function fetchNaverHtml(ticker) {
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0 Safari/537.36',
+          'Accept': 'application/json',
           'Accept-Language': 'ko-KR,en;q=0.9',
+          'Referer': 'https://m.stock.naver.com/',
         },
         timeout: 8000,
       },
@@ -198,14 +201,10 @@ function fetchNaverHtml(ticker) {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
         res.on('end', () => {
-          // Naver finance now serves UTF-8 (used to be EUC-KR).
-          // Pick decoder from response Content-Type, default to utf-8.
-          const ct = String(res.headers['content-type'] || '').toLowerCase();
-          const enc = /euc-kr/.test(ct) ? 'euc-kr' : 'utf-8';
           try {
-            resolve(new TextDecoder(enc).decode(Buffer.concat(chunks)));
-          } catch {
-            resolve(Buffer.concat(chunks).toString('utf-8'));
+            resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8')));
+          } catch (e) {
+            reject(new Error('Naver JSON parse failed: ' + e.message));
           }
         });
         res.on('error', reject);
@@ -216,33 +215,25 @@ function fetchNaverHtml(ticker) {
   });
 }
 
-function parseNaverQuote(html, ticker) {
-  // Naver embeds an accessibility-labelled <dl class="blind"> with ordered fields:
-  //   [0] 거래소 timestamp  [1] 시장 (코스피/코스닥)
-  //   [2] 종목 + 시장코드
-  //   [3] "현재가 X,XXX 전일대비 보합/상승/하락 +Y -Y.YY 등락률"
-  //   [4]+ open/high/low/52w/...
-  const m = html.match(/<dl class="blind">([\s\S]*?)<\/dl>/);
-  if (!m) return null;
-  const dds = [...m[1].matchAll(/<dd>([^<]+)<\/dd>/g)].map((x) => x[1].trim());
-  if (dds.length < 4) return null;
+function parseNaverQuote(json, ticker) {
+  if (!json || typeof json !== 'object') return null;
+  const parseNum = v => {
+    if (v == null) return NaN;
+    const n = parseFloat(String(v).replace(/,/g, ''));
+    return isNaN(n) ? NaN : n;
+  };
+  const price = parseNum(json.closePrice);
+  if (!isFinite(price)) return null;
 
-  const priceLine = dds[3];
-  // Detect sign: 상승=up, 하락=down, 보합=unchanged
-  let sign = 1;
-  if (/하락/.test(priceLine)) sign = -1;
-  else if (/상승/.test(priceLine)) sign = 1;
-  else if (/보합/.test(priceLine)) sign = 0;
+  // 方向：优先用 compareToPreviousPrice.name（RISING / FALLING / STEADY）
+  //       兜底再看 text（상승/하락/보합）
+  const dir = (json.compareToPreviousPrice && (json.compareToPreviousPrice.name || json.compareToPreviousPrice.text)) || '';
+  let sign = 0;
+  if (/RISING|상승/.test(dir)) sign = 1;
+  else if (/FALLING|하락/.test(dir)) sign = -1;
 
-  // Extract numbers in priceLine: [price, changeAbs, changePct]
-  const nums = (priceLine.match(/[\d,]+\.?\d*/g) || []).map((n) =>
-    parseFloat(n.replace(/,/g, ''))
-  );
-  if (nums.length < 1 || isNaN(nums[0])) return null;
-  const price = nums[0];
-  // changeAbs and changePct are unsigned in the page; apply sign
-  const changeAbs = sign * Math.abs(nums[1] || 0);
-  const changePct = sign * Math.abs(nums[2] || 0);
+  const changeAbs = sign * Math.abs(parseNum(json.compareToPreviousClosePrice) || 0);
+  const changePct = sign * Math.abs(parseNum(json.fluctuationsRatio) || 0);
   const prevClose = price - changeAbs;
 
   return {
@@ -252,13 +243,13 @@ function parseNaverQuote(html, ticker) {
     regularMarketChangePercent: changePct,
     preMarketChangePercent: changePct,
     postMarketChangePercent: 0,
-    marketState: 'REGULAR',
+    marketState: json.marketStatus === 'OPEN' ? 'REGULAR' : 'CLOSED',
   };
 }
 
 async function fetchKoreanQuote(ticker) {
-  const html = await fetchNaverHtml(ticker);
-  return parseNaverQuote(html, ticker);
+  const json = await fetchNaverBasicJson(ticker);
+  return parseNaverQuote(json, ticker);
 }
 
 // ──────────────────────────────────────────
@@ -464,6 +455,154 @@ async function fetchJapanQuotes(symbols) {
       marketState: 'REGULAR',
     };
   }
+  return map;
+}
+
+// ──────────────────────────────────────────
+//  Xueqiu (雪球) fetcher — 美股夜盘 ECN 数据源
+//  字段 current_night_session / percent_night_session 对应富途"夜盘"涨幅
+//  需要 cookie 鉴权：首次访问主站拿 session cookie，后续带 cookie 请求
+// ──────────────────────────────────────────
+let xueqiuCookie = null;
+let xueqiuCookieTs = 0;
+const XUEQIU_COOKIE_TTL = 30 * 60_000;  // 30 分钟
+const xueqiuQuoteCache = new Map();
+const XUEQIU_QUOTE_TTL = 10_000;  // 10 秒
+
+function fetchXueqiuRaw(url, extraHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        Accept: 'application/json, text/plain, */*',
+        Referer: 'https://xueqiu.com/',
+        ...(xueqiuCookie ? { Cookie: xueqiuCookie } : {}),
+        ...extraHeaders,
+      },
+      timeout: 8000,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        // Collect Set-Cookie
+        const sc = res.headers['set-cookie'];
+        if (sc && sc.length) {
+          const added = sc.map((s) => s.split(';')[0]).join('; ');
+          xueqiuCookie = xueqiuCookie ? `${xueqiuCookie}; ${added}` : added;
+          xueqiuCookieTs = Date.now();
+        }
+        resolve(Buffer.concat(chunks).toString('utf-8'));
+      });
+      res.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(new Error('xueqiu timeout')));
+    req.on('error', reject);
+  });
+}
+
+async function ensureXueqiuCookie() {
+  const now = Date.now();
+  if (xueqiuCookie && now - xueqiuCookieTs < XUEQIU_COOKIE_TTL) return;
+  // 访问主站拿 acw_tc / xq_a_token / u 等 cookie
+  await fetchXueqiuRaw('https://xueqiu.com/').catch(() => {});
+}
+
+async function fetchXueqiuQuote(symbol) {
+  const key = symbol;
+  const cached = xueqiuQuoteCache.get(key);
+  if (cached && Date.now() - cached.ts < XUEQIU_QUOTE_TTL) return cached.data;
+  await ensureXueqiuCookie();
+  const url = `https://stock.xueqiu.com/v5/stock/quote.json?symbol=${encodeURIComponent(symbol)}&extend=detail`;
+  let text;
+  try {
+    text = await fetchXueqiuRaw(url);
+  } catch (e) {
+    console.error('[xueqiu]', symbol, 'http fail:', e.message);
+    return null;
+  }
+  let j;
+  try { j = JSON.parse(text); } catch (e) {
+    console.error('[xueqiu]', symbol, 'parse fail:', e.message);
+    return null;
+  }
+  // 鉴权失败则清缓存重试一次
+  if (j && j.error_code && j.error_code !== 0) {
+    xueqiuCookie = null;
+    await ensureXueqiuCookie();
+    try {
+      text = await fetchXueqiuRaw(url);
+      j = JSON.parse(text);
+    } catch (e) {
+      console.error('[xueqiu]', symbol, 'retry fail:', e.message);
+      return null;
+    }
+  }
+  const q = j && j.data && j.data.quote;
+  if (!q) return null;
+  const data = {
+    current: q.current,
+    percent: q.percent,
+    lastClose: q.last_close,
+    currentExt: q.current_ext,
+    percentExt: q.percent_ext,
+    currentNight: q.current_night_session,
+    percentNight: q.percent_night_session,
+    chgNight: q.chg_night_session,
+    timestampNight: q.timestamp_night_session,
+    status: j.data?.market?.status_id,
+  };
+  xueqiuQuoteCache.set(key, { data, ts: Date.now() });
+  return data;
+}
+
+async function fetchXueqiuQuotes(symbols) {
+  if (!symbols.length) return new Map();
+  const map = new Map();
+  // 雪球每个请求是单标的，并发 5 个够用
+  const CONCURRENCY = 5;
+  let i = 0;
+  async function worker() {
+    while (i < symbols.length) {
+      const sym = symbols[i++];
+      try {
+        const data = await fetchXueqiuQuote(sym);
+        if (data) map.set(sym, data);
+      } catch (e) {
+        console.error('[xueqiu]', sym, e.message);
+      }
+    }
+  }
+  await Promise.all(Array(Math.min(CONCURRENCY, symbols.length)).fill(0).map(worker));
+  return map;
+}
+
+// ──────────────────────────────────────────
+//  Sina 外盘期货 fetcher (hf_NQ / hf_ES / hf_YM)
+//  用于夜盘(ET 20:00-04:00) 美股 ETF 的 24h 走势代理，与富途一致。
+//  字段: [0]最新 [4]高 [5]低 [6]时间 [7]开盘 [8]昨结算 [12]日期 [13]名称
+// ──────────────────────────────────────────
+const SINA_FUTURES_CACHE = new Map();
+const SINA_FUTURES_TTL = 5_000;
+async function fetchSinaFutures(symbols = ['NQ', 'ES', 'YM']) {
+  const now = Date.now();
+  const cacheKey = symbols.join(',');
+  const cached = SINA_FUTURES_CACHE.get(cacheKey);
+  if (cached && now - cached.ts < SINA_FUTURES_TTL) return cached.data;
+  const list = symbols.map((s) => `hf_${s}`).join(',');
+  const text = await fetchSina([list]).catch(() => '');
+  const map = {};
+  for (const line of String(text).split('\n')) {
+    const m = line.match(/hq_str_hf_([A-Z]+)="([^"]*)"/);
+    if (!m || !m[2]) continue;
+    const sym = m[1];
+    const f = m[2].split(',');
+    const price = parseFloat(f[0]);
+    const prevSettle = parseFloat(f[8]);
+    if (!isFinite(price) || !isFinite(prevSettle) || prevSettle <= 0) continue;
+    const chgPct = ((price - prevSettle) / prevSettle) * 100;
+    map[sym] = { price, prevSettle, chgPct, time: f[6] || '' };
+  }
+  SINA_FUTURES_CACHE.set(cacheKey, { data: map, ts: now });
   return map;
 }
 
@@ -688,11 +827,13 @@ app.get('/api/quotes', async (req, res) => {
       }
     }
     const emMissing = emSymbols.filter((s) => !emMap[s]);
-    // Always fetch Sina for all US stocks to get after-hours data (field[21])
-    const sinaAll = [...sinaSymbols, ...emMissing, ...emSymbols.filter((s) => emMap[s])];
     const usState = getUSMarketState();
+    // Always fetch Sina for all US stocks to get after-hours data (field[21])
+    // 夜盘时段还要额外拉 QQQ/SPY 作为 β 代理的 20:00 基准（即使调用方没请求这两个）
+    const sinaReferences = usState === 'OVERNIGHT' ? ['QQQ', 'SPY'] : [];
+    const sinaAll = [...new Set([...sinaSymbols, ...emMissing, ...emSymbols.filter((s) => emMap[s]), ...sinaReferences])];
 
-    const [emData, sinaData, krData, twData, jpData, yhData, yhExtData] = await Promise.all([
+    const [emData, sinaData, krData, twData, jpData, yhData, yhExtData, futuresData, xueqiuData] = await Promise.all([
       emSymbols.map((s) => emMap[s]).filter(Boolean),
       (async () => {
         if (sinaAll.length === 0) return [];
@@ -735,33 +876,112 @@ app.get('/api/quotes', async (req, res) => {
             return new Map();
           })
         : Promise.resolve(new Map()),
+      // 夜盘时段：拉取外盘期货 (NQ/ES/YM) 作为指数ETF夜盘代理
+      // Yahoo 在国内被阻断(403)时，这是唯一与富途一致的实时夜盘涨跌来源
+      usState === 'OVERNIGHT'
+        ? fetchSinaFutures(['NQ', 'ES', 'YM']).catch((e) => {
+            console.error('[sina-futures]', e.message);
+            return {};
+          })
+        : Promise.resolve({}),
+      // 夜盘时段：拉取雪球个股夜盘数据（可能需要会话 cookie，失败时静默回退到 β 代理）
+      usState === 'OVERNIGHT' && emSymbols.length
+        ? fetchXueqiuQuotes(emSymbols).catch((e) => {
+            console.error('[xueqiu bulk]', e.message);
+            return new Map();
+          })
+        : Promise.resolve(new Map()),
     ]);
 
     // Merge: for symbols that have both eastmoney and sina data,
     // use eastmoney as base but overlay sina data by session:
     // PRE: sina fields[5] 是盘前实时价，EM f2 盘前返回昨收，需用新浪覆盖
     // POST/CLOSED: EM f2 是盘后实时价，比新浪更新更快，优先用 EM
+    // 指数ETF 夜盘代理：Yahoo 不可达时回落到外盘期货
+    //   QQQ/IXIC → NQ (纳斯达克100 期货)
+    //   SPY       → ES (标普500 期货)
+    //   VIXY      → 无合适期货代理，保留 sina 盘后数据（可能滞后）
+    const FUTURES_PROXY = { QQQ: 'NQ', IXIC: 'NQ', SPY: 'ES' };
+    // 个股夜盘代理：ET 20:00 后 ECN 夜盘价免费 API 取不到。
+    // 回退方案：夜盘涨跌 = sina 20:00 ET 盘后涨跌 + β × (NQ/ES 期货从 20:00 到现在的 delta)
+    // delta 用 "期货当前涨跌 - QQQ/SPY 20:00 盘后涨跌" 近似（期货和 ETF 在 20:00 收盘时价差小）
+    // STOCK_BETA: 行业经验值，参考常用 regress-to-NDX beta
+    //   HIGH (1.5+): 高波动 AI/半导体龙头
+    //   MED (1.0-1.3): 主流科技/大盘科技股 (默认)
+    //   LOW_SPY (0.5-0.8): 医药/消费类，跟踪 ES 更合适
+    //   STABLE (<0.5): 低 beta 蓝筹
+    const STOCK_BETA = {
+      // 高 beta 科技（NQ）
+      NVDA: 1.8, TSLA: 2.0, SMCI: 2.5, ARM: 1.8, PONY: 2.2, NBIS: 2.5, RIVN: 2.3, NIO: 2.0, ALAB: 2.0,
+      MRVL: 1.6, AMD: 1.7, MU: 1.6, SNDK: 1.6, WDC: 1.5, STX: 1.4, COHR: 1.7, LITE: 1.7,
+      ONTO: 1.6, MPWR: 1.5, LRCX: 1.5, KLAC: 1.4, AMAT: 1.4, ASML: 1.4, TER: 1.5,
+      // 中 beta 科技（NQ）
+      AAPL: 1.1, MSFT: 1.0, GOOG: 1.1, GOOGL: 1.1, META: 1.3, AMZN: 1.2, NFLX: 1.3,
+      AVGO: 1.3, TSM: 1.3, INTC: 1.1, CSCO: 0.9, ADBE: 1.2, UMC: 1.2, STM: 1.2,
+      MKSI: 1.3, GLW: 1.0, NOK: 0.9,
+      // 低 beta （SPY 更合适）
+      LLY: 0.5, RACE: 0.8,
+    };
+    // beta 查不到时默认 1.0 （主流科技股）
+    // 医药/消费 (beta<0.9) 用 ES 代理，其余用 NQ 代理
+    function stockFuturesProxy(sym) {
+      const beta = STOCK_BETA[sym] ?? 1.0;
+      const useES = beta < 0.9;
+      return { beta, futSym: useES ? 'ES' : 'NQ' };
+    }
     const sinaMap = (sinaData && sinaData.map) || {};
+    // 期货相对 20:00 ET 的 delta（代理 20:00 之后的夜盘波动）
+    // 使用 NQ 和 ES 的当前涨跌幅减去 QQQ/SPY 20:00 盘后涨跌，近似"20:00 以后的增量"
+    let nqDelta = null;  // percent, 20:00 之后 NQ 的增量
+    let esDelta = null;  // percent, 20:00 之后 ES 的增量
+    if (usState === 'OVERNIGHT') {
+      const nqNow = futuresData?.NQ?.chgPct;
+      const esNow = futuresData?.ES?.chgPct;
+      const qqq20 = sinaMap?.QQQ?.postMarketChangePercent;
+      const spy20 = sinaMap?.SPY?.postMarketChangePercent;
+      if (isFinite(nqNow) && isFinite(qqq20)) nqDelta = nqNow - qqq20;
+      if (isFinite(esNow) && isFinite(spy20)) esDelta = esNow - spy20;
+    }
     const mergedEmData = emData.map((em) => {
       // 夜盘时段（ET 20:00 - 04:00，个股无盘后交易）：
-      //   个股夜盘涨跌改用 sina 的盘后/盘前最新价 (fields[21]) 对应涨跌幅，
-      //   与富途/各行情终端一致。避免之前用 NQ 期货涨跌覆盖所有美股，导致
-      //   半导体/AI 龙头股与大盘明显背离时被错报（如 TSM 真实 -0.28% 被显示 +0.23%）。
-      //   regularMarketChangePercent 仍保留正规盘收盘涨跌，首页不受影响。
+      //   优先 雪球 current_night_session / percent_night_session（富途同款数据源，个股/ETF 都覆盖）
+      //   回退 Yahoo fulldayPrice > 期货代理（指数ETF）> β 近似（个股）
       if (usState === 'OVERNIGHT') {
         const sina = sinaMap[em.symbol];
-        const yahoo = yhExtData && yhExtData.get(em.symbol);   // Yahoo fulldayPrice（实时盘前/夜盘价）
-        // 优先级：Yahoo fulldayPrice（实时）> sina postMarketChangePercent（昨日盘后价，滞后）
-        const overnightChg = yahoo?.fulldayChangePercent
-          ?? sina?.postMarketChangePercent
-          ?? 0;
-        const overnightPrice = yahoo?.fulldayPrice ?? sina?.afterHoursPrice ?? null;
+        const yahoo = yhExtData && yhExtData.get(em.symbol);
+        const xq = xueqiuData && xueqiuData.get(em.symbol);
+        const etfFutSym = FUTURES_PROXY[em.symbol];
+        const etfFut = etfFutSym ? futuresData[etfFutSym] : null;
+
+        let overnightChg;
+        let overnightPrice;
+        const closeForOvernight = sina?.regularMarketPrice || em.regularMarketPrice;
+
+        if (xq?.percentNight != null && xq?.currentNight != null) {
+          // 雪球夜盘数据（富途同款）
+          overnightChg = xq.percentNight;
+          overnightPrice = xq.currentNight;
+        } else if (yahoo?.fulldayChangePercent != null) {
+          overnightChg = yahoo.fulldayChangePercent;
+          overnightPrice = yahoo.fulldayPrice ?? null;
+        } else if (etfFut) {
+          overnightChg = etfFut.chgPct;
+          overnightPrice = closeForOvernight ? closeForOvernight * (1 + etfFut.chgPct / 100) : null;
+        } else {
+          const post20 = sina?.postMarketChangePercent ?? 0;
+          const { beta, futSym } = stockFuturesProxy(em.symbol);
+          const delta = futSym === 'ES' ? esDelta : nqDelta;
+          const extra = (isFinite(delta) && delta != null) ? beta * delta : 0;
+          overnightChg = post20 + extra;
+          overnightPrice = closeForOvernight ? closeForOvernight * (1 + overnightChg / 100) : (sina?.afterHoursPrice ?? null);
+        }
+
         return {
           ...em,
           overnightChangePercent: overnightChg,
           overnightPrice,
           marketState: 'OVERNIGHT',
-          closePrice: sina?.regularMarketPrice || em.regularMarketPrice,
+          closePrice: closeForOvernight,
           regularMarketPreviousClose: sina?.regularMarketPreviousClose || em.regularMarketPreviousClose,
           postMarketChangePercent: sina?.postMarketChangePercent || 0,
           afterHoursPrice: sina?.afterHoursPrice || null,
@@ -802,17 +1022,45 @@ app.get('/api/quotes', async (req, res) => {
     });
 
     // For non-eastmoney symbols, use sina data directly (excluding those already in emData)
+    // 排除仅作为 β 代理基准拉取的参考标的 (QQQ/SPY 若调用方未请求)
     const emSymSet = new Set(emSymbols.filter((s) => emMap[s]));
-    let puresinaData = (sinaData && sinaData.list || []).filter((q) => !emSymSet.has(q.symbol));
+    const requestedSet = new Set(symbols);
+    let puresinaData = (sinaData && sinaData.list || []).filter((q) =>
+      !emSymSet.has(q.symbol) && requestedSet.has(q.symbol)
+    );
 
     // 夜盘时段：对 sina fallback 的美股数据也注入 overnightChangePercent
-    //   优先 Yahoo fulldayPrice（实时），其次 sina postMarketChangePercent（昨日盘后价，滞后）
+    //   优先 雪球夜盘（富途同款）> Yahoo > 期货代理 > β 近似
     if (usState === 'OVERNIGHT') {
       puresinaData = puresinaData.map((q) => {
         if (!emSecid(q.symbol)) return q;  // 非美股不覆盖
         const yahoo = yhExtData && yhExtData.get(q.symbol);
-        const overnightChg = yahoo?.fulldayChangePercent ?? q.postMarketChangePercent ?? 0;
-        const overnightPrice = yahoo?.fulldayPrice ?? q.afterHoursPrice ?? null;
+        const xq = xueqiuData && xueqiuData.get(q.symbol);
+        const etfFutSym = FUTURES_PROXY[q.symbol];
+        const etfFut = etfFutSym ? futuresData[etfFutSym] : null;
+
+        let overnightChg;
+        let overnightPrice;
+        const closeForOvernight = q.regularMarketPrice;
+
+        if (xq?.percentNight != null && xq?.currentNight != null) {
+          overnightChg = xq.percentNight;
+          overnightPrice = xq.currentNight;
+        } else if (yahoo?.fulldayChangePercent != null) {
+          overnightChg = yahoo.fulldayChangePercent;
+          overnightPrice = yahoo.fulldayPrice ?? null;
+        } else if (etfFut) {
+          overnightChg = etfFut.chgPct;
+          overnightPrice = closeForOvernight ? closeForOvernight * (1 + etfFut.chgPct / 100) : null;
+        } else {
+          const post20 = q.postMarketChangePercent ?? 0;
+          const { beta, futSym } = stockFuturesProxy(q.symbol);
+          const delta = futSym === 'ES' ? esDelta : nqDelta;
+          const extra = (isFinite(delta) && delta != null) ? beta * delta : 0;
+          overnightChg = post20 + extra;
+          overnightPrice = closeForOvernight ? closeForOvernight * (1 + overnightChg / 100) : (q.afterHoursPrice ?? null);
+        }
+
         return {
           ...q,
           overnightChangePercent: overnightChg,

@@ -714,6 +714,7 @@
     .macd-section.collapsed .ma-toggle-switch-thumb { left: 2px; }
     .macd-body { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
     .macd-section.collapsed .macd-body { display: none; }
+    .macd-section.collapsed .macd-alert-bar { display: none; }
     .macd-legend {
       display: flex;
       gap: 10px;
@@ -727,6 +728,94 @@
       gap: 3px;
       font-size: 9px;
       color: #5a6a7a;
+    }
+
+    /* ── MACD 信号提示条（扫描所有ETF当日信号）── */
+    .macd-alert-bar {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 6px;
+    }
+    @media (prefers-color-scheme: light) {
+      .macd-alert-bar { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.1); }
+    }
+    .macd-alert-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .macd-alert-title {
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .macd-alert-buy .macd-alert-title  {
+      color: #fff;
+      background: #e84c3d;
+      box-shadow: 0 0 0 1px rgba(232,76,61,0.5);
+    }
+    .macd-alert-sell .macd-alert-title {
+      color: #fff;
+      background: #2ebd85;
+      box-shadow: 0 0 0 1px rgba(46,189,133,0.5);
+    }
+    .macd-alert-items {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 6px 10px;
+      align-items: center;
+    }
+    .macd-alert-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: #e8edf3;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.05);
+    }
+    @media (prefers-color-scheme: light) {
+      .macd-alert-item { color: #1d2432; background: rgba(0,0,0,0.045); }
+    }
+    .macd-alert-buy .macd-alert-item  { border-left: 2px solid #e84c3d; }
+    .macd-alert-sell .macd-alert-item { border-left: 2px solid #2ebd85; }
+    .macd-alert-item .macd-alert-tag {
+      font-size: 10px;
+      font-weight: 500;
+      opacity: 0.75;
+      margin-left: 1px;
+    }
+    .macd-alert-buy  .macd-alert-item .macd-alert-tag { color: #ff8b7f; }
+    .macd-alert-sell .macd-alert-item .macd-alert-tag { color: #4bd8a1; }
+    @media (prefers-color-scheme: light) {
+      .macd-alert-buy  .macd-alert-item .macd-alert-tag { color: #c23c2f; }
+      .macd-alert-sell .macd-alert-item .macd-alert-tag { color: #1f9c6b; }
+    }
+    .macd-alert-item .macd-alert-date {
+      font-size: 10px;
+      font-weight: 500;
+      opacity: 0.6;
+      margin-left: 2px;
+      font-variant-numeric: tabular-nums;
+    }
+    .macd-alert-empty {
+      font-size: 10px;
+      color: #5a6a7a;
+      padding: 2px 4px;
     }
 
     /* 单个指数卡片 */
@@ -1379,6 +1468,75 @@ function flashClass(prev, cur) {
   return '';
 }
 
+// 扫描所有 ETF 的最新 MACD 柱，提取符合买入/卖出信号的
+// 返回 { buys: [{label, signal, date}, ...], sells: [...] }
+function macdSignalScan(indices) {
+  const buys = [];
+  const sells = [];
+  if (!INDEX_MACD) return { buys, sells };
+  for (const { key, label } of indices) {
+    const data = INDEX_MACD[key];
+    if (!data || !data.bars || !data.bars.length) continue;
+    const last = data.bars[data.bars.length - 1];
+    const sig = last.signal;
+    if (!sig) continue;
+    const item = { label, signal: sig, date: last.date, intraday: !!last.intraday };
+    if (sig.startsWith('buy')) buys.push(item);
+    else if (sig.startsWith('sell')) sells.push(item);
+  }
+  // 排序：强信号在前
+  const buyOrder = { buy: 0, buy_weak: 1, buy_pre: 2 };
+  const sellOrder = { sell: 0, sell_ma: 1, sell_weak: 2, sell_pre: 3 };
+  buys.sort((a, b) => (buyOrder[a.signal] ?? 9) - (buyOrder[b.signal] ?? 9));
+  sells.sort((a, b) => (sellOrder[a.signal] ?? 9) - (sellOrder[b.signal] ?? 9));
+  return { buys, sells };
+}
+
+function macdSignalLabel(sig) {
+  switch (sig) {
+    case 'buy':      return '强买';
+    case 'buy_weak': return '弱买';
+    case 'buy_pre':  return '买预警';
+    case 'sell':     return '强卖';
+    case 'sell_weak':return '弱卖';
+    case 'sell_ma':  return '破MA21';
+    case 'sell_pre': return '卖预警';
+    default: return '';
+  }
+}
+
+function macdAlertBarHtml(indices) {
+  const { buys, sells } = macdSignalScan(indices);
+  if (!buys.length && !sells.length) return '';
+
+  const renderItem = it => {
+    const tag = macdSignalLabel(it.signal);
+    const fmtDate = d => d.length === 8
+      ? `${+d.slice(4,6)}/${+d.slice(6,8)}`
+      : `${+d.slice(5,7)}/${+d.slice(8,10)}`;
+    const dateStr = fmtDate(it.date);
+    const intradayMark = it.intraday ? '<span style="color:#e8a03d;font-size:9px;margin-left:1px;">·盘中</span>' : '';
+    return `<span class="macd-alert-item"><span class="macd-inline-signal ${it.signal}">${it.signal.startsWith('buy') ? 'B' : 'S'}</span>${it.label}<span class="macd-alert-tag">${tag}</span><span class="macd-alert-date">${dateStr}</span>${intradayMark}</span>`;
+  };
+
+  const rows = [];
+  if (buys.length) {
+    rows.push(`
+      <div class="macd-alert-row macd-alert-buy">
+        <span class="macd-alert-title">买入提示</span>
+        <span class="macd-alert-items">${buys.map(renderItem).join('')}</span>
+      </div>`);
+  }
+  if (sells.length) {
+    rows.push(`
+      <div class="macd-alert-row macd-alert-sell">
+        <span class="macd-alert-title">卖出提示</span>
+        <span class="macd-alert-items">${sells.map(renderItem).join('')}</span>
+      </div>`);
+  }
+  return `<div class="macd-alert-bar">${rows.join('')}</div>`;
+}
+
 function macdSectionHtml() {
   const collapsed = localStorage.getItem('macd-collapsed') === '1';
 
@@ -1471,6 +1629,8 @@ function macdSectionHtml() {
     renderCard(label, INDEX_MACD ? INDEX_MACD[key] : null)
   ).join('');
 
+  const alertBarHtml = macdAlertBarHtml(indices);
+
   return `
     <div class="macd-section${collapsed ? ' collapsed' : ''}">
       <div class="macd-toggle-bar" onclick="toggleMacdSection(this)">
@@ -1483,6 +1643,7 @@ function macdSectionHtml() {
           </div>
         </div>
       </div>
+      ${alertBarHtml}
       <div class="macd-body">${cardsHtml}</div>
       <div class="macd-legend">
         <span class="macd-legend-item"><span class="macd-inline-signal buy">B</span>强买</span>
