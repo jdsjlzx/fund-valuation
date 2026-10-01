@@ -1176,14 +1176,14 @@ let timer = null;
 let expanded = false;
 
 // Sort & Pin state
-let sortMode = 'default';  // 'default' | 'desc' | 'asc'
+let sortMode = 'desc';  // 默认按涨跌幅降序；'desc' | 'asc'
 const pinnedSet = new Set(JSON.parse(localStorage.getItem('pinnedFunds') || '[]'));
 
 function savePinned() {
   localStorage.setItem('pinnedFunds', JSON.stringify([...pinnedSet]));
 }
 function toggleSort() {
-  sortMode = sortMode === 'default' ? 'desc' : sortMode === 'desc' ? 'asc' : 'default';
+  sortMode = sortMode === 'desc' ? 'asc' : 'desc';   // 降序 ↔ 升序循环，无"默认排序"档
   rerender();
 }
 function togglePin(idx, evt) {
@@ -1935,7 +1935,7 @@ function renderList() {
     <div class="status-bar">基于季报真实持仓计算&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>), 仅供参考<span class="${dotClass}"></span>
     </div>
     <div class="list-toolbar">
-      <span class="sort-header ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">涨跌幅<span class="sort-arrows"><span class="arr ${sortMode === 'asc' ? 'on' : ''}">▲</span><span class="arr ${sortMode === 'desc' ? 'on' : ''}">▼</span></span></span>
+      <span class="sort-header active" onclick="toggleSort()">涨跌幅<span class="sort-arrows"><span class="arr ${sortMode === 'asc' ? 'on' : ''}">▲</span><span class="arr ${sortMode === 'desc' ? 'on' : ''}">▼</span></span></span>
     </div>
     <div class="fund-list">${rows}</div>
     ${entryHtml}
@@ -2034,7 +2034,7 @@ function render24h() {
       美股盘后/盘前实时估值&ensp;更新于 ${nowStr()}(<span class="mkt">${mktLabel}</span>)<span class="${dotClass}"></span>
     </div>
     <div class="list-toolbar">
-      <span class="sort-header ${sortMode !== 'default' ? 'active' : ''}" onclick="toggleSort()">涨跌幅<span class="sort-arrows"><span class="arr ${sortMode === 'asc' ? 'on' : ''}">▲</span><span class="arr ${sortMode === 'desc' ? 'on' : ''}">▼</span></span></span>
+      <span class="sort-header active" onclick="toggleSort()">涨跌幅<span class="sort-arrows"><span class="arr ${sortMode === 'asc' ? 'on' : ''}">▲</span><span class="arr ${sortMode === 'desc' ? 'on' : ''}">▼</span></span></span>
     </div>
     <div class="fund-list">${rows}</div>
     <div class="footer">数据来源：天天基金（持仓）· 新浪财经（行情）<br>10秒自动刷新</div>
