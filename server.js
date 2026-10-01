@@ -1251,26 +1251,34 @@ app.get('/api/index-macd', async (req, res) => {
     start.setFullYear(start.getFullYear() - 1);
     const startStr = start.toISOString().slice(0, 10).replace(/-/g, '');
 
-    const [shKlines, cyKlines, ndxKlines, kospiKlines, goldKlines, kcKlines] = await Promise.all([
+    const [shKlines, cyKlines, ndxKlines, kospiKlines, goldKlines, kcKlines, ndxTechKlines, nkyKlines, ndxBioKlines, hkInnovKlines] = await Promise.all([
       fetchKline('sh000001', klineLimit),
       fetchKline('sz399006', klineLimit),
       fetchKline('sh513100', klineLimit),
       fetchNaverIndexKline('KOSPI', startStr),
       fetchKline('sh518880', klineLimit),                  // 黄金ETF
       fetchKline('sh000688', klineLimit),                // 科创50
+      fetchKline('sz159509', klineLimit),                // 纳指科技ETF
+      fetchKline('sh513520', klineLimit),                // 日经ETF
+      fetchKline('sh513290', klineLimit),                // 纳指生物科技ETF
+      fetchKline('sh513120', klineLimit),                // 恒生创新药ETF
     ]);
 
     // 交易时间内或盘后：追加今日实时/收盘柱（上证、创业板、纳指ETF）
     // 盘中标记 intraday，盘后不标（视为已收盘的当日K线）
     if (trading || afterHours) {
       try {
-        const rt = await fetchSinaRealtimePrice(['sh000001', 'sz399006', 'sh513100', 'sh000688', 'sh518880']);
+        const rt = await fetchSinaRealtimePrice(['sh000001', 'sz399006', 'sh513100', 'sh000688', 'sh518880', 'sz159509', 'sh513520', 'sh513290', 'sh513120']);
         const pairs = [
           { klines: shKlines,   id: 'sh000001' },
           { klines: cyKlines,   id: 'sz399006' },
           { klines: ndxKlines,  id: 'sh513100' },
           { klines: kcKlines,   id: 'sh000688' },
           { klines: goldKlines, id: 'sh518880' },
+          { klines: ndxTechKlines, id: 'sz159509' },
+          { klines: nkyKlines,  id: 'sh513520' },
+          { klines: ndxBioKlines,   id: 'sh513290' },
+          { klines: hkInnovKlines, id: 'sh513120' },
         ];
         for (const { klines, id } of pairs) {
           const q = rt[id];
@@ -1290,12 +1298,16 @@ app.get('/api/index-macd', async (req, res) => {
 
     // 每个指数只返回最近 21 根柱（足够显示趋势）
     const result = {
-      sh:    { name: '上证',     bars: calcMACD(shKlines,    21) },
-      cy:    { name: '创业板',   bars: calcMACD(cyKlines,    21) },
-      ndx:   { name: '纳斯达克', bars: calcMACD(ndxKlines,   21) },
-      kospi: { name: 'KOSPI',   bars: calcMACD(kospiKlines, 21) },
-      gold:  { name: '黄金ETF',  bars: calcMACD(goldKlines,  21) },
-      kc:    { name: '科创50',   bars: calcMACD(kcKlines,    21) },
+      sh:       { name: '上证',       bars: calcMACD(shKlines,       21) },
+      cy:       { name: '创业板',     bars: calcMACD(cyKlines,       21) },
+      ndx:      { name: '纳斯达克',   bars: calcMACD(ndxKlines,      21) },
+      kospi:    { name: 'KOSPI',     bars: calcMACD(kospiKlines,    21) },
+      gold:     { name: '黄金ETF',    bars: calcMACD(goldKlines,     21) },
+      kc:       { name: '科创50',     bars: calcMACD(kcKlines,       21) },
+      ndxTech:  { name: '纳指科技',   bars: calcMACD(ndxTechKlines,  21) },
+      nky:      { name: '日经',       bars: calcMACD(nkyKlines,      21) },
+      ndxBio:   { name: '纳指生物',   bars: calcMACD(ndxBioKlines,   21) },
+      hkInnov:  { name: '港股创新药', bars: calcMACD(hkInnovKlines,  21) },
     };
 
     INDEX_MACD_CACHE.data = result;

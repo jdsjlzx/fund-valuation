@@ -1311,7 +1311,7 @@ async function fetchIndexMacd() {
     if (!r.ok) return;
     const json = await r.json();
     if (json.success) {
-      INDEX_MACD = { sh: json.sh, cy: json.cy, ndx: json.ndx, kospi: json.kospi, gold: json.gold, kc: json.kc };
+      INDEX_MACD = { sh: json.sh, cy: json.cy, ndx: json.ndx, kospi: json.kospi, gold: json.gold, kc: json.kc, ndxTech: json.ndxTech, nky: json.nky, ndxBio: json.ndxBio, hkInnov: json.hkInnov };
     }
   } catch (e) { console.error('[index-macd]', e); }
 }
@@ -1383,12 +1383,16 @@ function macdSectionHtml() {
   const collapsed = localStorage.getItem('macd-collapsed') === '1';
 
   const indices = [
-    { key: 'sh',    label: '上证' },
-    { key: 'cy',    label: '创业板' },
-    { key: 'ndx',   label: '纳斯达克' },
-    { key: 'kospi', label: 'KOSPI' },
-    { key: 'gold',  label: '黄金ETF' },
-    { key: 'kc',    label: '科创50' },
+    { key: 'sh',      label: '上证' },
+    { key: 'cy',      label: '创业板' },
+    { key: 'ndx',     label: '纳斯达克ETF' },
+    { key: 'kospi',   label: 'KOSPI' },
+    { key: 'gold',    label: '黄金ETF' },
+    { key: 'kc',      label: '科创50' },
+    { key: 'ndxTech', label: '纳指科技ETF' },
+    { key: 'nky',     label: '日经ETF' },
+    { key: 'ndxBio',  label: '纳指生物ETF' },
+    { key: 'hkInnov', label: '港股创新药ETF' },
   ];
 
   function renderCard(label, data) {
