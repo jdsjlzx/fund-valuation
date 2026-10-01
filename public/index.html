@@ -1152,7 +1152,7 @@ const CN_NAME = {
 //   0 SZ A-share   1 SH A-share
 //   KR (synthetic)  Korean KRX, fetched via Naver Finance
 //   JP (synthetic)  Japan TSE, fetched via Tencent Finance
-const COVERED_MARKETS = new Set(['105', '106', '107', '116', '0', '1', 'KR', 'JP']);
+const COVERED_MARKETS = new Set(['105', '106', '107', '116', '0', '1', 'KR', 'JP', 'INDEX']);
 const CNY_MARKETS     = new Set(['0', '1']);  // A-shares are already in CNY
 function isCovered(h) { return COVERED_MARKETS.has(String(h.market)); }
 function isCnyHolding(h) { return CNY_MARKETS.has(String(h.market)); }
@@ -1238,6 +1238,10 @@ function effectiveChange(q, opts = {}) {
   // （例：A 股国庆休市，却显示 9/30 的涨幅），故按 0 计。
   if (mode === '24h' && q.tradingToday === false) return 0;
 
+  // 现货指数报价（znb_ 通道，如 NDXTMC）：仅美股盘中存在实时变动，
+  // 盘前/夜盘/盘后没有真实净值变化 → 按 0（不参与盘前估值）
+  if (mode === '24h' && q.regularOnly && s !== 'REGULAR') return 0;
+
   if (mode === '24h') {
     // 24h模式：实时显示当前时段数据
     // 盘中：直接用盘中实时涨跌
@@ -1273,6 +1277,12 @@ function calcFund(fund, qmap, forexChg, opts = {}) {
   //   CNY (A-share):              direct, no forex
   // Uncovered fund weight uses a broad index proxy instead of extrapolating holdings.
   const fx = forexChg ?? 0;
+  // regularOnly 基金（017091：持仓为 NDXTMC 现货指数）：净值只在美股盘中变动，
+  // 盘前/夜盘/盘后一律按 0 估算，且不启用未覆盖权重的 QQQ/SPY 代理
+  if (fund.regularOnly && opts.mode === '24h') {
+    const hq = (fund.holdings || []).map((h) => qmap[h.s]).find(Boolean);
+    if (!hq || hq.marketState !== 'REGULAR') return 0;
+  }
   let sumW = 0, sumContrib = 0;
   for (const h of (fund.holdings || [])) {
     if (!isCovered(h)) continue;
@@ -2112,7 +2122,7 @@ function renderDetail(idx, mode) {
     <div class="table-head">
       <span class="col-name">名称</span>
       <span class="col-pct">占比</span>
-      <span class="col-chg">${mode === '24h' ? '盘后涨跌' : '涨跌幅'}</span>
+      <span class="col-chg">涨跌幅</span>
     </div>
     ${rowsHtml}
     ${expandHtml}

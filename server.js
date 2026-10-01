@@ -17,7 +17,6 @@ const FUND_LIST = [
   { name: '广发全球精选',          code: '270023' },
   { name: '嘉实全球产业升级',      code: '017730' },
   { name: '嘉实美国成长',          code: '000043' },
-  { name: '易方达标普信息科技',    code: '161128' },
   { name: '易方达全球成长精选',    code: '012920' },
   { name: '国富全球科技互联',      code: '006373' },
   { name: '国富亚洲机会股票',      code: '457001' },
@@ -36,7 +35,6 @@ const FUND_LIST = [
   { name: '中银全球策略',          code: '163813' },
   { name: '天弘全球新能源汽车',    code: '016823' },
   { name: '华夏新时代混合(QDII)', code: '005534' },
-  { name: '摩根太平洋科技对冲',   code: '968061' },
   { name: '华夏大中华混合(QDII)', code: '002230' },
 ];
 
@@ -80,6 +78,7 @@ let fundsCache = null;
 let fundsCacheTs = 0;
 const tickerMarket = {};   // US ticker → eastmoney market id (105/106/107), built from holdings
 const JP_STOCKS_SET = new Set();  // 日股，从 holdings market=JP 填充，用腾讯行情
+const KR_STOCKS = new Set(['000660', '005930']);  // 韩股，腾讯 kr 通道；从 holdings market=KR 动态补充
 
 function loadHoldingsFromFile() {
   const filePath = path.join(__dirname, 'data', 'holdings.json');
@@ -96,6 +95,7 @@ function loadHoldingsFromFile() {
       const m = String(h.market);
       if (m === '105' || m === '106' || m === '107') tickerMarket[h.s] = m;
       if (m === 'JP') JP_STOCKS_SET.add(h.s);
+      if (m === 'KR') KR_STOCKS.add(h.s);
     }
   }
   console.log(`[funds] loaded ${fundsCache.length} funds from data/holdings.json`);
@@ -121,7 +121,7 @@ const YAHOO_EXT_TTL = 60_000;
 
 // Known international tickers handled by a non-Sina fetcher
 // (国内财经 API 不覆盖韩/日/台/欧实时行情，需要单独走 Naver/Yahoo Japan 等)
-const KR_STOCKS = new Set(['000660', '005930']);  // SK海力士、三星电子
+// KR_STOCKS 集合已在模块顶部声明，loadHoldingsFromFile 会从 holdings market=KR 动态补充
 
 function isKoreanSymbol(s) { return KR_STOCKS.has(s); }
 
@@ -137,6 +137,10 @@ function toSinaId(symbol) {
   if (symbol === 'IXIC' || symbol === '^IXIC') return 'gb_$ixic';
   if (symbol === 'DJI'  || symbol === '^DJI')  return 'gb_$dji';
   if (symbol === 'INX'  || symbol === '^GSPC') return 'gb_$inx';
+  // 全球指数：纳斯达克科技市值加权指数（新浪 znb_ 前缀）
+  // 注：东财也有此指数(251.NDXTMC)，但其 push2 行情主机拒绝当前出口（TLS 握手后 Empty reply），
+  // 服务端不可用；新浪 znb_ 实测可达且字段含日期时间。
+  if (symbol === 'NDXTMC' || symbol === '^NDXTMC') return 'znb_NDXTMC';
   // A-share: 6-digit numeric
   //   6xxxxx, 688xxx, 689xxx → 沪市
   //   0xxxxx, 1xxxxx, 3xxxxx → 深市 (含ETF 15xxxx)
@@ -809,6 +813,30 @@ function parseSinaResponse(text, requestedSymbols) {
         regularMarketPreviousClose: prevRef,
         regularMarketChangePercent: chgPct,
         marketState: 'REGULAR',
+      };
+      continue;
+    }
+
+    if (id.startsWith('znb_')) {
+      // 新浪全球指数（znb_ 前缀），字段布局：
+      //  [0]名称 [1]最新 [2]涨跌额 [3]涨跌幅% [4][5]空
+      //  [6]日期 [7]时间(北京时间，美股指数收盘=04:00) [8]今开 [9]昨收 [10]最高 [11]最低
+      const upper = id.slice(4).toUpperCase();
+      const symbol = symMap.get(upper) || upper;
+      const price = parseFloat(fields[1]);
+      if (isNaN(price) || price <= 0) continue;
+      let chgPct = parseFloat(fields[3]);
+      if (isNaN(chgPct)) {
+        const prev = parseFloat(fields[9]);
+        chgPct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
+      }
+      map[symbol] = {
+        symbol,
+        regularOnly: true,   // 现货指数：仅美股盘中实时，盘前/夜盘/盘后估值按 0（前端 effectiveChange 使用）
+        regularMarketPrice: price,
+        regularMarketChangePercent: chgPct,
+        regularMarketPreviousClose: parseFloat(fields[9]) || null,
+        marketState: usState,
       };
       continue;
     }
