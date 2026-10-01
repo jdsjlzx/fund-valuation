@@ -1254,7 +1254,7 @@ app.get('/api/index-macd', async (req, res) => {
     const [shKlines, cyKlines, ndxKlines, kospiKlines, goldKlines, kcKlines, ndxTechKlines, nkyKlines, ndxBioKlines, hkInnovKlines] = await Promise.all([
       fetchKline('sh000001', klineLimit),
       fetchKline('sz399006', klineLimit),
-      fetchKline('sh513100', klineLimit),
+      fetchTencentDayKline('usQQQ.OQ', klineLimit),      // 纳斯达克100 QQQ
       fetchNaverIndexKline('KOSPI', startStr),
       fetchKline('sh518880', klineLimit),                  // 黄金ETF
       fetchKline('sh000688', klineLimit),                // 科创50
@@ -1264,15 +1264,15 @@ app.get('/api/index-macd', async (req, res) => {
       fetchKline('sh513120', klineLimit),                // 恒生创新药ETF
     ]);
 
-    // 交易时间内或盘后：追加今日实时/收盘柱（上证、创业板、纳指ETF）
+    // 交易时间内或盘后：追加今日实时/收盘柱（上证、创业板、A股ETF）
+    // 注：QQQ 为美股，A股交易时段美股休市，日K直接取腾讯最新收盘，无需补柱
     // 盘中标记 intraday，盘后不标（视为已收盘的当日K线）
     if (trading || afterHours) {
       try {
-        const rt = await fetchSinaRealtimePrice(['sh000001', 'sz399006', 'sh513100', 'sh000688', 'sh518880', 'sz159509', 'sh513520', 'sh513290', 'sh513120']);
+        const rt = await fetchSinaRealtimePrice(['sh000001', 'sz399006', 'sh000688', 'sh518880', 'sz159509', 'sh513520', 'sh513290', 'sh513120']);
         const pairs = [
           { klines: shKlines,   id: 'sh000001' },
           { klines: cyKlines,   id: 'sz399006' },
-          { klines: ndxKlines,  id: 'sh513100' },
           { klines: kcKlines,   id: 'sh000688' },
           { klines: goldKlines, id: 'sh518880' },
           { klines: ndxTechKlines, id: 'sz159509' },
@@ -1300,7 +1300,7 @@ app.get('/api/index-macd', async (req, res) => {
     const result = {
       sh:       { name: '上证',       bars: calcMACD(shKlines,       21) },
       cy:       { name: '创业板',     bars: calcMACD(cyKlines,       21) },
-      ndx:      { name: '纳斯达克',   bars: calcMACD(ndxKlines,      21) },
+      ndx:      { name: '纳斯达克100 QQQ', bars: calcMACD(ndxKlines,      21) },
       kospi:    { name: 'KOSPI',     bars: calcMACD(kospiKlines,    21) },
       gold:     { name: '黄金ETF',    bars: calcMACD(goldKlines,     21) },
       kc:       { name: '科创50',     bars: calcMACD(kcKlines,       21) },
