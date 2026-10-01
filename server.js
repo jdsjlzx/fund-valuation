@@ -236,7 +236,7 @@ function parseNaverQuote(json, ticker) {
   const changePct = sign * Math.abs(parseNum(json.fluctuationsRatio) || 0);
   const prevClose = price - changeAbs;
 
-  return {
+  return withTradingDay({
     symbol: ticker,
     regularMarketPrice: price,
     regularMarketPreviousClose: prevClose,
@@ -244,7 +244,7 @@ function parseNaverQuote(json, ticker) {
     preMarketChangePercent: changePct,
     postMarketChangePercent: 0,
     marketState: json.marketStatus === 'OPEN' ? 'REGULAR' : 'CLOSED',
-  };
+  }, 'KR', json.localTradedAt);
 }
 
 async function fetchKoreanQuote(ticker) {
@@ -274,7 +274,7 @@ async function fetchTaiwanQuotes(symbols) {
     const prev  = parseFloat(m.y);
     if (isNaN(price) || isNaN(prev) || price <= 0) return null;
     const chgPct = ((price - prev) / prev) * 100;
-    return {
+    return withTradingDay({
       symbol: sym,
       regularMarketPrice: price,
       regularMarketChangePercent: chgPct,
@@ -282,7 +282,7 @@ async function fetchTaiwanQuotes(symbols) {
       preMarketChangePercent: chgPct,
       postMarketChangePercent: 0,
       marketState: 'REGULAR',
-    };
+    }, 'TW', m.d);
   }).filter(Boolean);
 }
 
@@ -445,7 +445,9 @@ async function fetchJapanQuotes(symbols) {
     const prevClose = parseFloat(fields[4]);
     if (!isFinite(price) || !isFinite(prevClose) || prevClose <= 0) continue;
     const chgPct = ((price - prevClose) / prevClose) * 100;
-    map[sym] = {
+    // 日期字段位置在不同品种间会漂移，直接按内容找 'YYYY-MM-DD HH:mm:ss'
+    const dateField = fields.find((f) => /^\d{4}-\d{2}-\d{2}[ T]/.test(f));
+    map[sym] = withTradingDay({
       symbol: sym,
       regularMarketPrice: price,
       regularMarketChangePercent: chgPct,
@@ -453,7 +455,7 @@ async function fetchJapanQuotes(symbols) {
       preMarketChangePercent: chgPct,
       postMarketChangePercent: 0,
       marketState: 'REGULAR',
-    };
+    }, 'JP', dateField);
   }
   return map;
 }
@@ -637,6 +639,44 @@ function getUSMarketState() {
   return 'OVERNIGHT';
 }
 
+// ─────────────────────────────────────────────────────────────
+//  交易日判定（节假日 / 周末 / 未开盘）
+//  行情源（新浪、Naver、腾讯、TWSE）都会带上"该报价所属的日期"。
+//  若这个日期不是当地今天，说明该市场今天没有交易 —— 通常是放假。
+//  例：A 股国庆休市期间，新浪仍返回 9/30 的收盘与涨跌幅，
+//      直接展示会把"上一交易日的涨跌幅"误报成今日涨跌。
+//  处理：保留原始值，另加 sessionDate / tradingToday 字段，
+//        由前端在 24h 视图把它按 0 计。
+// ─────────────────────────────────────────────────────────────
+const MARKET_TZ_OFFSET = { CN: 8, HK: 8, TW: 8, JP: 9, KR: 9 };
+
+function marketToday(tzOffsetHours) {
+  return new Date(Date.now() + tzOffsetHours * 3600_000).toISOString().slice(0, 10);
+}
+
+// 'YYYY-MM-DD' / 'YYYY/MM/DD' / 'YYYYMMDD' / ISO 时间戳 → 'YYYY-MM-DD'
+function toDateKey(s) {
+  if (!s) return null;
+  const t = String(s).trim();
+  let m;
+  if ((m = t.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/))) {
+    return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  }
+  if ((m = t.match(/^(\d{4})(\d{2})(\d{2})$/))) return `${m[1]}-${m[2]}-${m[3]}`;
+  return null;
+}
+
+// 给行情对象补齐交易日信息。数据源未提供日期时原样返回（不做判定，避免误判）。
+function withTradingDay(quote, marketKey, rawDate) {
+  const key = toDateKey(rawDate);
+  if (!key) return quote;
+  return {
+    ...quote,
+    sessionDate: key,
+    tradingToday: key === marketToday(MARKET_TZ_OFFSET[marketKey] ?? 8),
+  };
+}
+
 // ──────────────────────────────────────────
 //  Eastmoney push2 fetcher (US stocks / indices / ETFs)
 //  覆盖盘前·盘中·盘后(及隔夜，待隔夜时段验证)，并提供准确昨收 (f18)。
@@ -769,12 +809,13 @@ function parseSinaResponse(text, requestedSymbols) {
       // HK stock fields:
       //  [2] open  [3] prev_close  [4] high  [5] low
       //  [6] current  [7] change_amt  [8] change_%
+      //  [17] 日期(YYYY/MM/DD)  [18] 时间
       const ticker = id.slice(2);
       const symbol = symMap.get(ticker) || symMap.get(ticker.replace(/^0+/, '')) || ticker;
       const price = parseFloat(fields[6]);
       const chgPct = parseFloat(fields[8]);
       if (isNaN(price) || isNaN(chgPct)) continue;
-      map[symbol] = {
+      map[symbol] = withTradingDay({
         symbol,
         regularMarketPrice: price,
         regularMarketChangePercent: chgPct,
@@ -782,7 +823,7 @@ function parseSinaResponse(text, requestedSymbols) {
         preMarketChangePercent: chgPct,
         postMarketChangePercent: 0,
         marketState: 'REGULAR',
-      };
+      }, 'HK', fields[17]);
       continue;
     }
 
@@ -797,7 +838,8 @@ function parseSinaResponse(text, requestedSymbols) {
       const price     = parseFloat(fields[3]);
       if (isNaN(price) || isNaN(prevClose) || prevClose <= 0) continue;
       const chgPct = ((price - prevClose) / prevClose) * 100;
-      map[symbol] = {
+      // fields[30] = 该报价所属交易日；不是今天即休市（节假日/周末）
+      map[symbol] = withTradingDay({
         symbol,
         regularMarketPrice: price,
         regularMarketPreviousClose: prevClose,
@@ -805,7 +847,7 @@ function parseSinaResponse(text, requestedSymbols) {
         preMarketChangePercent: chgPct,
         postMarketChangePercent: 0,
         marketState: 'REGULAR',
-      };
+      }, 'CN', fields[30]);
     }
   }
   return map;

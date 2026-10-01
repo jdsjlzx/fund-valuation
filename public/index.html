@@ -399,6 +399,7 @@
     }
     .holding-name { font-size: 14px; color: var(--text-holding); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .holding-mkt-tag { font-size: 11px; color: var(--text-muted); margin-left: 4px; padding: 1px 3px; border: 1px solid var(--border-badge); border-radius: 2px; }
+    .holding-closed-tag { font-size: 11px; color: var(--text-muted); margin-left: 4px; padding: 1px 3px; border: 1px dashed var(--border-badge); border-radius: 2px; }
     .holding-weight { text-align: right; padding-right: 10px; font-size: 14px; color: var(--text-weight); font-variant-numeric: tabular-nums; }
     .holding-chg { text-align: right; font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
 
@@ -1181,6 +1182,11 @@ function effectiveChange(q, opts = {}) {
   if (!q) return null;
   const mode = opts.mode || 'default';
   const s = q.marketState;
+
+  // 休市日（节假日/周末）：行情源仍在返回"上一交易日"的收盘与涨跌幅。
+  // 在 24h 视图里这个值代表的是"本时段涨跌"，用上一交易日的数据会张冠李戴
+  // （例：A 股国庆休市，却显示 9/30 的涨幅），故按 0 计。
+  if (mode === '24h' && q.tradingToday === false) return 0;
 
   if (mode === '24h') {
     // 24h模式：实时显示当前时段数据
@@ -1983,12 +1989,15 @@ function renderDetail(idx, mode) {
     const chg = q ? effectiveChange(q, opts) : null;
     // 夜盘实测源（雪球/Yahoo）不可用时的回退值来自期货/β 模型，标注"≈"避免误认为实时价
     const approx = !!(mode === '24h' && q && q.marketState === 'OVERNIGHT' && q.overnightEstimated);
+    // 休市（节假日/周末）：该市场今日无交易，涨幅按 0 计，并标注出来避免误解
+    const closed = !!(mode === '24h' && q && q.tradingToday === false);
+    const closedTip = closed ? `该市场今日休市，涨幅按 0 计（行情源最近报价日 ${q.sessionDate}）` : '';
     const tag = marketTag(h.market);
     return `
       <div class="holding-row">
-        <span class="holding-name">${holdingDisplayName(h)}${tag ? `<span class="holding-mkt-tag">${tag}</span>` : ''}</span>
+        <span class="holding-name">${holdingDisplayName(h)}${tag ? `<span class="holding-mkt-tag">${tag}</span>` : ''}${closed ? `<span class="holding-closed-tag" title="${closedTip}">休市</span>` : ''}</span>
         <span class="holding-weight">${(h.w * 100).toFixed(2)}%</span>
-        <span class="holding-chg ${cls(chg)}"${approx ? ' title="夜盘实时源暂不可用，此值为模型估算"' : ''}>${approx ? '≈' : ''}${fmtPct(chg)}</span>
+        <span class="holding-chg ${cls(chg)}"${approx ? ' title="夜盘实时源暂不可用，此值为模型估算"' : (closed ? ` title="${closedTip}"` : '')}>${approx ? '≈' : ''}${fmtPct(chg)}</span>
       </div>`;
   }).join('');
 
