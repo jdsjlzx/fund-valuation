@@ -811,7 +811,117 @@ function parseSinaResponse(text, requestedSymbols) {
   return map;
 }
 
+// ─────────────────────────────────────────────────────────────
+//  夜盘代理映射表
+//  指数ETF 夜盘代理：Yahoo 不可达时回落到外盘期货
+//    QQQ/IXIC → NQ (纳斯达克100 期货)
+//    SPY      → ES (标普500 期货)
+//    VIXY     → 无合适期货代理，保留 sina 盘后数据（可能滞后）
+// ─────────────────────────────────────────────────────────────
+const FUTURES_PROXY = { QQQ: 'NQ', IXIC: 'NQ', SPY: 'ES' };
+
+// 个股夜盘代理：ET 20:00 后 ECN 夜盘价免费 API 取不到。
+// 回退方案：夜盘涨跌 = sina 20:00 ET 盘后涨跌 + β × (NQ/ES 期货从 20:00 到现在的 delta)
+// delta 用 "期货当前涨跌 - QQQ/SPY 20:00 盘后涨跌" 近似（期货和 ETF 在 20:00 收盘时价差小）
+// STOCK_BETA: 行业经验值，参考常用 regress-to-NDX beta
+//   HIGH (1.5+): 高波动 AI/半导体龙头
+//   MED (1.0-1.3): 主流科技/大盘科技股 (默认)
+//   LOW_SPY (0.5-0.8): 医药/消费类，跟踪 ES 更合适
+//   STABLE (<0.5): 低 beta 蓝筹
+const STOCK_BETA = {
+  // 高 beta 科技（NQ）
+  NVDA: 1.8, TSLA: 2.0, SMCI: 2.5, ARM: 1.8, PONY: 2.2, NBIS: 2.5, RIVN: 2.3, NIO: 2.0, ALAB: 2.0,
+  MRVL: 1.6, AMD: 1.7, MU: 1.6, SNDK: 1.6, WDC: 1.5, STX: 1.4, COHR: 1.7, LITE: 1.7,
+  ONTO: 1.6, MPWR: 1.5, LRCX: 1.5, KLAC: 1.4, AMAT: 1.4, ASML: 1.4, TER: 1.5,
+  // 中 beta 科技（NQ）
+  AAPL: 1.1, MSFT: 1.0, GOOG: 1.1, GOOGL: 1.1, META: 1.3, AMZN: 1.2, NFLX: 1.3,
+  AVGO: 1.3, TSM: 1.3, INTC: 1.1, CSCO: 0.9, ADBE: 1.2, UMC: 1.2, STM: 1.2,
+  MKSI: 1.3, GLW: 1.0, NOK: 0.9,
+  // 低 beta （SPY 更合适）
+  LLY: 0.5, RACE: 0.8,
+};
+
+// beta 查不到时默认 1.0 （主流科技股）
+// 医药/消费 (beta<0.9) 用 ES 代理，其余用 NQ 代理
+function stockFuturesProxy(sym) {
+  const beta = STOCK_BETA[sym] ?? 1.0;
+  const useES = beta < 0.9;
+  return { beta, futSym: useES ? 'ES' : 'NQ' };
+}
+
+// ─────────────────────────────────────────────────────────────
+//  夜盘涨跌幅统一计算 —— eastmoney 主源路径 与 新浪兜底路径 共用
+//
+//  口径：以「正股收盘价」为基准（富途/长桥/雪球 percent_night_session 同款）。
+//        切勿再用「昨收」做基准，否则会把正股当日涨跌叠加进来，数值系统性偏大。
+//  优先级：新鲜雪球夜盘 > Yahoo fullday > 外盘期货代理 > β 近似估算
+//  返回 { overnightChangePercent, overnightPrice, overnightSource,
+//         overnightEstimated, overnightAsOf }
+// ─────────────────────────────────────────────────────────────
+function computeOvernightQuote({
+  symbol,
+  closeForOvernight,
+  sina,
+  yahoo,
+  xq,
+  etfFut,
+  xqNightFeedAlive,
+  esDelta,
+  nqDelta,
+}) {
+  // Yahoo fullday 只有在「确实比正股收盘 / 盘后价更新」时才采信：
+  // 若其值等于收盘价或盘后价，说明它并不覆盖隔夜盘，直接跳过，
+  // 避免拿盘后价冒充夜盘价。
+  const yahooFullday = yahoo && isFinite(yahoo.fulldayPrice) ? yahoo.fulldayPrice : null;
+  const yahooCoversOvernight =
+    yahooFullday != null &&
+    isFinite(yahoo.fulldayChangePercent) &&
+    Math.abs(yahooFullday - (closeForOvernight || 0)) > 1e-6 &&
+    (!sina?.afterHoursPrice || Math.abs(yahooFullday - sina.afterHoursPrice) > 1e-4);
+
+  let chg = null;
+  let price = null;
+  let source = null;
+
+  if (xqNightFeedAlive && xq?.currentNight != null && closeForOvernight > 0) {
+    // 雪球夜盘（富途同款数据源）——仅在数据源仍在更新时采用
+    chg = ((xq.currentNight - closeForOvernight) / closeForOvernight) * 100;
+    price = xq.currentNight;
+    source = 'xueqiu';
+  } else if (yahooCoversOvernight) {
+    // Yahoo fullday（含盘前/盘后/隔夜），海外网络可达时为实时值
+    chg = yahoo.fulldayChangePercent;
+    price = yahooFullday;
+    source = 'yahoo';
+  } else if (etfFut) {
+    // 指数 ETF：外盘期货代理（NQ/ES）
+    chg = etfFut.chgPct;
+    price = closeForOvernight ? closeForOvernight * (1 + etfFut.chgPct / 100) : null;
+    source = 'futures';
+  } else {
+    // 个股：盘后涨跌 + β × 期货增量（近似估算）
+    const post20 = sina?.postMarketChangePercent ?? 0;
+    const { beta, futSym } = stockFuturesProxy(symbol);
+    const delta = futSym === 'ES' ? esDelta : nqDelta;
+    const extra = isFinite(delta) && delta != null ? beta * delta : 0;
+    chg = post20 + extra;
+    price = closeForOvernight ? closeForOvernight * (1 + chg / 100) : (sina?.afterHoursPrice ?? null);
+    source = 'proxy';
+  }
+  if (!isFinite(chg)) chg = 0;
+
+  return {
+    overnightChangePercent: chg,
+    overnightPrice: price,
+    overnightSource: source,
+    // xueqiu/yahoo 为实测值，futures/proxy 为模型估算值（前端据此加"≈"标记）
+    overnightEstimated: source !== 'xueqiu' && source !== 'yahoo',
+    overnightAsOf: source === 'xueqiu' ? (xq?.timestampNight ?? null) : null,
+  };
+}
+
 app.get('/api/quotes', async (req, res) => {
+  const diag = req.query.diag === '1';
   const raw = (req.query.symbols || '').trim();
   if (!raw) return res.status(400).json({ error: 'symbols required' });
   const symbols = raw.split(',').map((s) => s.trim()).filter(Boolean);
@@ -912,38 +1022,7 @@ app.get('/api/quotes', async (req, res) => {
     // use eastmoney as base but overlay sina data by session:
     // PRE: sina fields[5] 是盘前实时价，EM f2 盘前返回昨收，需用新浪覆盖
     // POST/CLOSED: EM f2 是盘后实时价，比新浪更新更快，优先用 EM
-    // 指数ETF 夜盘代理：Yahoo 不可达时回落到外盘期货
-    //   QQQ/IXIC → NQ (纳斯达克100 期货)
-    //   SPY       → ES (标普500 期货)
-    //   VIXY      → 无合适期货代理，保留 sina 盘后数据（可能滞后）
-    const FUTURES_PROXY = { QQQ: 'NQ', IXIC: 'NQ', SPY: 'ES' };
-    // 个股夜盘代理：ET 20:00 后 ECN 夜盘价免费 API 取不到。
-    // 回退方案：夜盘涨跌 = sina 20:00 ET 盘后涨跌 + β × (NQ/ES 期货从 20:00 到现在的 delta)
-    // delta 用 "期货当前涨跌 - QQQ/SPY 20:00 盘后涨跌" 近似（期货和 ETF 在 20:00 收盘时价差小）
-    // STOCK_BETA: 行业经验值，参考常用 regress-to-NDX beta
-    //   HIGH (1.5+): 高波动 AI/半导体龙头
-    //   MED (1.0-1.3): 主流科技/大盘科技股 (默认)
-    //   LOW_SPY (0.5-0.8): 医药/消费类，跟踪 ES 更合适
-    //   STABLE (<0.5): 低 beta 蓝筹
-    const STOCK_BETA = {
-      // 高 beta 科技（NQ）
-      NVDA: 1.8, TSLA: 2.0, SMCI: 2.5, ARM: 1.8, PONY: 2.2, NBIS: 2.5, RIVN: 2.3, NIO: 2.0, ALAB: 2.0,
-      MRVL: 1.6, AMD: 1.7, MU: 1.6, SNDK: 1.6, WDC: 1.5, STX: 1.4, COHR: 1.7, LITE: 1.7,
-      ONTO: 1.6, MPWR: 1.5, LRCX: 1.5, KLAC: 1.4, AMAT: 1.4, ASML: 1.4, TER: 1.5,
-      // 中 beta 科技（NQ）
-      AAPL: 1.1, MSFT: 1.0, GOOG: 1.1, GOOGL: 1.1, META: 1.3, AMZN: 1.2, NFLX: 1.3,
-      AVGO: 1.3, TSM: 1.3, INTC: 1.1, CSCO: 0.9, ADBE: 1.2, UMC: 1.2, STM: 1.2,
-      MKSI: 1.3, GLW: 1.0, NOK: 0.9,
-      // 低 beta （SPY 更合适）
-      LLY: 0.5, RACE: 0.8,
-    };
-    // beta 查不到时默认 1.0 （主流科技股）
-    // 医药/消费 (beta<0.9) 用 ES 代理，其余用 NQ 代理
-    function stockFuturesProxy(sym) {
-      const beta = STOCK_BETA[sym] ?? 1.0;
-      const useES = beta < 0.9;
-      return { beta, futSym: useES ? 'ES' : 'NQ' };
-    }
+    // （FUTURES_PROXY / STOCK_BETA / stockFuturesProxy 已提到模块作用域，见文件上方）
     const sinaMap = (sinaData && sinaData.map) || {};
     // 期货相对 20:00 ET 的 delta（代理 20:00 之后的夜盘波动）
     // 使用 NQ 和 ES 的当前涨跌幅减去 QQQ/SPY 20:00 盘后涨跌，近似"20:00 以后的增量"
@@ -980,64 +1059,21 @@ app.get('/api/quotes', async (req, res) => {
       //   回退 Yahoo fulldayPrice > 期货代理（指数ETF）> β 近似（个股）
       if (usState === 'OVERNIGHT') {
         const sina = sinaMap[em.symbol];
-        const yahoo = yhExtData && yhExtData.get(em.symbol);
-        const xq = xueqiuData && xueqiuData.get(em.symbol);
-        const etfFutSym = FUTURES_PROXY[em.symbol];
-        const etfFut = etfFutSym ? futuresData[etfFutSym] : null;
-
-        // 夜盘涨跌基准 = 正股收盘价（sina fields[1]）。
-        // 富途/长桥的"夜盘涨跌幅"都是相对正股收盘，雪球 percent_night_session 亦然。
-        // 旧实现用"昨收"(last_close) 做基准，会额外叠加正股当日涨跌，数值系统性偏大。
         const closeForOvernight = sina?.regularMarketPrice || em.regularMarketPrice;
-
-        // Yahoo fullday 只有在"确实比盘后收盘更新"时才采信：
-        // 若它等于正股收盘/盘后价，说明其并不覆盖隔夜盘，直接跳过，避免拿盘后价冒充夜盘价。
-        const yahooFullday = yahoo && isFinite(yahoo.fulldayPrice) ? yahoo.fulldayPrice : null;
-        const yahooCoversOvernight =
-          yahooFullday != null &&
-          isFinite(yahoo.fulldayChangePercent) &&
-          Math.abs(yahooFullday - (closeForOvernight || 0)) > 1e-6 &&
-          (!sina?.afterHoursPrice || Math.abs(yahooFullday - sina.afterHoursPrice) > 1e-4);
-
-        let overnightChg = null;
-        let overnightPrice = null;
-        let overnightSource = null;
-
-        if (xqNightFeedAlive && xq?.currentNight != null && closeForOvernight > 0) {
-          // 雪球夜盘（富途同款数据源）——仅在数据源仍在更新时采用
-          overnightChg = ((xq.currentNight - closeForOvernight) / closeForOvernight) * 100;
-          overnightPrice = xq.currentNight;
-          overnightSource = 'xueqiu';
-        } else if (yahooCoversOvernight) {
-          // Yahoo fullday（含盘前/盘后/隔夜），海外网络可达时为实时值
-          overnightChg = yahoo.fulldayChangePercent;
-          overnightPrice = yahooFullday;
-          overnightSource = 'yahoo';
-        } else if (etfFut) {
-          // 指数 ETF：外盘期货代理（NQ/ES）
-          overnightChg = etfFut.chgPct;
-          overnightPrice = closeForOvernight ? closeForOvernight * (1 + etfFut.chgPct / 100) : null;
-          overnightSource = 'futures';
-        } else {
-          // 个股：盘后涨跌 + β × 期货增量（近似估算）
-          const post20 = sina?.postMarketChangePercent ?? 0;
-          const { beta, futSym } = stockFuturesProxy(em.symbol);
-          const delta = futSym === 'ES' ? esDelta : nqDelta;
-          const extra = (isFinite(delta) && delta != null) ? beta * delta : 0;
-          overnightChg = post20 + extra;
-          overnightPrice = closeForOvernight ? closeForOvernight * (1 + overnightChg / 100) : (sina?.afterHoursPrice ?? null);
-          overnightSource = 'proxy';
-        }
-        if (!isFinite(overnightChg)) overnightChg = 0;
-
+        const emFutSym = FUTURES_PROXY[em.symbol];
         return {
           ...em,
-          overnightChangePercent: overnightChg,
-          overnightPrice,
-          overnightSource,
-          // xueqiu/yahoo 为实测值，futures/proxy 为模型估算值（前端据此加"≈"标记）
-          overnightEstimated: overnightSource !== 'xueqiu' && overnightSource !== 'yahoo',
-          overnightAsOf: overnightSource === 'xueqiu' ? (xq?.timestampNight ?? null) : null,
+          ...computeOvernightQuote({
+            symbol: em.symbol,
+            closeForOvernight,
+            sina,
+            yahoo: yhExtData && yhExtData.get(em.symbol),
+            xq: xueqiuData && xueqiuData.get(em.symbol),
+            etfFut: emFutSym ? futuresData[emFutSym] : null,
+            xqNightFeedAlive,
+            esDelta,
+            nqDelta,
+          }),
           marketState: 'OVERNIGHT',
           closePrice: closeForOvernight,
           regularMarketPreviousClose: sina?.regularMarketPreviousClose || em.regularMarketPreviousClose,
@@ -1088,42 +1124,28 @@ app.get('/api/quotes', async (req, res) => {
     );
 
     // 夜盘时段：对 sina fallback 的美股数据也注入 overnightChangePercent
-    //   优先 雪球夜盘（富途同款）> Yahoo > 期货代理 > β 近似
+    //   注意：当 eastmoney 不可达时（部分海外/受限网络环境），**所有**美股都走这条路径，
+    //   所以这里必须与 em 主源路径共用 computeOvernightQuote，否则口径会分叉。
     if (usState === 'OVERNIGHT') {
       puresinaData = puresinaData.map((q) => {
         if (!emSecid(q.symbol)) return q;  // 非美股不覆盖
-        const yahoo = yhExtData && yhExtData.get(q.symbol);
-        const xq = xueqiuData && xueqiuData.get(q.symbol);
-        const etfFutSym = FUTURES_PROXY[q.symbol];
-        const etfFut = etfFutSym ? futuresData[etfFutSym] : null;
-
-        let overnightChg;
-        let overnightPrice;
-        const closeForOvernight = q.regularMarketPrice;
-
-        if (xq?.currentNight != null && xq?.lastClose) {
-          overnightChg = (xq.currentNight - xq.lastClose) / xq.lastClose * 100;
-          overnightPrice = xq.currentNight;
-        } else if (yahoo?.fulldayChangePercent != null) {
-          overnightChg = yahoo.fulldayChangePercent;
-          overnightPrice = yahoo.fulldayPrice ?? null;
-        } else if (etfFut) {
-          overnightChg = etfFut.chgPct;
-          overnightPrice = closeForOvernight ? closeForOvernight * (1 + etfFut.chgPct / 100) : null;
-        } else {
-          const post20 = q.postMarketChangePercent ?? 0;
-          const { beta, futSym } = stockFuturesProxy(q.symbol);
-          const delta = futSym === 'ES' ? esDelta : nqDelta;
-          const extra = (isFinite(delta) && delta != null) ? beta * delta : 0;
-          overnightChg = post20 + extra;
-          overnightPrice = closeForOvernight ? closeForOvernight * (1 + overnightChg / 100) : (q.afterHoursPrice ?? null);
-        }
-
+        const closeForOvernight = q.regularMarketPrice || q.closePrice;
+        const futSym = FUTURES_PROXY[q.symbol];
         return {
           ...q,
-          overnightChangePercent: overnightChg,
-          overnightPrice,
+          ...computeOvernightQuote({
+            symbol: q.symbol,
+            closeForOvernight,
+            sina: q,
+            yahoo: yhExtData && yhExtData.get(q.symbol),
+            xq: xueqiuData && xueqiuData.get(q.symbol),
+            etfFut: futSym ? futuresData[futSym] : null,
+            xqNightFeedAlive,
+            esDelta,
+            nqDelta,
+          }),
           marketState: 'OVERNIGHT',
+          closePrice: closeForOvernight,
         };
       });
     }
@@ -1131,6 +1153,32 @@ app.get('/api/quotes', async (req, res) => {
     const data = [...mergedEmData, ...puresinaData, ...krData, ...twData, ...jpData, ...yhData];
     if (data.length === 0) throw new Error('No quotes returned');
     quoteCache.set(cacheKey, { data, ts: Date.now() });
+    if (diag) {
+      // 诊断模式：GET /api/quotes?symbols=SNDK&diag=1
+      // 用于确认各上游数据源谁真正返回了数据（例如 eastmoney 是否可达）
+      return res.json({
+        success: true,
+        data,
+        diag: {
+          usState,
+          eastmoneyRequested: emSymbols.length,
+          eastmoneyReturned: Object.keys(emMap).length,
+          sinaRequested: sinaAll.length,
+          yahooExtCount: yhExtData ? yhExtData.size : 0,
+          xueqiuCount: xueqiuData ? xueqiuData.size : 0,
+          xqNightFeedTs: xqNightFeedTs ? new Date(xqNightFeedTs).toISOString() : null,
+          xqNightFeedAlive,
+          xqFeedMaxAgeMin: Math.round(OVERNIGHT_FEED_MAX_AGE_MS / 60000),
+          futuresKeys: Object.keys(futuresData || {}),
+          esDelta,
+          nqDelta,
+          overnightPaths: {
+            viaEm: mergedEmData.length,
+            viaSinaFallback: puresinaData.length,
+          },
+        },
+      });
+    }
     res.json({ success: true, data });
   } catch (err) {
     console.error('[quotes]', err.message);
