@@ -469,8 +469,9 @@ const XUEQIU_COOKIE_TTL = 30 * 60_000;  // 30 分钟
 const xueqiuQuoteCache = new Map();
 const XUEQIU_QUOTE_TTL = 10_000;  // 10 秒
 
-function fetchXueqiuRaw(url, extraHeaders = {}) {
+function fetchXueqiuRaw(url, extraHeaders = {}, depth = 0) {
   return new Promise((resolve, reject) => {
+    if (depth > 5) return reject(new Error('too many redirects'));
     const req = https.get(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
@@ -481,18 +482,21 @@ function fetchXueqiuRaw(url, extraHeaders = {}) {
       },
       timeout: 8000,
     }, (res) => {
+      // Collect Set-Cookie before handling redirect
+      const sc = res.headers['set-cookie'];
+      if (sc && sc.length) {
+        const added = sc.map((s) => s.split(';')[0]).join('; ');
+        xueqiuCookie = xueqiuCookie ? `${xueqiuCookie}; ${added}` : added;
+        xueqiuCookieTs = Date.now();
+      }
+      // Follow redirects (xueqiu /hq → www.xueqiu.com/hq)
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+        res.resume();
+        return resolve(fetchXueqiuRaw(res.headers.location, extraHeaders, depth + 1));
+      }
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
-      res.on('end', () => {
-        // Collect Set-Cookie
-        const sc = res.headers['set-cookie'];
-        if (sc && sc.length) {
-          const added = sc.map((s) => s.split(';')[0]).join('; ');
-          xueqiuCookie = xueqiuCookie ? `${xueqiuCookie}; ${added}` : added;
-          xueqiuCookieTs = Date.now();
-        }
-        resolve(Buffer.concat(chunks).toString('utf-8'));
-      });
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
       res.on('error', reject);
     });
     req.on('timeout', () => req.destroy(new Error('xueqiu timeout')));
@@ -503,8 +507,12 @@ function fetchXueqiuRaw(url, extraHeaders = {}) {
 async function ensureXueqiuCookie() {
   const now = Date.now();
   if (xueqiuCookie && now - xueqiuCookieTs < XUEQIU_COOKIE_TTL) return;
-  // 访问主站拿 acw_tc / xq_a_token / u 等 cookie
-  await fetchXueqiuRaw('https://xueqiu.com/').catch(() => {});
+  // 访问 /hq 行情页拿完整 session cookie (xq_a_token / xqat / u / cookiesu)
+  // 首页 '/' 只返回 acw_tc，调用 /v5/stock/quote.json 时会得 400016 鉴权失败
+  xueqiuCookie = null;
+  await fetchXueqiuRaw('https://xueqiu.com/hq', {
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  }).catch(() => {});
 }
 
 async function fetchXueqiuQuote(symbol) {
@@ -957,9 +965,10 @@ app.get('/api/quotes', async (req, res) => {
         let overnightPrice;
         const closeForOvernight = sina?.regularMarketPrice || em.regularMarketPrice;
 
-        if (xq?.percentNight != null && xq?.currentNight != null) {
-          // 雪球夜盘数据（富途同款）
-          overnightChg = xq.percentNight;
+        if (xq?.currentNight != null && xq?.lastClose) {
+          // 雪球夜盘数据（富途同款）：使用 (current_night - last_close) / last_close，
+          // 对齐富途"夜盘涨幅"显示 — 从昨收到当前夜盘价的总涨跌，非仅夜盘段
+          overnightChg = (xq.currentNight - xq.lastClose) / xq.lastClose * 100;
           overnightPrice = xq.currentNight;
         } else if (yahoo?.fulldayChangePercent != null) {
           overnightChg = yahoo.fulldayChangePercent;
@@ -1043,8 +1052,8 @@ app.get('/api/quotes', async (req, res) => {
         let overnightPrice;
         const closeForOvernight = q.regularMarketPrice;
 
-        if (xq?.percentNight != null && xq?.currentNight != null) {
-          overnightChg = xq.percentNight;
+        if (xq?.currentNight != null && xq?.lastClose) {
+          overnightChg = (xq.currentNight - xq.lastClose) / xq.lastClose * 100;
           overnightPrice = xq.currentNight;
         } else if (yahoo?.fulldayChangePercent != null) {
           overnightChg = yahoo.fulldayChangePercent;
