@@ -5,6 +5,7 @@ node_modules/
 claud-id.txt
 .env
 .env.*
+.futu/
 
 # local screenshots (部署不需要)
 *.jpg
