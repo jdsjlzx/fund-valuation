@@ -1981,12 +1981,14 @@ function renderDetail(idx, mode) {
     const isUs = isUSHolding(h);
     const q = isUs ? map[h.s] : null;
     const chg = q ? effectiveChange(q, opts) : null;
+    // 夜盘实测源（雪球/Yahoo）不可用时的回退值来自期货/β 模型，标注"≈"避免误认为实时价
+    const approx = !!(mode === '24h' && q && q.marketState === 'OVERNIGHT' && q.overnightEstimated);
     const tag = marketTag(h.market);
     return `
       <div class="holding-row">
         <span class="holding-name">${holdingDisplayName(h)}${tag ? `<span class="holding-mkt-tag">${tag}</span>` : ''}</span>
         <span class="holding-weight">${(h.w * 100).toFixed(2)}%</span>
-        <span class="holding-chg ${cls(chg)}">${fmtPct(chg)}</span>
+        <span class="holding-chg ${cls(chg)}"${approx ? ' title="夜盘实时源暂不可用，此值为模型估算"' : ''}>${approx ? '≈' : ''}${fmtPct(chg)}</span>
       </div>`;
   }).join('');
 

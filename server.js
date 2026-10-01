@@ -469,6 +469,13 @@ const XUEQIU_COOKIE_TTL = 30 * 60_000;  // 30 分钟
 const xueqiuQuoteCache = new Map();
 const XUEQIU_QUOTE_TTL = 10_000;  // 10 秒
 
+// 雪球夜盘数据新鲜度阈值：
+// 雪球在 ET 00:00 之后不再推送夜盘（其自身市场状态已是"已收盘"），
+// 而富途的夜盘（Blue Ocean，20:00-04:00 ET）仍在实时跳动。
+// 若不校验，会把几小时前的旧价当实时夜盘价 → 与富途出现巨大偏差。
+// 判定方式：取本轮全部标的里"最新的夜盘时间戳"，超过阈值即认为该数据源已停更。
+const OVERNIGHT_FEED_MAX_AGE_MS = Number(process.env.OVERNIGHT_FEED_MAX_AGE_MS || 20 * 60_000);
+
 function fetchXueqiuRaw(url, extraHeaders = {}, depth = 0) {
   return new Promise((resolve, reject) => {
     if (depth > 5) return reject(new Error('too many redirects'));
@@ -950,6 +957,23 @@ app.get('/api/quotes', async (req, res) => {
       if (isFinite(nqNow) && isFinite(qqq20)) nqDelta = nqNow - qqq20;
       if (isFinite(esNow) && isFinite(spy20)) esDelta = esNow - spy20;
     }
+    // 雪球夜盘源是否仍在更新（详见 OVERNIGHT_FEED_MAX_AGE_MS 说明）
+    let xqNightFeedTs = 0;
+    if (xueqiuData && xueqiuData.size) {
+      for (const v of xueqiuData.values()) {
+        if (v && v.timestampNight && v.timestampNight > xqNightFeedTs) xqNightFeedTs = v.timestampNight;
+      }
+    }
+    const xqNightFeedAlive =
+      xqNightFeedTs > 0 && (Date.now() - xqNightFeedTs) <= OVERNIGHT_FEED_MAX_AGE_MS;
+    if (usState === 'OVERNIGHT' && xueqiuData && xueqiuData.size && !xqNightFeedAlive) {
+      const ageMin = xqNightFeedTs ? Math.round((Date.now() - xqNightFeedTs) / 60000) : -1;
+      console.warn(
+        `[overnight] 雪球夜盘源已停更（最新夜盘时间戳 ${xqNightFeedTs ? new Date(xqNightFeedTs).toISOString() : 'n/a'}` +
+        `，距今 ${ageMin} 分钟），本次回退到 Yahoo/期货代理估算`
+      );
+    }
+
     const mergedEmData = emData.map((em) => {
       // 夜盘时段（ET 20:00 - 04:00，个股无盘后交易）：
       //   优先 雪球 current_night_session / percent_night_session（富途同款数据源，个股/ETF 都覆盖）
@@ -961,34 +985,59 @@ app.get('/api/quotes', async (req, res) => {
         const etfFutSym = FUTURES_PROXY[em.symbol];
         const etfFut = etfFutSym ? futuresData[etfFutSym] : null;
 
-        let overnightChg;
-        let overnightPrice;
+        // 夜盘涨跌基准 = 正股收盘价（sina fields[1]）。
+        // 富途/长桥的"夜盘涨跌幅"都是相对正股收盘，雪球 percent_night_session 亦然。
+        // 旧实现用"昨收"(last_close) 做基准，会额外叠加正股当日涨跌，数值系统性偏大。
         const closeForOvernight = sina?.regularMarketPrice || em.regularMarketPrice;
 
-        if (xq?.currentNight != null && xq?.lastClose) {
-          // 雪球夜盘数据（富途同款）：使用 (current_night - last_close) / last_close，
-          // 对齐富途"夜盘涨幅"显示 — 从昨收到当前夜盘价的总涨跌，非仅夜盘段
-          overnightChg = (xq.currentNight - xq.lastClose) / xq.lastClose * 100;
+        // Yahoo fullday 只有在"确实比盘后收盘更新"时才采信：
+        // 若它等于正股收盘/盘后价，说明其并不覆盖隔夜盘，直接跳过，避免拿盘后价冒充夜盘价。
+        const yahooFullday = yahoo && isFinite(yahoo.fulldayPrice) ? yahoo.fulldayPrice : null;
+        const yahooCoversOvernight =
+          yahooFullday != null &&
+          isFinite(yahoo.fulldayChangePercent) &&
+          Math.abs(yahooFullday - (closeForOvernight || 0)) > 1e-6 &&
+          (!sina?.afterHoursPrice || Math.abs(yahooFullday - sina.afterHoursPrice) > 1e-4);
+
+        let overnightChg = null;
+        let overnightPrice = null;
+        let overnightSource = null;
+
+        if (xqNightFeedAlive && xq?.currentNight != null && closeForOvernight > 0) {
+          // 雪球夜盘（富途同款数据源）——仅在数据源仍在更新时采用
+          overnightChg = ((xq.currentNight - closeForOvernight) / closeForOvernight) * 100;
           overnightPrice = xq.currentNight;
-        } else if (yahoo?.fulldayChangePercent != null) {
+          overnightSource = 'xueqiu';
+        } else if (yahooCoversOvernight) {
+          // Yahoo fullday（含盘前/盘后/隔夜），海外网络可达时为实时值
           overnightChg = yahoo.fulldayChangePercent;
-          overnightPrice = yahoo.fulldayPrice ?? null;
+          overnightPrice = yahooFullday;
+          overnightSource = 'yahoo';
         } else if (etfFut) {
+          // 指数 ETF：外盘期货代理（NQ/ES）
           overnightChg = etfFut.chgPct;
           overnightPrice = closeForOvernight ? closeForOvernight * (1 + etfFut.chgPct / 100) : null;
+          overnightSource = 'futures';
         } else {
+          // 个股：盘后涨跌 + β × 期货增量（近似估算）
           const post20 = sina?.postMarketChangePercent ?? 0;
           const { beta, futSym } = stockFuturesProxy(em.symbol);
           const delta = futSym === 'ES' ? esDelta : nqDelta;
           const extra = (isFinite(delta) && delta != null) ? beta * delta : 0;
           overnightChg = post20 + extra;
           overnightPrice = closeForOvernight ? closeForOvernight * (1 + overnightChg / 100) : (sina?.afterHoursPrice ?? null);
+          overnightSource = 'proxy';
         }
+        if (!isFinite(overnightChg)) overnightChg = 0;
 
         return {
           ...em,
           overnightChangePercent: overnightChg,
           overnightPrice,
+          overnightSource,
+          // xueqiu/yahoo 为实测值，futures/proxy 为模型估算值（前端据此加"≈"标记）
+          overnightEstimated: overnightSource !== 'xueqiu' && overnightSource !== 'yahoo',
+          overnightAsOf: overnightSource === 'xueqiu' ? (xq?.timestampNight ?? null) : null,
           marketState: 'OVERNIGHT',
           closePrice: closeForOvernight,
           regularMarketPreviousClose: sina?.regularMarketPreviousClose || em.regularMarketPreviousClose,
