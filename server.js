@@ -2243,6 +2243,7 @@ function calcMACD(klines, barCount = 26) {
   for (let i = start; i < klines.length; i++) {
     const entry = {
       date: klines[i].date,
+      close: klines[i].close,   // 供 ETF 跟踪视图标注信号价位
       dif: dif[i],
       dea: dea[i],
       bar: (dif[i] - dea[i]) * 2,
@@ -2451,6 +2452,889 @@ app.get('/api/index-macd', async (req, res) => {
   } catch (err) {
     console.error('[index-macd]', err.message);
     if (INDEX_MACD_CACHE.data) return res.json({ success: true, ...INDEX_MACD_CACHE.data, stale: true });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+//  /api/etf-track — 纳指科技ETF景顺(sz159509) 专用跟踪视图
+//   · 日K + MACD / 均线指标
+//   · 买卖信号清单（复用 MACD 视图同一套算法，附「信号后表现」）
+//   · 实时行情（含 IOPV / 溢价率）
+//   · 溢价率历史（腾讯日K收盘 ÷ 天天基金单位净值，按日期对齐）
+//   · 分时数据 + 盘中提示
+//   · 每日操作建议（溢价率 × 技术面 × 持仓）
+//  数据源：腾讯财经（日K/实时/分时）· 天天基金（净值历史）
+//
+//  为什么溢价率是关键：159509 是 QDII ETF，受外汇额度限制长期溢价。
+//  实测 2026-09-30 场内 3.194 / IOPV 2.3720 = 溢价 34.65%（基金已发停牌风险提示公告）。
+//  溢价是「场内价 − 净值」的差，随情绪扩张/收敛，与指数涨跌无关；
+//  高溢价时买入 = 额外承担溢价回落的风险，因此本接口把溢价率作为一级决策变量。
+//  策略档位（用户给定，按本 ETF 历史分布标定）：
+//    ≤18% 买入 · <15% 多买 · ≥22% 只减不加 · ≥27% 减仓
+//  档位会换算成基于 IOPV 的挂单价（加仓价/买入价/警戒价/减仓价）直接给出。
+// ═══════════════════════════════════════════════════════
+const ETF_CODE = 'sz159509';
+const ETF_NAME = '纳指科技ETF景顺';
+const ETF_FUND_CODE = '159509';
+const ETF_NAV_CACHE = { data: null, ts: 0 };
+const ETF_MKT_CACHE = { data: null, ts: 0 };
+let ETF_PREM_PREV = null;                   // 上一次请求的溢价率（用于盘中穿越买入线检测）
+let ETF_KLINES = [];                        // 最近一次拉取的日K（供盘中柱估算）
+const ETF_NAV_TTL = 6 * 3600_000;           // 净值历史：6 小时
+const ETF_MKT_TTL_TRADING = 20_000;         // 盘中：20 秒
+const ETF_MKT_TTL_IDLE = 180_000;           // 非盘中：3 分钟
+
+// ── 溢价率档位（按本 ETF 自身历史分布标定，不是通用 ETF 标准）──
+// 历史 299 个交易日（2025-07-10 ~ 2026-09-29）实测分布：
+//   min 3.3% · p10 7.9% · p25 13.7% · 中位数 17.2% · p75 20.6% · max 32.3%
+//   低于 18% 的交易日占 58.5%，低于 15% 占 31.8%；长期正溢价是 QDII 外汇额度受限所致。
+// 策略阈值（用户给定）：溢价 ≤18% 可买入，<15% 可多买（加仓）。
+//   据此把 18% / 15% 定为买入线 / 加仓线，22% / 27% 定为警戒线 / 减仓线。
+// 历史上按「溢价 < 阈值」进场后持 20 个交易日的场内价平均收益（含溢价收敛贡献）：
+//   <15% → +7.87%（胜率 83%）· <18% → +6.25%（76%）· <25% → +4.02%（64%）
+//   即：进场溢价越低，后续收益与胜率越好，价差约 2~4 个百分点来自溢价回归本身。
+const PREMIUM_ADD = 15;      // 加仓线（多买）
+const PREMIUM_BUY = 18;      // 买入线
+const PREMIUM_WATCH = 22;    // 警戒线（高于此位只减不加）
+const PREMIUM_DANGER = 27;   // 减仓线
+const PREMIUM_ZONES = [
+  { key: 'add',   level: 'cheap',   label: '加仓区', lo: -Infinity,      hi: PREMIUM_ADD,    note: `溢价 <${PREMIUM_ADD}%，可多买` },
+  { key: 'buy',   level: 'ok',      label: '买入区', lo: PREMIUM_ADD,    hi: PREMIUM_BUY,    note: `溢价 ${PREMIUM_ADD}~${PREMIUM_BUY}%，可买入` },
+  { key: 'watch', level: 'warn',    label: '观望区', lo: PREMIUM_BUY,    hi: PREMIUM_WATCH,  note: `溢价 ${PREMIUM_BUY}~${PREMIUM_WATCH}%，略高于买入线，观望` },
+  { key: 'avoid', level: 'high',    label: '高溢价', lo: PREMIUM_WATCH,  hi: PREMIUM_DANGER, note: `溢价 ${PREMIUM_WATCH}~${PREMIUM_DANGER}%，不买入，持有者减仓` },
+  { key: 'exit',  level: 'extreme', label: '极高',   lo: PREMIUM_DANGER, hi: Infinity,       note: `溢价 >${PREMIUM_DANGER}%，减仓规避溢价回落` },
+];
+function premiumZone(pct) {
+  if (pct == null || !isFinite(pct)) return { key: 'unknown', level: 'neutral', label: '—', note: '溢价数据缺失' };
+  for (const z of PREMIUM_ZONES) if (pct < z.hi) return z;
+  return PREMIUM_ZONES[PREMIUM_ZONES.length - 1];
+}
+// 把档位边界翻译成可直接挂单的价格（基于当前 IOPV）
+function premiumPriceLadder(iopv) {
+  if (!(iopv > 0)) return null;
+  return {
+    add:   { pct: PREMIUM_ADD,    price: +(iopv * (1 + PREMIUM_ADD / 100)).toFixed(3) },
+    buy:   { pct: PREMIUM_BUY,    price: +(iopv * (1 + PREMIUM_BUY / 100)).toFixed(3) },
+    watch: { pct: PREMIUM_WATCH,  price: +(iopv * (1 + PREMIUM_WATCH / 100)).toFixed(3) },
+    cut:   { pct: PREMIUM_DANGER, price: +(iopv * (1 + PREMIUM_DANGER / 100)).toFixed(3) },
+  };
+}
+
+// 北京时间日期串（服务端可能跑在 UTC，必须显式换算）
+function bjDateStr(ts = Date.now()) {
+  return new Date(ts + 8 * 3600_000).toISOString().slice(0, 10);
+}
+
+// 腾讯日K（含开/收/高/低/量）
+async function fetchTencentEtfDayK(symbol, limit = 400) {
+  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${symbol},day,,,${limit},qfq`;
+  const txt = await httpGet(url, { Referer: 'https://gu.qq.com/' });
+  let j;
+  try { j = JSON.parse(txt); } catch { return []; }
+  const node = j && j.data && j.data[symbol];
+  const rows = (node && (node.day || node.qfqday)) || [];
+  return rows
+    .map(r => ({ date: r[0], open: +r[1], close: +r[2], high: +r[3], low: +r[4], volume: +r[5] }))
+    .filter(r => r.date && isFinite(r.close));
+}
+
+// 腾讯实时行情（含 IOPV / 溢价率）
+// 字段下标（实测 sz 前缀 A股/ETF 通道，共 88 段）：
+//   [3]现价 [4]昨收 [5]今开 [6]成交量(手) [30]时间戳 [31]涨跌额 [32]涨跌幅%
+//   [33]最高 [34]最低 [37]成交额(万元) [77]溢价率% [78]IOPV [81]单位净值 [82]币种
+async function fetchTencentEtfQuote(symbol) {
+  const txt = await httpGet(`https://qt.gtimg.cn/q=${symbol}`, { Referer: 'https://finance.qq.com/' });
+  const m = txt.match(/="([^"]+)"/);
+  if (!m) return null;
+  const f = m[1].split('~');
+  const price = parseFloat(f[3]);
+  const prevClose = parseFloat(f[4]);
+  if (!isFinite(price) || !isFinite(prevClose) || prevClose <= 0) return null;
+  const ts = (f[30] || '').trim();
+  return {
+    symbol,
+    price,
+    prevClose,
+    open: parseFloat(f[5]) || null,
+    high: parseFloat(f[33]) || null,
+    low: parseFloat(f[34]) || null,
+    volume: parseFloat(f[6]) || null,          // 手
+    amount: parseFloat(f[37]) || null,         // 万元
+    changePct: (price - prevClose) / prevClose * 100,
+    iopv: parseFloat(f[78]) || null,
+    nav: parseFloat(f[81]) || null,
+    premiumPct: parseFloat(f[77]),
+    quoteTime: ts.length >= 14
+      ? `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)} ${ts.slice(8, 10)}:${ts.slice(10, 12)}`
+      : null,
+    quoteDate: ts.length >= 8 ? `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)}` : null,
+  };
+}
+
+// 天天基金单位净值历史 → { 'YYYY-MM-DD': nav }
+async function fetchEtfNavHistory(fundCode) {
+  if (ETF_NAV_CACHE.data && Date.now() - ETF_NAV_CACHE.ts < ETF_NAV_TTL) return ETF_NAV_CACHE.data;
+  const txt = await httpGet(`https://fund.eastmoney.com/pingzhongdata/${fundCode}.js`, {
+    Referer: 'https://fund.eastmoney.com/',
+  });
+  const m = txt.match(/var Data_netWorthTrend = (\[[\s\S]*?\]);/);
+  if (!m) return ETF_NAV_CACHE.data || {};
+  let arr;
+  try { arr = JSON.parse(m[1]); } catch { return ETF_NAV_CACHE.data || {}; }
+  const nav = {};
+  for (const x of arr) {
+    if (!x || !isFinite(x.x) || !isFinite(x.y)) continue;
+    // 时间戳按北京时间取日期（服务端时区无关）
+    nav[new Date(x.x + 8 * 3600_000).toISOString().slice(0, 10)] = x.y;
+  }
+  ETF_NAV_CACHE.data = nav;
+  ETF_NAV_CACHE.ts = Date.now();
+  return nav;
+}
+
+// 腾讯分时：返回 { date:'YYYY-MM-DD', points:[{t,price,avg}] }
+async function fetchTencentEtfMinute(symbol) {
+  const txt = await httpGet(`https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=${symbol}`, {
+    Referer: 'https://gu.qq.com/',
+  });
+  let j;
+  try { j = JSON.parse(txt); } catch { return null; }
+  const node = j && j.data && j.data[symbol];
+  const raw = node && node.data && node.data.data;
+  if (!raw || !raw.length) return null;
+  const dra = String(node.data.date || '');   // YYYYMMDD
+  const points = [];
+  for (const line of raw) {
+    const p = line.split(/\s+/);
+    const t = p[0];
+    const price = parseFloat(p[1]);
+    if (!isFinite(price) || !t || t.length < 4) continue;
+    const cumVol = parseFloat(p[2]) || 0;    // 累计成交量（手）
+    const cumAmt = parseFloat(p[3]) || 0;    // 累计成交额（元）
+    let avg = cumVol > 0 ? cumAmt / (cumVol * 100) : null;
+    // 均价合理性护栏：偏离现价 ±20% 视为单位口径异常，丢弃
+    if (avg != null && (!isFinite(avg) || avg < price * 0.8 || avg > price * 1.2)) avg = null;
+    points.push({ t: `${t.slice(0, 2)}:${t.slice(2)}`, price, avg });
+  }
+  return {
+    date: dra.length === 8 ? `${dra.slice(0, 4)}-${dra.slice(4, 6)}-${dra.slice(6, 8)}` : dra,
+    points,
+  };
+}
+
+// 简单均线（与 closes 等长，不足周期的为 null）
+function movingAvgSeries(closes, period) {
+  const out = new Array(closes.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    sum += closes[i];
+    if (i >= period) sum -= closes[i - period];
+    if (i >= period - 1) out[i] = sum / period;
+  }
+  return out;
+}
+
+const ETF_SIGNAL_META = {
+  buy:       { label: '强买',   action: '买入',     side: 'buy'  },
+  buy_weak:  { label: '弱买',   action: '小仓试仓', side: 'buy'  },
+  buy_pre:   { label: '买预警', action: '准备买入', side: 'buy'  },
+  sell:      { label: '强卖',   action: '减仓',     side: 'sell' },
+  sell_ma:   { label: '破MA21', action: '减仓',     side: 'sell' },
+  sell_weak: { label: '弱卖',   action: '观望',     side: 'sell' },
+  sell_pre:  { label: '卖预警', action: '准备减仓', side: 'sell' },
+};
+
+// 信号清单：复用 MACD 视图同一套算法（calcMACD），保证两个 Tab 口径一致；
+// 并补「信号后表现」——买入信号持有到下一个卖出信号的收益；卖出信号到下一个买入信号之间的涨跌。
+function buildEtfSignals(klines) {
+  const bars = calcMACD(klines, klines.length);
+  if (!bars.length) return { signals: [], bars: [], stats: null };
+  const lastIdx = klines.length - 1;
+  const sigs = [];
+  bars.forEach((b, i) => {
+    if (!b.signal) return;
+    const meta = ETF_SIGNAL_META[b.signal] || { label: b.signal, action: '观察', side: 'buy' };
+    sigs.push({
+      idx: i,
+      date: b.date,
+      close: isFinite(b.close) ? b.close : klines[i].close,
+      code: b.signal,
+      label: meta.label,
+      action: meta.action,
+      side: meta.side,
+      intraday: !!b.intraday,
+    });
+  });
+  for (let i = 0; i < sigs.length; i++) {
+    const s = sigs[i];
+    let nxt = null;
+    for (let j = i + 1; j < sigs.length; j++) {
+      if (sigs[j].side !== s.side) { nxt = sigs[j]; break; }
+    }
+    const endIdx = nxt ? nxt.idx : lastIdx;
+    const endClose = nxt ? nxt.close : klines[lastIdx].close;
+    s.holdDays = endIdx - s.idx;
+    s.holdUntil = nxt ? nxt.date : `${klines[lastIdx].date}(至今)`;
+    const seg = (endClose / s.close - 1) * 100;
+    if (s.side === 'buy') s.holdRetPct = +seg.toFixed(2);        // 持有一段的结果
+    else s.avoidPct = +seg.toFixed(2);                            // 卖出后若继续持有会有的结果（负=躲过下跌）
+    s.sinceRetPct = +(((klines[lastIdx].close / s.close) - 1) * 100).toFixed(2);
+  }
+  const buys = sigs.filter(s => s.side === 'buy');
+  const wins = buys.filter(s => (s.holdRetPct ?? 0) > 0).length;
+  return {
+    signals: sigs,
+    bars,
+    stats: {
+      buyCount: buys.length,
+      sellCount: sigs.length - buys.length,
+      winRate: buys.length ? +(wins / buys.length * 100).toFixed(1) : null,
+    },
+  };
+}
+
+// 历史回溯：全区间最佳买卖点 + 策略对比
+//  · bestBuys/bestSells：事后最优（后视镜视角，用于看清「什么样的位置才是好位置」）
+//  · signalBuys：策略可捕捉的买点（MACD 买入信号 ∩ 溢价 ≤18%，即用户策略真正会出手的日子）
+//  · backtest：买入持有 / MACD 信号 / MACD×溢价 / 纯溢价 四套规则的收益、胜率、回撤对比
+function buildEtfHistoryReview(klines, navMap, signals) {
+  const n = klines.length;
+  if (n < 30) return null;
+  const premAt = i => {
+    const nav = navMap[klines[i].date];
+    return nav > 0 ? +((klines[i].close / nav - 1) * 100).toFixed(2) : null;
+  };
+  const fwdRet = (i, d) => (i + d < n) ? +((klines[i + d].close / klines[i].close - 1) * 100).toFixed(2) : null;
+  const fwdExt = (i, d, mode) => {
+    let v = mode === 'low' ? Infinity : -Infinity;
+    for (let j = i + 1; j <= Math.min(n - 1, i + d); j++) {
+      v = mode === 'low' ? Math.min(v, klines[j].close) : Math.max(v, klines[j].close);
+    }
+    if (!isFinite(v)) return null;
+    return +((v / klines[i].close - 1) * 100).toFixed(2);
+  };
+  const rows = klines.map((k, i) => ({
+    i, date: k.date, close: k.close, premium: premAt(i),
+    r5: fwdRet(i, 5), r20: fwdRet(i, 20), r60: fwdRet(i, 60),
+    low20: fwdExt(i, 20, 'low'), high20: fwdExt(i, 20, 'high'),
+  }));
+
+  // 去重挑选：同一波低点只保留最有代表性的一天
+  const pickSpread = (arr, key, dir, limit, gap = 8) => {
+    const sorted = [...arr].filter(r => r[key] != null).sort((a, b) => dir === 'desc' ? b[key] - a[key] : a[key] - b[key]);
+    const out = [];
+    for (const r of sorted) {
+      if (out.some(o => Math.abs(o.i - r.i) < gap)) continue;
+      out.push(r);
+      if (out.length >= limit) break;
+    }
+    return out.map(r => ({ date: r.date, close: r.close, premium: r.premium, r20: r.r20, r60: r.r60, low20: r.low20, high20: r.high20 }));
+  };
+  const risk = rows.filter(r => r.low20 != null);
+  const bestBuys = pickSpread(rows, 'r20', 'desc', 5);
+  const bestSells = pickSpread(risk, 'low20', 'asc', 5);
+  const worstBuys = pickSpread(rows, 'r20', 'asc', 3);
+
+  const minRow = rows.reduce((a, b) => (b.close < a.close ? b : a));
+  const maxRow = rows.reduce((a, b) => (b.close > a.close ? b : a));
+  const premSorted = rows.map(r => r.premium).filter(v => v != null).sort((a, b) => a - b);
+  const pq = q => premSorted.length ? premSorted[Math.min(premSorted.length - 1, Math.round(q * (premSorted.length - 1)))] : null;
+
+  // 策略可捕捉的买点：MACD 买入信号且当时溢价 ≤18%
+  const signalBuys = (signals || [])
+    .filter(s => s.side === 'buy' && s.idx < n && premAt(s.idx) != null && premAt(s.idx) <= PREMIUM_BUY)
+    .map(s => ({ date: s.date, close: s.close, label: s.label, premium: premAt(s.idx), r20: fwdRet(s.idx, 20), r60: fwdRet(s.idx, 60) }))
+    .slice(-8);
+
+  // ── 策略回测（收盘价成交，不含手续费/溢价滑点）──
+  const backtest = (name, buyOk, sellOk) => {
+    let cash = 1, shares = 0, trades = 0, wins = 0, entryPrice = 0, exposure = 0;
+    const curve = [];
+    for (let i = 0; i < n; i++) {
+      const k = klines[i];
+      const s = (signals || []).find(x => x.idx === i);
+      if (shares === 0 && s && buyOk(s, i, premAt(i))) { shares = cash / k.close; cash = 0; trades++; entryPrice = k.close; }
+      else if (shares > 0 && s && sellOk(s, i, premAt(i))) {
+        const v = shares * k.close;
+        if (k.close > entryPrice) wins++;
+        cash = v; shares = 0;
+      }
+      if (shares > 0) exposure++;
+      curve.push(shares > 0 ? shares * k.close : cash);
+    }
+    const equity = shares > 0 ? shares * klines[n - 1].close : cash;
+    // 最大回撤
+    let peak = curve[0], mdd = 0;
+    for (const v of curve) { peak = Math.max(peak, v); mdd = Math.min(mdd, (v / peak - 1) * 100); }
+    const yrs = n / 252;
+    return {
+      name,
+      totalPct: +((equity - 1) * 100).toFixed(1),
+      annualPct: +((Math.pow(equity, 1 / yrs) - 1) * 100).toFixed(1),
+      trades, winPct: trades ? +(wins / trades * 100).toFixed(0) : null,
+      mddPct: +mdd.toFixed(1),
+      exposurePct: +(exposure / n * 100).toFixed(0),
+      holding: shares > 0,
+    };
+  };
+  const isBuySig = s => s.side === 'buy';
+  const isSellSig = s => s.side === 'sell';
+  // 状态机回测：按日推进，买入/卖出条件各自判断（用于非信号类规则）
+  const sma = (arr, p) => arr.map((_, i) => i + 1 < p ? null : +(arr.slice(i + 1 - p, i + 1).reduce((s, v) => s + v, 0) / p).toFixed(4));
+  const ma21 = sma(klines.map(k => k.close), 21);
+  const stateMachine = (name, buyFn, sellFn) => {
+    let cash = 1, shares = 0, trades = 0, wins = 0, entry = 0, exposure = 0;
+    const curve = [];
+    for (let i = 0; i < n; i++) {
+      const k = klines[i], p = premAt(i);
+      if (shares === 0 && buyFn(i, p)) { shares = cash / k.close; cash = 0; trades++; entry = k.close; }
+      else if (shares > 0 && sellFn(i, p)) { if (k.close > entry) wins++; cash = shares * k.close; shares = 0; }
+      if (shares > 0) exposure++;
+      curve.push(shares > 0 ? shares * k.close : cash);
+    }
+    let peak = curve[0], mdd = 0;
+    for (const v of curve) { peak = Math.max(peak, v); mdd = Math.min(mdd, (v / peak - 1) * 100); }
+    const equity = shares > 0 ? shares * klines[n - 1].close : cash;
+    const yrs = n / 252;
+    return {
+      name,
+      totalPct: +((equity - 1) * 100).toFixed(1),
+      annualPct: +((Math.pow(equity, 1 / yrs) - 1) * 100).toFixed(1),
+      trades, winPct: trades ? +(wins / trades * 100).toFixed(0) : null,
+      mddPct: +mdd.toFixed(1), exposurePct: +(exposure / n * 100).toFixed(0), holding: shares > 0,
+    };
+  };
+  const bt = [
+    { name: '买入持有（基准）', ...(() => {
+      const g = klines[n - 1].close / klines[0].close;
+      const yrs = n / 252;
+      let peak = klines[0].close, mdd = 0;
+      for (const k of klines) { peak = Math.max(peak, k.close); mdd = Math.min(mdd, (k.close / peak - 1) * 100); }
+      return { totalPct: +((g - 1) * 100).toFixed(1), annualPct: +((Math.pow(g, 1 / yrs) - 1) * 100).toFixed(1), trades: 1, winPct: null, mddPct: +mdd.toFixed(1), exposurePct: 100, holding: true };
+    })() },
+    backtest('MACD 信号（不看溢价）', isBuySig, isSellSig),
+    backtest(`MACD 买点 ∩ 溢价 ≤${PREMIUM_BUY}%`, (s, i, p) => isBuySig(s) && p != null && p <= PREMIUM_BUY, isSellSig),
+    backtest(`MACD 买点 ∩ 溢价 <${PREMIUM_ADD}%`, (s, i, p) => isBuySig(s) && p != null && p < PREMIUM_ADD, isSellSig),
+    stateMachine(`纯溢价：<${PREMIUM_BUY}% 买 / ≥${PREMIUM_DANGER}% 卖`,
+      (i, p) => p != null && p < PREMIUM_BUY,
+      (i, p) => p != null && p >= PREMIUM_DANGER),
+    stateMachine(`溢价 ≤${PREMIUM_BUY}% 买入 · 跌破 MA21 减仓（持有为主）`,
+      (i, p) => p != null && p <= PREMIUM_BUY,
+      (i, p) => ma21[i] != null && klines[i].close < ma21[i]),
+  ];
+
+  return {
+    start: klines[0].date,
+    end: klines[n - 1].date,
+    days: n,
+    firstClose: klines[0].close,
+    lastClose: klines[n - 1].close,
+    buyHoldPct: +((klines[n - 1].close / klines[0].close - 1) * 100).toFixed(1),
+    rangeLow: { date: minRow.date, close: minRow.close, premium: minRow.premium },
+    rangeHigh: { date: maxRow.date, close: maxRow.close, premium: maxRow.premium },
+    premiumDist: {
+      days: premSorted.length, min: pq(0), p10: pq(0.1), p25: pq(0.25), median: pq(0.5), p75: pq(0.75), max: pq(1),
+      belowBuy: +(premSorted.filter(v => v <= PREMIUM_BUY).length / (premSorted.length || 1) * 100).toFixed(1),
+      belowAdd: +(premSorted.filter(v => v < PREMIUM_ADD).length / (premSorted.length || 1) * 100).toFixed(1),
+      aboveWatch: +(premSorted.filter(v => v >= PREMIUM_WATCH).length / (premSorted.length || 1) * 100).toFixed(1),
+      aboveDanger: +(premSorted.filter(v => v >= PREMIUM_DANGER).length / (premSorted.length || 1) * 100).toFixed(1),
+      aboveWatchDays: premSorted.filter(v => v >= PREMIUM_WATCH).length,
+      aboveDangerDays: premSorted.filter(v => v >= PREMIUM_DANGER).length,
+    },
+    bestBuys, bestSells, worstBuys, signalBuys,
+    backtest: bt,
+    signalStats: (() => {
+      const buys = (signals || []).filter(s => s.side === 'buy');
+      const wins = buys.filter(s => (s.holdRetPct ?? 0) > 0).length;
+      return { total: (signals || []).length, buyCount: buys.length, sellCount: (signals || []).length - buys.length, winRate: buys.length ? +(wins / buys.length * 100).toFixed(1) : null };
+    })(),
+  };
+}
+
+// 用当前价估算「今日这根 MACD 柱」，用于盘中翻红/翻绿提示
+function etfIntradayBar(klines, price, todayStr) {
+  if (!klines.length || !isFinite(price)) return null;
+  const k = klines.map(x => ({ date: x.date, close: x.close }));
+  const last = k[k.length - 1];
+  if (last.date === todayStr) last.close = price;
+  else k.push({ date: todayStr, close: price });
+  const closes = k.map(x => x.close);
+  const ema12 = calcEMA(closes, 12);
+  const ema26 = calcEMA(closes, 26);
+  const dif = ema12.map((v, i) => v - ema26[i]);
+  const dea = calcEMA(dif, 9);
+  const n = closes.length - 1;
+  return {
+    bar: (dif[n] - dea[n]) * 2,
+    prevBar: (dif[n - 1] - dea[n - 1]) * 2,
+    dif: dif[n],
+    dea: dea[n],
+    isToday: last.date === todayStr,
+  };
+}
+
+// 每日操作建议：溢价率档位（一级决策变量）× 技术面 × 持仓
+// 决策顺序：① 溢价减仓区（>27%）→ ② 技术面转空 → ③ 加仓/买入区 → ④ 观望区 → ⑤ 兜底
+function buildEtfAdvice(ctx) {
+  const { quote, ind, lastSignal, pos, todayBar, signals } = ctx;
+  const premium = quote.premiumPct;
+  const zone = premiumZone(premium);
+  const iopv = quote.iopv;
+  const price = quote.price != null ? quote.price : ind.price;
+  const reasons = [];
+
+  const techBull = ind.price > ind.ma21 && ind.bar > 0;
+  const techBear = ind.price < ind.ma21 && ind.bar < 0;
+  const buySide = lastSignal && lastSignal.side === 'buy';
+  const sellSide = lastSignal && lastSignal.side === 'sell';
+
+  // 溢价档位对应的挂单价 + 现价距买入线还有多远
+  const ladder = premiumPriceLadder(iopv);
+  const buyPrice = ladder ? ladder.buy.price : null;
+  const addPrice = ladder ? ladder.add.price : null;
+  const toBuyPct = (buyPrice && price) ? (price / buyPrice - 1) * 100 : null;
+  const toAddPct = (addPrice && price) ? (price / addPrice - 1) * 100 : null;
+
+  reasons.push({
+    tone: (zone.key === 'add' || zone.key === 'buy') ? 'good' : zone.key === 'watch' ? 'neutral' : zone.key === 'unknown' ? 'neutral' : 'bad',
+    label: `溢价 ${zone.label}`,
+    text: premium != null
+      ? `场内价 ${price.toFixed(3)} / IOPV ${iopv != null ? iopv.toFixed(4) : '—'} = 溢价 ${premium.toFixed(2)}%（买入线 ${PREMIUM_BUY}% · 加仓线 ${PREMIUM_ADD}%）`
+      : '溢价数据缺失',
+  });
+  if (toBuyPct != null && toBuyPct > 0) {
+    reasons.push({
+      tone: 'neutral',
+      label: '距买入线',
+      text: `现价 ${price.toFixed(3)} 比买入价 ${buyPrice.toFixed(3)}（溢价 ${PREMIUM_BUY}%）贵 ${toBuyPct.toFixed(2)}%`
+        + (toAddPct != null && toAddPct > 0 ? `，比加仓价 ${addPrice.toFixed(3)}（溢价 ${PREMIUM_ADD}%）贵 ${toAddPct.toFixed(2)}%` : '')
+        + '；要么等价格回落，要么等溢价收敛',
+    });
+  } else if (toBuyPct != null) {
+    reasons.push({
+      tone: 'good',
+      label: '已达买入线',
+      text: `现价 ${price.toFixed(3)} 低于买入价 ${buyPrice.toFixed(3)}（溢价 ${PREMIUM_BUY}%）${Math.abs(toBuyPct).toFixed(2)}%`
+        + (toAddPct != null && toAddPct <= 0 ? `，且已低于加仓价 ${addPrice.toFixed(3)}（溢价 ${PREMIUM_ADD}%），可加大买入力度` : ''),
+    });
+  }
+  reasons.push({
+    tone: techBull ? 'good' : techBear ? 'bad' : 'neutral',
+    label: '技术面',
+    text: `价格${ind.price > ind.ma21 ? '站上' : '跌破'} MA21(${ind.ma21 != null ? ind.ma21.toFixed(3) : '—'})，MACD ${ind.bar >= 0 ? '红柱 +' : '绿柱 '}${ind.bar.toFixed(3)}`,
+  });
+  if (lastSignal) {
+    reasons.push({
+      tone: buySide ? 'good' : 'bad',
+      label: `最近信号 ${lastSignal.label}`,
+      text: `${lastSignal.date} @ ${lastSignal.close.toFixed(3)}，建议${lastSignal.action}；此后${lastSignal.sinceRetPct >= 0 ? '涨' : '跌'} ${Math.abs(lastSignal.sinceRetPct).toFixed(2)}%`,
+    });
+  }
+  if (todayBar && todayBar.isToday) {
+    const flip = todayBar.prevBar <= 0 && todayBar.bar > 0 ? '翻红'
+      : todayBar.prevBar >= 0 && todayBar.bar < 0 ? '翻绿' : '延续';
+    reasons.push({
+      tone: flip === '翻红' ? 'good' : flip === '翻绿' ? 'bad' : 'neutral',
+      label: '盘中柱',
+      text: `现价估算今日 MACD 柱 ${todayBar.bar >= 0 ? '+' : ''}${todayBar.bar.toFixed(3)}（${flip}）`,
+    });
+  }
+
+  // 关键价位：把溢价档位翻译成可直接挂单的价格
+  const levels = [];
+  if (ladder) {
+    levels.push({ label: `加仓价 · 溢价 ${PREMIUM_ADD}%`, price: ladder.add.price, note: '低于此价可多买', tone: 'buy' });
+    levels.push({ label: `买入价 · 溢价 ${PREMIUM_BUY}%`, price: ladder.buy.price, note: '低于此价可买入', tone: 'buy' });
+    levels.push({ label: `警戒价 · 溢价 ${PREMIUM_WATCH}%`, price: ladder.watch.price, note: '高于此位只减不加', tone: 'warn' });
+    levels.push({ label: `减仓价 · 溢价 ${PREMIUM_DANGER}%`, price: ladder.cut.price, note: '溢价极高，减仓避险', tone: 'sell' });
+    levels.push({ label: '净值参考价 IOPV', price: +iopv.toFixed(4), note: '溢价 0% 的理论价', tone: 'ref' });
+  }
+  if (ind.ma21 != null) levels.push({ label: 'MA21', price: +ind.ma21.toFixed(3), note: '多空分界，跌破减仓', tone: 'ref' });
+  if (ind.ma5 != null) levels.push({ label: 'MA5', price: +ind.ma5.toFixed(3), note: '短线强弱', tone: 'ref' });
+  const lastBuy = [...(signals || [])].reverse().find(s => s.side === 'buy');
+  const lastSell = [...(signals || [])].reverse().find(s => s.side === 'sell');
+  if (lastBuy) levels.push({ label: '最近买点', price: +lastBuy.close.toFixed(3), note: lastBuy.date, tone: 'buy' });
+  if (lastSell) levels.push({ label: '最近卖点', price: +lastSell.close.toFixed(3), note: lastSell.date, tone: 'sell' });
+
+  let level = 'wait';
+  let action = '观望';
+  let headline = '';
+  const held = !!(pos && pos.shares > 0);
+  const inBuyZone = zone.key === 'add' || zone.key === 'buy';
+  const pctTxt = premium != null ? premium.toFixed(1) : '—';
+  const buyTxt = buyPrice ? buyPrice.toFixed(3) : '—';
+  const addTxt = addPrice ? addPrice.toFixed(3) : '—';
+
+  if (zone.key === 'exit') {
+    // 溢价 >27%：溢价风险压倒一切
+    if (held) {
+      level = 'danger'; action = '减仓';
+      headline = `溢价 ${pctTxt}% 已进「极高」区（>${PREMIUM_DANGER}%），建议减仓，规避溢价回落`;
+    } else {
+      level = 'wait'; action = '观望（不买入）';
+      headline = `溢价 ${pctTxt}% 属极高区间，坚决不追高；等回到 ${buyTxt} 以下再谈买入`;
+    }
+  } else if (held && sellSide && ind.price < ind.ma21) {
+    level = 'danger'; action = '减仓 / 清仓';
+    headline = `技术面转空（${lastSignal.label}）且跌破 MA21，建议减仓`
+      + (inBuyZone ? `（溢价 ${pctTxt}% 虽已达标，但趋势先破位，先减仓等企稳）` : '');
+  } else if (zone.key === 'avoid') {
+    if (held) {
+      level = 'warn'; action = '减仓（暂停加仓）';
+      headline = `溢价 ${pctTxt}% 高于警戒线 ${PREMIUM_WATCH}%，持有者可分批减仓，不宜再加仓`;
+    } else {
+      level = 'wait'; action = '观望（不买入）';
+      headline = `溢价 ${pctTxt}% 高于警戒线 ${PREMIUM_WATCH}%，等回落至 ${buyTxt}（溢价 ${PREMIUM_BUY}%）再买入`;
+    }
+  } else if (inBuyZone) {
+    const strong = zone.key === 'add';
+    if (held) {
+      level = 'buy';
+      action = strong ? '加仓（多买）' : '持有 / 小幅加仓';
+      headline = strong
+        ? `溢价 ${pctTxt}% 已低于加仓线 ${PREMIUM_ADD}%（对应价 ${addTxt}），可加大买入力度`
+        : `溢价 ${pctTxt}% 在买入区（${PREMIUM_ADD}~${PREMIUM_BUY}%），持有并可小幅加仓`;
+    } else if (techBear) {
+      level = 'warn'; action = '小仓试探';
+      headline = `溢价 ${pctTxt}% 已到${strong ? '加仓线' : '买入线'}以下，但技术面偏空（跌破 MA21 且绿柱），建议首笔半仓、留足子弹`;
+    } else if (!techBull && !buySide) {
+      level = 'warn'; action = '分批建仓';
+      headline = `溢价 ${pctTxt}% 已进${zone.label}，趋势未确认，建议分批小仓介入`;
+    } else {
+      level = 'buy';
+      action = strong ? '多买（加仓）' : '分批买入';
+      headline = strong
+        ? `溢价 ${pctTxt}% 已低于加仓线 ${PREMIUM_ADD}%（对应价 ${addTxt}），可加大买入力度`
+        : `溢价 ${pctTxt}% 低于买入线 ${PREMIUM_BUY}%（对应价 ${buyTxt}），技术面配合，可分批买入`;
+    }
+  } else if (zone.key === 'watch') {
+    if (held) {
+      level = 'hold'; action = '持有（不加仓）';
+      headline = `溢价 ${pctTxt}% 略高于买入线 ${PREMIUM_BUY}%，持有不加仓，等回到 ${buyTxt} 以下`;
+    } else {
+      level = 'wait'; action = '观望';
+      headline = `溢价 ${pctTxt}% 仍高于买入线 ${PREMIUM_BUY}%，等跌到 ${buyTxt}（或溢价收敛）再买`;
+    }
+  } else {
+    // 溢价数据缺失：退回纯技术面判断
+    if (held && techBull) {
+      level = 'hold'; action = '持有';
+      headline = '多头趋势延续，继续持有（溢价数据缺失，注意自行核对溢价）';
+    } else if (held && techBear) {
+      level = 'warn'; action = '减仓';
+      headline = '价格跌破 MA21 且 MACD 绿柱，建议逐步减仓';
+    } else if (held) {
+      level = 'hold'; action = '持有观察';
+      headline = '趋势未明确，持有并关注 MA21 与溢价变化';
+    } else if (sellSide) {
+      level = 'wait'; action = '观望';
+      headline = '技术面偏空，等待新的买入信号';
+    } else {
+      level = 'wait'; action = '观望';
+      headline = '溢价数据缺失，暂不判断';
+    }
+  }
+
+  return { level, action, headline, reasons, levels, held, zone: zone.key };
+}
+
+// 盘中提示：状态型条件（每次请求重算，前端按 key 去重后只提示新增项）
+function buildEtfAlerts(ctx) {
+  const { quote, ind, todayBar, signals } = ctx;
+  const out = [];
+  const add = (key, level, title, text) => out.push({ key, level, title, text });
+  const zone = premiumZone(quote.premiumPct);
+  const pz = quote.premiumPct;
+  const ladder = premiumPriceLadder(quote.iopv);
+
+  // 溢价穿越买入线 / 加仓线（盘中对比上一次请求，真正的「该出手了」提示）
+  const pc = ctx.premCross;
+  if (pc && pc.crossedDown && pc.crossedDown.length) {
+    for (const line of pc.crossedDown) {
+      const isAdd = line === PREMIUM_ADD;
+      const isBuy = line === PREMIUM_BUY;
+      add(`premium_cross_dn_${line}`, 'good', `溢价跌破 ${line}%${isAdd ? '加仓线' : isBuy ? '买入线' : '档位线'}`,
+        `溢价由 ${pc.from.toFixed(2)}% 收敛至 ${pc.to.toFixed(2)}%`
+        + (ladder ? `，加仓价 ${ladder.add.price} / 买入价 ${ladder.buy.price}` : '')
+        + (isAdd ? '；已进入加仓区，按策略可多买' : isBuy ? '；已进入买入区，可分批买入' : ''));
+    }
+  }
+  if (pc && pc.crossedUp && pc.crossedUp.length) {
+    for (const line of pc.crossedUp) {
+      const isDanger = line === PREMIUM_DANGER;
+      add(`premium_cross_up_${line}`, isDanger ? 'danger' : 'warn', `溢价升破 ${line}%${isDanger ? '减仓线' : '警戒线'}`,
+        `溢价由 ${pc.from.toFixed(2)}% 扩张至 ${pc.to.toFixed(2)}%`
+        + (isDanger ? '；溢价风险显著，持有者考虑减仓，不追高' : '；买入性价比下降'));
+    }
+  }
+
+  if (zone.key === 'add') {
+    add('premium_zone_add', 'good', '溢价进入加仓区',
+      `当前溢价 ${pz.toFixed(2)}%（<${PREMIUM_ADD}%），按策略可多买；IOPV ${quote.iopv != null ? quote.iopv.toFixed(4) : '—'}${ladder ? `，加仓价 ${ladder.add.price}` : ''}`);
+  } else if (zone.key === 'buy') {
+    add('premium_zone_buy', 'good', '溢价进入买入区',
+      `当前溢价 ${pz.toFixed(2)}%（${PREMIUM_ADD}~${PREMIUM_BUY}%），可分批买入${ladder ? `，买入价 ${ladder.buy.price}` : ''}`);
+  } else if (zone.key === 'avoid') {
+    add('premium_zone_avoid', 'warn', '溢价高于警戒线',
+      `当前溢价 ${pz.toFixed(2)}% 高于 ${PREMIUM_WATCH}%，只减不加，等回落到 ${ladder ? ladder.buy.price : '买入价'} 以下`);
+  } else if (zone.key === 'exit') {
+    add('premium_zone_exit', 'danger', '溢价极高',
+      `场内价较净值溢价 ${pz.toFixed(2)}%，追高买入风险极大；该基金曾因高溢价申请停牌警示`);
+  } else if (zone.key === 'watch') {
+    add('premium_zone_watch', 'info', '溢价略高于买入线',
+      `当前溢价 ${pz.toFixed(2)}% 高于买入线 ${PREMIUM_BUY}%，等回落至 ${ladder ? ladder.buy.price : '买入价'} 再介入`);
+  }
+
+  if (ind.ma21 != null && ind.prevClose != null) {
+    if (ind.price < ind.ma21 && ind.prevClose >= ind.ma21) {
+      add('break_ma21', 'danger', '跌破 MA21',
+        `现价 ${ind.price.toFixed(3)} 跌破 MA21(${ind.ma21.toFixed(3)})，按规则应减仓`);
+    } else if (ind.price > ind.ma21 && ind.prevClose < ind.ma21) {
+      add('reclaim_ma21', 'good', '站回 MA21',
+        `现价 ${ind.price.toFixed(3)} 重新站上 MA21(${ind.ma21.toFixed(3)})，短线转强`);
+    }
+  }
+
+  if (todayBar && todayBar.isToday) {
+    if (todayBar.prevBar <= 0 && todayBar.bar > 0) {
+      add('macd_flip_pos', 'good', 'MACD 柱翻红',
+        `现价估算今日柱由 ${todayBar.prevBar.toFixed(3)} 转为 +${todayBar.bar.toFixed(3)}，金叉临近`);
+    } else if (todayBar.prevBar >= 0 && todayBar.bar < 0) {
+      add('macd_flip_neg', 'danger', 'MACD 柱翻绿',
+        `现价估算今日柱由 +${todayBar.prevBar.toFixed(3)} 转为 ${todayBar.bar.toFixed(3)}，死叉临近`);
+    }
+    if (quote.prevClose) {
+      const lim = +(quote.prevClose * 1.1).toFixed(3);
+      const dn = +(quote.prevClose * 0.9).toFixed(3);
+      if (quote.price >= lim - 0.001) add('limit_up', 'warn', '触及涨停', `现价 ${quote.price.toFixed(3)} 达涨停价 ${lim}，溢价可能进一步冲高`);
+      if (quote.price <= dn + 0.001) add('limit_dn', 'good', '触及跌停', `现价 ${quote.price.toFixed(3)} 达跌停价 ${dn}，情绪极度悲观，留意折价机会`);
+    }
+  }
+
+  const chg = quote.changePct;
+  if (isFinite(chg)) {
+    if (chg >= 3) add('up3', 'warn', '日内大涨', `当日已涨 ${chg.toFixed(2)}%，注意溢价同步扩张与追高风险`);
+    else if (chg >= 1.5) add('up15', 'info', '日内走强', `当日涨 ${chg.toFixed(2)}%`);
+    if (chg <= -3) add('dn3', 'good', '日内大跌', `当日已跌 ${chg.toFixed(2)}%，若溢价同时收敛可留意分批机会`);
+    else if (chg <= -1.5) add('dn15', 'info', '日内走弱', `当日跌 ${chg.toFixed(2)}%`);
+  }
+
+  // 接近最近买点
+  const lastBuy = [...(signals || [])].reverse().find(s => s.side === 'buy');
+  if (lastBuy && lastBuy.close > 0) {
+    const dev = (quote.price / lastBuy.close - 1) * 100;
+    if (Math.abs(dev) <= 1) {
+      add('near_last_buy', 'good', '回踩最近买点',
+        `现价距 ${lastBuy.date} 买点 ${lastBuy.close.toFixed(3)} 仅 ${dev >= 0 ? '+' : ''}${dev.toFixed(2)}%`);
+    }
+  }
+
+  const rank = { danger: 0, warn: 1, good: 2, info: 3 };
+  out.sort((a, b) => (rank[a.level] ?? 9) - (rank[b.level] ?? 9));
+  return out;
+}
+
+// 汇总市场数据（带缓存），建议/提示按请求实时计算
+async function getEtfMarketData() {
+  const trading = isAShareTradingTime();
+  const ttl = trading ? ETF_MKT_TTL_TRADING : ETF_MKT_TTL_IDLE;
+  if (ETF_MKT_CACHE.data && Date.now() - ETF_MKT_CACHE.ts < ttl) return ETF_MKT_CACHE.data;
+
+  const todayStr = bjDateStr();
+  const [klines, quote, minute] = await Promise.all([
+    fetchTencentEtfDayK(ETF_CODE, 1000).catch(() => []),
+    fetchTencentEtfQuote(ETF_CODE).catch(() => null),
+    fetchTencentEtfMinute(ETF_CODE).catch(() => null),
+  ]);
+  let navMap = {};
+  try { navMap = await fetchEtfNavHistory(ETF_FUND_CODE); } catch { /* 净值缺失不阻断 */ }
+
+  if (!klines.length) {
+    if (ETF_MKT_CACHE.data) return ETF_MKT_CACHE.data;
+    throw new Error('日K数据获取失败');
+  }
+
+  const closes = klines.map(k => k.close);
+  const ma = {
+    ma5: movingAvgSeries(closes, 5),
+    ma10: movingAvgSeries(closes, 10),
+    ma20: movingAvgSeries(closes, 20),
+    ma21: movingAvgSeries(closes, 21),
+    ma60: movingAvgSeries(closes, 60),
+  };
+  const { signals, bars, stats } = buildEtfSignals(klines);
+
+  // 溢价率历史：日K收盘 ÷ 同日单位净值
+  const premiumHist = [];
+  for (const k of klines) {
+    const nav = navMap[k.date];
+    if (nav > 0) premiumHist.push({ date: k.date, premium: +((k.close / nav - 1) * 100).toFixed(2), close: k.close, nav });
+  }
+  const recent = premiumHist.slice(-250);   // 近 250 日用于分位统计
+  const p20 = recent.slice(-20).map(x => x.premium);
+  const premiumStats = p20.length ? {
+    avg20: +(p20.reduce((s, v) => s + v, 0) / p20.length).toFixed(2),
+    min20: +Math.min(...p20).toFixed(2),
+    max20: +Math.max(...p20).toFixed(2),
+    latest: recent[recent.length - 1] ? recent[recent.length - 1].premium : null,
+  } : null;
+
+  // 溢价率历史分布（近 250 个交易日），用于判断当前溢价在历史中的位置
+  const sortedP = recent.map(x => x.premium).sort((a, b) => a - b);
+  const qAt = q => sortedP.length ? +sortedP[Math.min(sortedP.length - 1, Math.max(0, Math.round(q * (sortedP.length - 1))))].toFixed(2) : null;
+  const belowPct = t => sortedP.length ? +(sortedP.filter(v => v < t).length / sortedP.length * 100).toFixed(1) : null;
+  const premiumDist = sortedP.length ? {
+    days: sortedP.length,
+    min: qAt(0), p10: qAt(0.1), p25: qAt(0.25), median: qAt(0.5), p75: qAt(0.75), max: qAt(1),
+    belowBuy: belowPct(PREMIUM_BUY),      // 低于买入线的交易日占比
+    belowAdd: belowPct(PREMIUM_ADD),      // 低于加仓线的交易日占比
+    pctRank: belowPct(quote ? quote.premiumPct : sortedP[0]),  // 当前溢价的历史分位（越低越便宜）
+  } : null;
+
+  const lastIdx = klines.length - 1;
+  const lastBar = bars[bars.length - 1] || {};
+  const lastSignal = signals.length ? signals[signals.length - 1] : null;
+  const realtime = !!(quote && quote.quoteDate === todayStr);
+
+  const high20 = Math.max(...closes.slice(-20));
+  const low20 = Math.min(...closes.slice(-20));
+  const rets = [];
+  for (let i = Math.max(1, closes.length - 20); i < closes.length; i++) rets.push(closes[i] / closes[i - 1] - 1);
+  const mean = rets.reduce((s, v) => s + v, 0) / (rets.length || 1);
+  const vol20 = Math.sqrt(rets.reduce((s, v) => s + (v - mean) ** 2, 0) / (rets.length || 1)) * Math.sqrt(252) * 100;
+
+  ETF_KLINES = klines;
+
+  const data = {
+    code: ETF_CODE,
+    fundCode: ETF_FUND_CODE,
+    name: ETF_NAME,
+    asOf: new Date().toISOString(),
+    today: todayStr,
+    session: { trading, realtime, lastTradingDate: klines[lastIdx] ? klines[lastIdx].date : null },
+    quote,
+    klineLast: klines[lastIdx] || null,
+    ind: {
+      price: quote ? quote.price : (klines[lastIdx] ? klines[lastIdx].close : null),
+      prevClose: quote ? quote.prevClose : null,
+      ma5: ma.ma5[lastIdx], ma10: ma.ma10[lastIdx], ma20: ma.ma20[lastIdx],
+      ma21: ma.ma21[lastIdx], ma60: ma.ma60[lastIdx],
+      dif: lastBar.dif, dea: lastBar.dea, bar: lastBar.bar,
+      high20, low20,
+      drawdownFromHigh20: +(((closes[lastIdx] - high20) / high20) * 100).toFixed(2),
+      vol20: +vol20.toFixed(1),
+    },
+    bars: bars.slice(-60).map(b => ({
+      date: b.date, close: b.close, dif: b.dif, dea: b.dea, bar: b.bar,
+      signal: b.signal || null, intraday: !!b.intraday,
+    })),
+    signals: signals.map(s => ({
+      date: s.date, close: s.close, code: s.code, label: s.label, action: s.action,
+      side: s.side, holdUntil: s.holdUntil, holdDays: s.holdDays,
+      holdRetPct: s.holdRetPct, avoidPct: s.avoidPct, sinceRetPct: s.sinceRetPct,
+    })),
+    stats,
+    premium: {
+      current: quote ? quote.premiumPct : null,
+      band: premiumZone(quote ? quote.premiumPct : null),
+      iopv: quote ? quote.iopv : null,
+      nav: quote ? quote.nav : null,
+      history: premiumHist,          // 全历史（用于回溯；前端默认只画近 120 日）
+      stats20: premiumStats,
+      // 策略阈值（前端画档位条 / 挂单价用）
+      rules: {
+        add: PREMIUM_ADD, buy: PREMIUM_BUY, watch: PREMIUM_WATCH, danger: PREMIUM_DANGER,
+        zones: PREMIUM_ZONES.map(z => ({
+          key: z.key, level: z.level, label: z.label, note: z.note,
+          lo: isFinite(z.lo) ? z.lo : null, hi: isFinite(z.hi) ? z.hi : null,
+        })),
+      },
+      prices: quote ? premiumPriceLadder(quote.iopv) : null,
+      // 溢价率历史分布（近 250 个交易日）
+      dist: premiumDist,
+    },
+    intraday: minute,
+    lastSignal,
+    // 全历史回溯：最佳买卖点 + 策略对比
+    review: (() => { try { return buildEtfHistoryReview(klines, navMap, signals); } catch (e) { console.error('[etf-review]', e.message); return null; } })(),
+  };
+
+  ETF_MKT_CACHE.data = data;
+  ETF_MKT_CACHE.ts = Date.now();
+  return data;
+}
+
+app.get('/api/etf-track', async (req, res) => {
+  try {
+    const data = await getEtfMarketData();
+    const todayStr = bjDateStr();
+
+    // 持仓（查询参数由前端从 localStorage 带入，仅用于生成建议，不落库）
+    const cost = parseFloat(req.query.cost);
+    const shares = parseFloat(req.query.shares);
+    let pos = null;
+    if (isFinite(cost) && isFinite(shares) && shares > 0) {
+      const price = data.quote ? data.quote.price : data.ind.price;
+      const marketValue = shares * price;
+      const costValue = cost * shares;
+      pos = {
+        cost, shares, marketValue,
+        costValue,
+        pnl: marketValue - costValue,
+        pnlPct: costValue > 0 ? (marketValue - costValue) / costValue * 100 : 0,
+      };
+    }
+
+    // 盘中 MACD 柱估算（仅 A 股交易时段有意义）
+    const todayBar = data.session.trading
+      ? etfIntradayBar(ETF_KLINES, data.quote ? data.quote.price : null, todayStr)
+      : null;
+
+    // 盘中溢价穿越检测：对比上一次请求的溢价率，判断是否跌破买入线 / 加仓线
+    const curPrem = data.quote ? data.quote.premiumPct : null;
+    let premCross = null;
+    if (isFinite(curPrem)) {
+      if (ETF_PREM_PREV && isFinite(ETF_PREM_PREV.pct) && data.session.trading) {
+        const lines = [PREMIUM_ADD, PREMIUM_BUY, PREMIUM_WATCH, PREMIUM_DANGER];
+        const crossedDown = lines.filter(x => ETF_PREM_PREV.pct >= x && curPrem < x);
+        const crossedUp = lines.filter(x => ETF_PREM_PREV.pct < x && curPrem >= x);
+        if (crossedDown.length || crossedUp.length) {
+          premCross = {
+            from: ETF_PREM_PREV.pct, to: curPrem, crossedDown, crossedUp,
+            at: new Date().toISOString(),
+          };
+        }
+      }
+      ETF_PREM_PREV = { pct: curPrem, ts: Date.now() };
+    }
+
+    const ctx = {
+      quote: data.quote || {},
+      ind: data.ind,
+      lastSignal: data.lastSignal,
+      signals: data.signals,
+      pos,
+      todayBar,
+      premCross,
+    };
+    const advice = buildEtfAdvice(ctx);
+    const alerts = buildEtfAlerts(ctx);
+
+    const payload = { success: true, ...data, pos, advice, alerts, todayBar, premCross };
+    if (req.query.diag === '1') {
+      payload.diag = {
+        klineCount: ETF_KLINES.length,
+        navDates: Object.keys(ETF_NAV_CACHE.data || {}).length,
+        premiumHistLen: data.premium.history.length,
+        signalCount: data.signals.length,
+        cachedAgoMs: Date.now() - ETF_MKT_CACHE.ts,
+      };
+    }
+    res.json(payload);
+  } catch (err) {
+    console.error('[etf-track]', err.message);
+    if (ETF_MKT_CACHE.data) return res.json({ success: true, ...ETF_MKT_CACHE.data, stale: true });
     res.status(500).json({ error: err.message });
   }
 });
