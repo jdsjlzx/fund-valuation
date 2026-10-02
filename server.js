@@ -1741,9 +1741,12 @@ app.get('/api/quotes', async (req, res) => {
 //  本地网络出口访问 Yahoo 被墙(403)时，其他实例可通过本端点取数——
 //  需本端点部署在可达 Yahoo 的环境（如 Render）。
 //  用法: GET /api/_hist?symbol=005930.KS&tz=9 → { symbol, rows:[{date, close}] }
+//  本出口被 Yahoo 限流(429)时走二级代理（yahoo-proxy/ 目录的 Vercel 函数，
+//  不同平台 IP 池），部署后把其 URL 填入 SECONDARY_HIST_PROXY_URL 或设环境变量。
 // ──────────────────────────────────────────
 const HIST_API_CACHE = new Map();  // key → { data, ts }
 const HIST_API_TTL = 10 * 60_000;
+const SECONDARY_HIST_PROXY_URL = process.env.SECONDARY_HIST_PROXY_URL || '';
 
 app.get('/api/_hist', async (req, res) => {
   const symbol = String(req.query.symbol || '').trim();
@@ -1764,6 +1767,19 @@ app.get('/api/_hist', async (req, res) => {
     HIST_API_CACHE.set(key, { data: out, ts: Date.now() });
     res.json(out);
   } catch (err) {
+    if (SECONDARY_HIST_PROXY_URL) {
+      try {
+        const text = await httpGet(
+          `${SECONDARY_HIST_PROXY_URL}/api/_hist?symbol=${encodeURIComponent(symbol)}&tz=${tz}`,
+          { Accept: 'application/json' }
+        );
+        const j = JSON.parse(text);
+        if (j && Array.isArray(j.rows)) {
+          HIST_API_CACHE.set(key, { data: j, ts: Date.now() });
+          return res.json(j);
+        }
+      } catch (e2) { /* 二级代理也失败 → 走缓存兜底 */ }
+    }
     if (cached) return res.json({ ...cached.data, stale: true });
     res.status(502).json({ error: err.message });
   }

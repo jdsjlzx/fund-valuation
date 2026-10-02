@@ -1,0 +1,7 @@
+{
+  "name": "yahoo-hist-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Yahoo 官方日K代理（Vercel Serverless），供主应用 Render 实例调用"
+}
