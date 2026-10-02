@@ -253,7 +253,7 @@ function parseNaverQuote(json, ticker) {
     regularMarketChangePercent: changePct,
     preMarketChangePercent: changePct,
     postMarketChangePercent: 0,
-    marketState: json.marketStatus === 'OPEN' ? 'REGULAR' : 'CLOSED',
+    marketState: krMarketState(),
     sourceTimeMs: isFinite(tradedAtMs) ? tradedAtMs : null,
   }, 'KR', json.localTradedAt);
 }
@@ -540,7 +540,7 @@ async function fetchTencentKrQuotes(symbols) {
       regularMarketPreviousClose: prevClose,
       preMarketChangePercent: chgPct,
       postMarketChangePercent: 0,
-      marketState: 'REGULAR',
+      marketState: krMarketState(),
       sourceTimeMs: isFinite(tMs) ? tMs : null,
     }, 8, dateField);
   }
@@ -1084,6 +1084,16 @@ const MARKET_TZ_OFFSET = { CN: 8, HK: 8, TW: 8, JP: 9, KR: 9 };
 
 function marketToday(tzOffsetHours) {
   return new Date(Date.now() + tzOffsetHours * 3600_000).toISOString().slice(0, 10);
+}
+
+function marketClock(tzOffsetHours) {
+  const d = new Date(Date.now() + tzOffsetHours * 3600_000);
+  return { day: d.getUTCDay(), min: d.getUTCHours() * 60 + d.getUTCMinutes() };
+}
+
+function krMarketState() {
+  const { day, min } = marketClock(MARKET_TZ_OFFSET.KR);
+  return day >= 1 && day <= 5 && min >= 540 && min < 930 ? 'REGULAR' : 'CLOSED';
 }
 
 // 'YYYY-MM-DD' / 'YYYY/MM/DD' / 'YYYYMMDD' / ISO 时间戳 → 'YYYY-MM-DD'

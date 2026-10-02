@@ -1396,8 +1396,7 @@ function fmtPrice(v) {
 
 function fmtPct(v) {
   if (v === null || v === undefined || isNaN(v)) return '--';
-  const sign = v >= 0 ? '+' : '';
-  return sign + v.toFixed(2) + '%';
+  return v.toFixed(2) + '%';
 }
 
 function cls(v) {
@@ -2077,7 +2076,6 @@ function renderDetail(idx, mode) {
     const isUs = isUSHolding(h);
     const q = isUs ? map[h.s] : null;
     const chg = q ? effectiveChange(q, opts) : null;
-    // 夜盘实测源（雪球/Yahoo）不可用时的回退值来自期货/β 模型，标注"≈"避免误认为实时价
     const approx = !!(mode === '24h' && q && q.marketState === 'OVERNIGHT' && q.overnightEstimated);
     // 休市（节假日/周末）：该市场今日无交易，涨幅按 0 计，并标注出来避免误解
     const closed = !!(q && q.tradingToday === false);
@@ -2097,7 +2095,7 @@ function renderDetail(idx, mode) {
       <div class="holding-row">
         <span class="holding-name">${holdingDisplayName(h)}${tag ? `<span class="holding-mkt-tag">${tag}</span>` : ''}${closed ? `<span class="holding-closed-tag" title="${closedTip}">休市</span>` : ''}</span>
         <span class="holding-weight">${(h.w * 100).toFixed(2)}%</span>
-        <span class="holding-chg ${cls(chg)}"${chgTip ? ` title="${chgTip}"` : ''}>${approx ? '≈' : ''}${fmtPct(chg)}</span>
+        <span class="holding-chg ${cls(chg)}"${chgTip ? ` title="${chgTip}"` : ''}>${fmtPct(chg)}</span>
       </div>`;
   }).join('');
 
