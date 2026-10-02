@@ -1767,10 +1767,17 @@ app.get('/api/_hist', async (req, res) => {
     HIST_API_CACHE.set(key, { data: out, ts: Date.now() });
     res.json(out);
   } catch (err) {
-    if (SECONDARY_HIST_PROXY_URL) {
+    // 二级代理（防自引用：本端点若被部署在二级代理同一域名上会死循环）
+    let secondaryUrl = SECONDARY_HIST_PROXY_URL;
+    try {
+      if (secondaryUrl && req.headers.host && new URL(secondaryUrl).host === req.headers.host) {
+        secondaryUrl = '';
+      }
+    } catch { /* URL 解析失败则不跳过 */ }
+    if (secondaryUrl) {
       try {
         const text = await httpGet(
-          `${SECONDARY_HIST_PROXY_URL}/api/_hist?symbol=${encodeURIComponent(symbol)}&tz=${tz}`,
+          `${secondaryUrl}/api/_hist?symbol=${encodeURIComponent(symbol)}&tz=${tz}`,
           { Accept: 'application/json' }
         );
         const j = JSON.parse(text);
