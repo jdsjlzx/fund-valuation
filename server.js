@@ -322,6 +322,29 @@ async function fetchTaiwanQuotes(symbols) {
 }
 
 // ──────────────────────────────────────────
+//  腾讯 ifzq 系列接口（日K / 分时）多域名轮询
+//  web.ifzq.gtimg.cn 偶发被腾讯 WAF 拦截（返回 501 + 反爬跳转 HTML），
+//  proxy.finance.qq.com/ifzqgtimg 与 ifzq.gtimg.cn 返回同一份数据，实测可互为备份。
+// ──────────────────────────────────────────
+const TENCENT_IFZQ_HOSTS = [
+  'https://proxy.finance.qq.com/ifzqgtimg',
+  'https://ifzq.gtimg.cn',
+  'https://web.ifzq.gtimg.cn',
+];
+
+// 依次尝试各域名，返回第一个可解析的 JSON；全失败返回 null
+async function fetchTencentIfzqJson(path) {
+  for (const host of TENCENT_IFZQ_HOSTS) {
+    try {
+      const txt = await httpGet(host + path, { Referer: 'https://gu.qq.com/' });
+      if (!txt || !txt.trim().startsWith('{')) continue;   // 501 反爬页是 HTML
+      return JSON.parse(txt);
+    } catch { /* 换下一个域名 */ }
+  }
+  return null;
+}
+
+// ──────────────────────────────────────────
 //  Yahoo Finance fetcher (日股 .T / 新加坡 .SI)
 // ──────────────────────────────────────────
 function httpGetWithStatus(url, headers = {}) {
@@ -2181,10 +2204,7 @@ async function fetchSinaRealtimePrice(sinaIds) {
 
 // 腾讯财经日K：[日期, 开, 收, 高, 低, 量]
 async function fetchTencentDayKline(symbol, limit = 120) {
-  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${symbol},day,,,${limit},qfq`;
-  const txt = await httpGet(url, { Referer: 'https://gu.qq.com/' });
-  let j;
-  try { j = JSON.parse(txt); } catch { return []; }
+  const j = await fetchTencentIfzqJson(`/appstock/app/fqkline/get?param=${symbol},day,,,${limit},qfq`);
   const sym = j && j.data && j.data[symbol];
   const rows = (sym && (sym.day || sym.qfqday)) || [];
   // 注意 r[1]=开 r[2]=收（曾误用 r[1]，等于拿开盘价算 MACD）
@@ -2193,10 +2213,7 @@ async function fetchTencentDayKline(symbol, limit = 120) {
 
 // 港股日K（腾讯 hk 前缀通道，官方收盘价）
 async function fetchTencentHkDaily(symbol, limit = 20) {
-  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=hk${symbol},day,,,${limit},qfq`;
-  const txt = await httpGet(url, { Referer: 'https://gu.qq.com/' });
-  let j;
-  try { j = JSON.parse(txt); } catch { return []; }
+  const j = await fetchTencentIfzqJson(`/appstock/app/fqkline/get?param=hk${symbol},day,,,${limit},qfq`);
   const node = j && j.data && j.data[`hk${symbol}`];
   const rows = (node && (node.day || node.qfqday)) || [];
   return rows.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(r => r.date && isFinite(r.close));
@@ -2457,7 +2474,7 @@ app.get('/api/index-macd', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
-//  /api/etf-track — 纳指科技ETF景顺(sz159509) 专用跟踪视图
+//  /api/etf-track — 纳指科技ETF(sz159509) 专用跟踪视图
 //   · 日K + MACD / 均线指标
 //   · 买卖信号清单（复用 MACD 视图同一套算法，附「信号后表现」）
 //   · 实时行情（含 IOPV / 溢价率）
@@ -2475,7 +2492,7 @@ app.get('/api/index-macd', async (req, res) => {
 //  档位会换算成基于 IOPV 的挂单价（加仓价/买入价/警戒价/减仓价）直接给出。
 // ═══════════════════════════════════════════════════════
 const ETF_CODE = 'sz159509';
-const ETF_NAME = '纳指科技ETF景顺';
+const ETF_NAME = '纳指科技ETF';
 const ETF_FUND_CODE = '159509';
 const ETF_NAV_CACHE = { data: null, ts: 0 };
 const ETF_MKT_CACHE = { data: null, ts: 0 };
@@ -2526,17 +2543,57 @@ function bjDateStr(ts = Date.now()) {
   return new Date(ts + 8 * 3600_000).toISOString().slice(0, 10);
 }
 
-// 腾讯日K（含开/收/高/低/量）
+// 腾讯日K（含开/收/高/低/量）——多域名轮询，全失败再退到新浪
 async function fetchTencentEtfDayK(symbol, limit = 400) {
-  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${symbol},day,,,${limit},qfq`;
-  const txt = await httpGet(url, { Referer: 'https://gu.qq.com/' });
-  let j;
-  try { j = JSON.parse(txt); } catch { return []; }
+  const j = await fetchTencentIfzqJson(`/appstock/app/fqkline/get?param=${symbol},day,,,${limit},qfq`);
   const node = j && j.data && j.data[symbol];
   const rows = (node && (node.day || node.qfqday)) || [];
-  return rows
+  const out = rows
     .map(r => ({ date: r[0], open: +r[1], close: +r[2], high: +r[3], low: +r[4], volume: +r[5] }))
     .filter(r => r.date && isFinite(r.close));
+  if (out.length) return out;
+  const alt = await fetchSinaEtfDayK(symbol, Math.min(limit, 1023));
+  if (alt.length) console.warn('[etf-kline] 腾讯日K不可用，已切换新浪日K（' + alt.length + ' 根）');
+  return alt;
+}
+
+// 备用日K源：新浪（scale=240 即日线；volume 单位为股，换算成手以对齐腾讯口径）
+// 注：新浪为不复权价，159509 无分红，与腾讯 qfq 一致
+async function fetchSinaEtfDayK(symbol, limit = 1023) {
+  const url = 'https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData'
+    + `?symbol=${symbol}&scale=240&ma=no&datalen=${limit}`;
+  try {
+    const txt = await httpGet(url, { Referer: 'https://finance.sina.com.cn/' });
+    const arr = JSON.parse(txt);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .map(r => ({
+        date: String(r.day || ''), open: +r.open, close: +r.close, high: +r.high, low: +r.low,
+        volume: isFinite(+r.volume) ? Math.round(+r.volume / 100) : null,
+      }))
+      .filter(r => r.date && isFinite(r.close));
+  } catch { return []; }
+}
+
+// ETF 汇总数据的磁盘兜底（腾讯限流 / Render 冷启动时仍能出页面）
+const ETF_DISK_CACHE = path.join(__dirname, 'data', 'etf-mkt-cache.json');
+function loadEtfDiskCache() {
+  try {
+    const j = JSON.parse(fs.readFileSync(ETF_DISK_CACHE, 'utf8'));
+    if (j && j.data && Array.isArray(j.data.signals) && j.data.signals.length) {
+      if (!ETF_KLINES.length && Array.isArray(j.klines)) ETF_KLINES = j.klines;   // 盘中柱估算也要能跑
+      return { ...j.data, stale: true, diskSavedAt: j.savedAt || null };
+    }
+  } catch { /* 无缓存 */ }
+  return null;
+}
+function saveEtfDiskCache(data, klines) {
+  try {
+    if (Date.now() - (saveEtfDiskCache.ts || 0) < 300_000) return;   // 最多 5 分钟写一次
+    saveEtfDiskCache.ts = Date.now();
+    fs.mkdirSync(path.dirname(ETF_DISK_CACHE), { recursive: true });
+    fs.writeFileSync(ETF_DISK_CACHE, JSON.stringify({ savedAt: new Date().toISOString(), data, klines }));
+  } catch { /* 忽略 */ }
 }
 
 // 腾讯实时行情（含 IOPV / 溢价率）
@@ -2594,12 +2651,9 @@ async function fetchEtfNavHistory(fundCode) {
 }
 
 // 腾讯分时：返回 { date:'YYYY-MM-DD', points:[{t,price,avg}] }
+// 走 fetchTencentIfzqJson 多域名轮询（web.ifzq 被 WAF 拦时分时同样会 501）
 async function fetchTencentEtfMinute(symbol) {
-  const txt = await httpGet(`https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=${symbol}`, {
-    Referer: 'https://gu.qq.com/',
-  });
-  let j;
-  try { j = JSON.parse(txt); } catch { return null; }
+  const j = await fetchTencentIfzqJson(`/appstock/app/minute/query?code=${symbol}`);
   const node = j && j.data && j.data[symbol];
   const raw = node && node.data && node.data.data;
   if (!raw || !raw.length) return null;
@@ -3043,7 +3097,7 @@ function buildEtfAdvice(ctx) {
 function buildEtfAlerts(ctx) {
   const { quote, ind, todayBar, signals } = ctx;
   const out = [];
-  const add = (key, level, title, text) => out.push({ key, level, title, text });
+  const add = (key, level, title, text, pri) => out.push({ key, level, title, text, pri });
   const zone = premiumZone(quote.premiumPct);
   const pz = quote.premiumPct;
   const ladder = premiumPriceLadder(quote.iopv);
@@ -3086,6 +3140,33 @@ function buildEtfAlerts(ctx) {
       `当前溢价 ${pz.toFixed(2)}% 高于买入线 ${PREMIUM_BUY}%，等回落至 ${ladder ? ladder.buy.price : '买入价'} 再介入`);
   }
 
+  // ── 可执行的「买入机会」：溢价进区 且 技术面未破位（与建议卡同一套判定）──
+  const adv = ctx.advice;
+  if (adv && adv.level === 'buy') {
+    const strong = adv.zone === 'add';
+    add(strong ? 'buy_opportunity_strong' : 'buy_opportunity', 'good',
+      strong ? '★ 加仓机会（按策略可多买）' : '★ 买入机会（可分批买入）',
+      `溢价 ${pz.toFixed(2)}% 已进入${strong ? `加仓区（<${PREMIUM_ADD}%）` : `买入区（${PREMIUM_ADD}~${PREMIUM_BUY}%）`}，`
+      + `现价 ${quote.price.toFixed(3)}`
+      + (ladder ? `／买入价 ${ladder.buy.price}${strong ? `／加仓价 ${ladder.add.price}` : ''}` : '')
+      + (adv.held ? '；已有持仓，按计划执行加仓' : '；建议分 2~3 笔建仓，先半仓'),
+      -1);
+  } else if (adv && adv.level === 'warn' && /试探|建仓/.test(adv.action || '')) {
+    // 价位到了但技术面偏空 / 趋势未确认：降级为小仓试探，同样值得提醒
+    add('buy_probe', 'warn', '价位已到，可小仓试探',
+      `溢价 ${pz.toFixed(2)}% 已满足买入线，但${adv.headline.replace(/^溢价[^，]*，?/, '').replace(/^但/, '')}`,
+      1);
+  }
+  // 还要再跌一点点：提前挂单提醒（IOPV 盘中会变，触发价也会跟着动）
+  if (pz != null && ladder && pz >= PREMIUM_BUY && pz - PREMIUM_BUY <= 1.5) {
+    add('near_buy_line', 'info', '接近买入线',
+      `溢价 ${pz.toFixed(2)}% 距买入线 ${PREMIUM_BUY}% 仅 ${(pz - PREMIUM_BUY).toFixed(2)}pp；`
+      + `现价跌到 ${ladder.buy.price} 即触发买入（按当前 IOPV ${quote.iopv != null ? quote.iopv.toFixed(4) : '—'} 折算）`);
+  } else if (pz != null && ladder && pz >= PREMIUM_ADD && pz - PREMIUM_ADD <= 1.5 && zone.key === 'buy') {
+    add('near_add_line', 'info', '接近加仓线',
+      `溢价 ${pz.toFixed(2)}% 距加仓线 ${PREMIUM_ADD}% 仅 ${(pz - PREMIUM_ADD).toFixed(2)}pp；跌到 ${ladder.add.price} 可多买`);
+  }
+
   if (ind.ma21 != null && ind.prevClose != null) {
     if (ind.price < ind.ma21 && ind.prevClose >= ind.ma21) {
       add('break_ma21', 'danger', '跌破 MA21',
@@ -3113,11 +3194,15 @@ function buildEtfAlerts(ctx) {
   }
 
   const chg = quote.changePct;
+  // 休市/周末时行情源返回的是上一交易日涨跌，措辞要标明日期，避免被当成今日盘中
+  const liveToday = !(ctx.session && ctx.session.realtime === false);
+  const chgTitle = liveToday ? '日内' : '上一交易日';
+  const chgDay = liveToday ? '今日' : (quote.quoteDate || '上一交易日');
   if (isFinite(chg)) {
-    if (chg >= 3) add('up3', 'warn', '日内大涨', `当日已涨 ${chg.toFixed(2)}%，注意溢价同步扩张与追高风险`);
-    else if (chg >= 1.5) add('up15', 'info', '日内走强', `当日涨 ${chg.toFixed(2)}%`);
-    if (chg <= -3) add('dn3', 'good', '日内大跌', `当日已跌 ${chg.toFixed(2)}%，若溢价同时收敛可留意分批机会`);
-    else if (chg <= -1.5) add('dn15', 'info', '日内走弱', `当日跌 ${chg.toFixed(2)}%`);
+    if (chg >= 3) add('up3', 'warn', `${chgTitle}大涨`, `${chgDay}已涨 ${chg.toFixed(2)}%，注意溢价同步扩张与追高风险`);
+    else if (chg >= 1.5) add('up15', 'info', `${chgTitle}走强`, `${chgDay}涨 ${chg.toFixed(2)}%`);
+    if (chg <= -3) add('dn3', 'good', `${chgTitle}大跌`, `${chgDay}已跌 ${chg.toFixed(2)}%，若溢价同时收敛可留意分批机会`);
+    else if (chg <= -1.5) add('dn15', 'info', `${chgTitle}走弱`, `${chgDay}跌 ${chg.toFixed(2)}%`);
   }
 
   // 接近最近买点
@@ -3131,14 +3216,15 @@ function buildEtfAlerts(ctx) {
   }
 
   const rank = { danger: 0, warn: 1, good: 2, info: 3 };
-  out.sort((a, b) => (rank[a.level] ?? 9) - (rank[b.level] ?? 9));
+  out.sort((a, b) => ((a.pri ?? rank[a.level] ?? 9) - (b.pri ?? rank[b.level] ?? 9)));
   return out;
 }
 
 // 汇总市场数据（带缓存），建议/提示按请求实时计算
 async function getEtfMarketData() {
-  const trading = isAShareTradingTime();
-  const ttl = trading ? ETF_MKT_TTL_TRADING : ETF_MKT_TTL_IDLE;
+  // 时钟口径的「交易时段」只用来决定缓存 TTL（节假日多拉几次无害，反而能在开盘瞬间拿到第一笔）
+  const clockTrading = isAShareTradingTime();
+  const ttl = clockTrading ? ETF_MKT_TTL_TRADING : ETF_MKT_TTL_IDLE;
   if (ETF_MKT_CACHE.data && Date.now() - ETF_MKT_CACHE.ts < ttl) return ETF_MKT_CACHE.data;
 
   const todayStr = bjDateStr();
@@ -3152,6 +3238,14 @@ async function getEtfMarketData() {
 
   if (!klines.length) {
     if (ETF_MKT_CACHE.data) return ETF_MKT_CACHE.data;
+    const disk = loadEtfDiskCache();
+    if (disk) {
+      // 用磁盘缓存顶住，同时把内存缓存时间戳清零 → 下次请求立即重试上游，自愈
+      ETF_MKT_CACHE.data = disk;
+      ETF_MKT_CACHE.ts = 0;
+      console.warn('[etf-track] 上游日K不可用，使用磁盘缓存（' + disk.diskSavedAt + '）');
+      return disk;
+    }
     throw new Error('日K数据获取失败');
   }
 
@@ -3196,6 +3290,10 @@ async function getEtfMarketData() {
   const lastBar = bars[bars.length - 1] || {};
   const lastSignal = signals.length ? signals[signals.length - 1] : null;
   const realtime = !!(quote && quote.quoteDate === todayStr);
+  // 「盘中」必须同时满足：A 股交易时段 + 行情源确实返回了今日数据。
+  // 否则节假日的工作日（如 10/2 国庆）会被误判成盘中，用冻结行情算出假的「盘中柱」与穿越提示。
+  const trading = clockTrading && realtime;
+  const holidayClosed = clockTrading && !realtime;   // 工作日的节假日休市
 
   const high20 = Math.max(...closes.slice(-20));
   const low20 = Math.min(...closes.slice(-20));
@@ -3212,7 +3310,7 @@ async function getEtfMarketData() {
     name: ETF_NAME,
     asOf: new Date().toISOString(),
     today: todayStr,
-    session: { trading, realtime, lastTradingDate: klines[lastIdx] ? klines[lastIdx].date : null },
+    session: { trading, realtime, holidayClosed, lastTradingDate: klines[lastIdx] ? klines[lastIdx].date : null },
     quote,
     klineLast: klines[lastIdx] || null,
     ind: {
@@ -3262,6 +3360,7 @@ async function getEtfMarketData() {
 
   ETF_MKT_CACHE.data = data;
   ETF_MKT_CACHE.ts = Date.now();
+  saveEtfDiskCache(data, klines);
   return data;
 }
 
@@ -3317,8 +3416,10 @@ app.get('/api/etf-track', async (req, res) => {
       pos,
       todayBar,
       premCross,
+      session: data.session,
     };
     const advice = buildEtfAdvice(ctx);
+    ctx.advice = advice;
     const alerts = buildEtfAlerts(ctx);
 
     const payload = { success: true, ...data, pos, advice, alerts, todayBar, premCross };

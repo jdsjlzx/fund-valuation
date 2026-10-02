@@ -1152,25 +1152,78 @@
     .etf-sec-title .sub a.on { color: var(--text-primary); font-weight: 700; border-bottom: 1px solid var(--text-muted); }
     .etf-empty { font-size: 11px; color: var(--text-muted); padding: 10px 0; text-align: center; }
 
-    /* ── 行情头 ── */
-    .etf-hero { background: var(--bg-header); padding: 11px 12px 12px; border-bottom: 1px solid var(--border-header); }
-    .etf-hero-top { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
-    .etf-hero-name { font-size: 14px; font-weight: 700; color: var(--text-primary); }
-    .etf-hero-code { font-size: 10px; color: var(--text-muted); }
-    .etf-hero-price-row { display: flex; align-items: baseline; gap: 10px; margin-top: 3px; }
-    .etf-hero-price { font-size: 27px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.12; }
-    .etf-hero-chg { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-    .etf-hero-pm {
-      display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 7px;
-      font-size: 10.5px; color: var(--text-secondary);
+    /* ══ 实时盘面面板：行情头 + 盘中提示 + 分时 合并为一体 ══ */
+    .etf-board {
+      margin: 8px 12px 0;
+      border-radius: 10px;
+      border: 1px solid var(--border-entry);
+      background: var(--bg-entry);
+      overflow: hidden;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.3);
     }
-    .etf-hero-pm b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
-    .etf-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    @media (prefers-color-scheme: light) {
+      .etf-board { box-shadow: 0 2px 10px rgba(0,0,0,0.07); }
+    }
+    .etf-board-sec { padding: 9px 11px 10px; border-top: 1px solid var(--border-header); }
+    .etf-board-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+      font-size: 10.5px; font-weight: 700; color: #8899aa; letter-spacing: .4px;
+      margin-bottom: 7px;
+    }
+    .etf-board-head > span:first-child { display: inline-flex; align-items: center; gap: 5px; }
+    .etf-board-head .sub {
+      font-weight: 400; color: var(--text-muted); font-size: 9.5px; letter-spacing: 0;
+      text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .etf-board-head .live::before {
+      content: ''; width: 5px; height: 5px; border-radius: 50%; background: #e84c3d;
+      box-shadow: 0 0 5px #e84c3d; animation: etfBlink 1.6s ease-in-out infinite;
+    }
+    @keyframes etfBlink { 0%, 100% { opacity: 1; } 50% { opacity: .22; } }
+    .etf-more {
+      margin-top: 6px; text-align: center; font-size: 10px; color: var(--text-secondary);
+      cursor: pointer; user-select: none; padding: 2px 0;
+    }
+    .etf-more:active { opacity: .6; }
+    .etf-alert-log { margin-top: 5px; }
+
+    /* ── 行情头（单行：名称 · 价格 · 涨跌 · 溢价 · 交易状态） ── */
+    .etf-hero { background: var(--bg-header); padding: 9px 12px 10px; }
+    .etf-hero-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+    .etf-live-tag {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 9.5px; font-weight: 700; letter-spacing: .2px;
+      padding: 2px 8px; border-radius: 10px; white-space: nowrap;
+    }
+    .etf-live-tag::before {
+      content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor;
+    }
+    .etf-live-tag.trading {
+      color: #ff5f52; background: rgba(232,76,61,0.16); border: 1px solid rgba(232,76,61,0.45);
+      animation: etfBlink 1.6s ease-in-out infinite;
+    }
+    .etf-live-tag.closed  { color: #e8a03d; background: rgba(232,160,61,0.13); border: 1px solid rgba(232,160,61,0.36); }
+    .etf-live-tag.holiday { color: var(--text-secondary); background: var(--etf-panel); border: 1px solid var(--border-badge); }
+    /* 盘口数据（IOPV / 净值 / 今开 / 昨收 / 高低）压缩为一行 */
+    .etf-quote-inline {
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 11px;
+      margin-top: 5px; padding-top: 5px;
+      border-top: 1px dashed var(--border-badge);
+      font-size: 10px; color: var(--text-muted);
+      font-variant-numeric: tabular-nums; letter-spacing: .1px;
+    }
+    .etf-quote-inline i { font-style: normal; margin-right: 3px; }
+    .etf-quote-inline b { font-weight: 700; color: var(--text-primary); }
+    .etf-q-upd { margin-left: auto; display: inline-flex; align-items: center; }
+    .etf-hero-head .etf-live-tag { margin-left: auto; }
+    .etf-hero-name { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+    .etf-hero-price { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.2px; }
+    .etf-hero-chg { font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
     .etf-badge {
       display: inline-flex; align-items: center; gap: 4px;
-      padding: 2px 8px; border-radius: 10px;
-      font-size: 10.5px; font-weight: 700; letter-spacing: .2px;
-      border: 1px solid transparent;
+      padding: 1px 6px; border-radius: 9px;
+      font-size: 9.5px; font-weight: 700; letter-spacing: .2px;
+      border: 1px solid transparent; white-space: nowrap;
     }
     .etf-badge.cheap   { color: #e84c3d; background: rgba(232,76,61,0.16);   border-color: rgba(232,76,61,0.45); }
     .etf-badge.ok      { color: #f0752e; background: rgba(240,117,46,0.14);  border-color: rgba(240,117,46,0.38); }
@@ -1179,27 +1232,75 @@
     .etf-badge.extreme { color: #ff5f52; background: rgba(232,76,61,0.18);   border-color: rgba(232,76,61,0.5); }
     .etf-badge.neutral { color: var(--text-secondary); background: var(--etf-panel); border-color: var(--border-badge); }
 
-    /* ── 今日操作建议 ── */
+    /* ── 今日操作建议（按等级高亮） ── */
     .etf-advice {
-      margin: 10px 12px;
-      border-radius: 8px;
+      --lv: #7f97ad;
+      margin: 12px 12px;
+      border-radius: 9px;
       border: 1px solid var(--border-entry);
+      border-left: 4px solid var(--lv);
       background: var(--etf-panel);
       overflow: hidden;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.28);
+    }
+    .etf-advice.lv-danger, .etf-advice.lv-buy {
+      --lv: #e84c3d;
+      border-color: rgba(232,76,61,0.5);
+      background: linear-gradient(180deg, rgba(232,76,61,0.13), var(--etf-panel) 62%);
+    }
+    .etf-advice.lv-warn {
+      --lv: #e8a03d;
+      border-color: rgba(232,160,61,0.5);
+      background: linear-gradient(180deg, rgba(232,160,61,0.12), var(--etf-panel) 62%);
+    }
+    .etf-advice.lv-hold {
+      --lv: #3f8fd0;
+      border-color: rgba(74,159,224,0.5);
+      background: linear-gradient(180deg, rgba(74,159,224,0.12), var(--etf-panel) 62%);
+    }
+    .etf-advice.lv-wait {
+      --lv: #7f97ad;
+      border-color: rgba(127,151,173,0.55);
+      background: linear-gradient(180deg, rgba(127,151,173,0.13), var(--etf-panel) 62%);
     }
     .etf-advice-head {
       display: flex; align-items: center; gap: 8px;
-      padding: 9px 11px;
+      padding: 10px 11px;
       border-bottom: 1px solid var(--border-header);
+      background: linear-gradient(90deg, rgba(255,255,255,0.045), transparent 70%);
     }
-    .etf-advice-tag { font-size: 10.5px; color: var(--text-muted); letter-spacing: .3px; }
+    .etf-advice.lv-danger .etf-advice-head, .etf-advice.lv-buy .etf-advice-head { background: linear-gradient(90deg, rgba(232,76,61,0.14), transparent 75%); }
+    .etf-advice.lv-warn  .etf-advice-head { background: linear-gradient(90deg, rgba(232,160,61,0.13), transparent 75%); }
+    .etf-advice.lv-hold  .etf-advice-head { background: linear-gradient(90deg, rgba(74,159,224,0.13), transparent 75%); }
+    .etf-advice-tag {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11.5px; font-weight: 700; color: var(--text-primary); letter-spacing: .5px;
+    }
+    .etf-advice-tag::before {
+      content: ''; width: 7px; height: 7px; border-radius: 50%;
+      background: var(--lv); box-shadow: 0 0 6px var(--lv);
+    }
     .etf-advice-action {
       margin-left: auto;
-      font-size: 13px; font-weight: 700; letter-spacing: .5px;
-      padding: 3px 10px; border-radius: 5px;
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 17px; font-weight: 800; letter-spacing: 1px;
+      padding: 8px 18px; border-radius: 9px;
+      color: #fff !important;
+      border: 1px solid rgba(255,255,255,0.34);
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+      box-shadow: 0 0 20px -4px var(--lv), inset 0 1px 0 rgba(255,255,255,0.28);
     }
-    .etf-advice-body { padding: 10px 11px 11px; }
-    .etf-advice-headline { font-size: 13px; font-weight: 600; line-height: 1.5; color: var(--text-primary); }
+    .etf-advice-action .ic { font-size: 15px; line-height: 1; }
+    .etf-advice.lv-buy .etf-advice-action, .etf-advice.lv-danger .etf-advice-action {
+      animation: etfPulseRed 1.7s ease-out infinite;
+    }
+    .etf-advice.lv-warn .etf-advice-action {
+      animation: etfPulseAmber 2.2s ease-out infinite;
+    }
+    @keyframes etfPulseRed   { 0% { box-shadow: 0 0 0 0 rgba(232,76,61,0.5); } 75%, 100% { box-shadow: 0 0 0 10px rgba(232,76,61,0); } }
+    @keyframes etfPulseAmber { 0% { box-shadow: 0 0 0 0 rgba(232,160,61,0.45); } 75%, 100% { box-shadow: 0 0 0 10px rgba(232,160,61,0); } }
+    .etf-advice-body { padding: 11px 12px 12px; }
+    .etf-advice-headline { font-size: 14.5px; font-weight: 700; line-height: 1.5; color: var(--text-primary); }
     .etf-reasons { margin-top: 9px; display: flex; flex-direction: column; gap: 6px; }
     .etf-reason { display: flex; gap: 7px; font-size: 11px; line-height: 1.55; }
     .etf-reason-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; margin-top: 5px; }
@@ -1223,6 +1324,12 @@
     .etf-level-price.tone-warn { color: #e8a03d; }
     .etf-level-name { color: var(--text-secondary); }
     .etf-level-note { color: var(--text-muted); font-size: 9.5px; margin-left: auto; }
+    /* 关键指标：并入今日操作建议卡底部 */
+    .etf-advice-metrics {
+      border-top: 1px solid var(--border-header);
+      background: var(--bg-entry);
+      padding: 9px 12px 12px;
+    }
 
     /* ── 溢价档位条 ── */
     .etf-zones { padding: 2px 0 0; }
@@ -1308,6 +1415,8 @@
       font-size: 11px; line-height: 1.5;
       border: 1px solid transparent;
     }
+    .etf-board .etf-alerts { gap: 4px; }
+    .etf-board .etf-alert { padding: 6px 8px; font-size: 10.5px; }
     .etf-alert.danger { background: rgba(232,76,61,0.12);  border-color: rgba(232,76,61,0.35); }
     .etf-alert.warn   { background: rgba(232,160,61,0.11); border-color: rgba(232,160,61,0.32); }
     .etf-alert.good   { background: rgba(46,189,133,0.10); border-color: rgba(46,189,133,0.3); }
@@ -1354,6 +1463,11 @@
     .etf-metric { background: var(--etf-panel); border-radius: 6px; padding: 6px 7px; }
     .etf-metric-k { font-size: 9.5px; color: var(--text-muted); }
     .etf-metric-v { font-size: 12px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; margin-top: 2px; }
+    /* 面板内的紧凑版：4 列 × 2 行，占位更小 */
+    .etf-metrics.compact { grid-template-columns: repeat(4, 1fr); gap: 5px; }
+    .etf-metrics.compact .etf-metric { padding: 5px 6px 6px; }
+    .etf-metrics.compact .etf-metric-k { font-size: 9px; }
+    .etf-metrics.compact .etf-metric-v { font-size: 11.5px; margin-top: 1px; }
 
     /* ── 我的持仓 ── */
     .etf-pos-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px 6px; }
@@ -1424,6 +1538,21 @@
     .toast.warn   { border-left: 3px solid #e8a03d; }
     .toast.good   { border-left: 3px solid #2ebd85; }
     .toast.info   { border-left: 3px solid #8899aa; }
+    /* 「该出手了」类提示：更大、带高亮描边与辉光 */
+    .toast.urgent {
+      border-width: 1.5px; border-left-width: 5px;
+      padding: 11px 13px;
+      box-shadow: 0 8px 26px rgba(0,0,0,0.5), 0 0 0 1px rgba(232,76,61,0.25);
+      animation: toast-in 0.22s ease-out, toast-glow 1.6s ease-in-out infinite;
+    }
+    .toast.urgent .toast-title { font-size: 13.5px; }
+    .toast.urgent .toast-text { font-size: 11.5px; }
+    .toast.urgent.good { box-shadow: 0 8px 26px rgba(0,0,0,0.5), 0 0 18px -4px rgba(232,76,61,0.9); }
+    .toast.urgent.danger { box-shadow: 0 8px 26px rgba(0,0,0,0.5), 0 0 18px -4px rgba(46,189,133,0.9); }
+    @keyframes toast-glow {
+      0%, 100% { filter: brightness(1); }
+      50%      { filter: brightness(1.22); }
+    }
     .toast-title { font-size: 11.5px; font-weight: 700; color: var(--text-primary); }
     .toast-text { font-size: 10.5px; color: var(--text-secondary); margin-top: 3px; line-height: 1.5; }
     .toast-time { font-size: 9.5px; color: var(--text-muted); margin-top: 3px; }
@@ -2174,8 +2303,11 @@ let ETF_LOAD_ERR = null;
 let ETF_LOADING = false;
 let ETF_SHOW_ALL_SIGNALS = false;
 let ETF_NOTIFY = localStorage.getItem('etf-notify') === '1';
-let ETF_ALERT_SEEN = null;      // null = 尚未首次加载（首次不弹提示，避免开场刷屏）
+let ETF_SOUND = localStorage.getItem('etf-sound') !== '0';   // 提示音（默认开）
+let ETF_ALERT_SEEN = null;      // null = 尚未首次加载（首次只弹「重要」项，避免开场刷屏）
 let ETF_ALERT_LOG = [];         // 本次会话触发的提示（倒序）
+let ETF_ALERT_EXPAND = false;   // 盘中提示：是否展开全部（默认只列 Top3）
+let ETF_ALERT_LOG_OPEN = false; // 「本次会话已触发」是否展开
 let ETF_RENDERED_DATE = null;   // 已整页渲染对应的交易日（跨日时整页重绘）
 let etfLastLoadTs = 0;
 let ETF_PREMIUM_RANGE = (localStorage.getItem('etf-premium-range') === 'all') ? 'all' : 'recent';   // 溢价率走势：recent=近120日 / all=全历史
@@ -2202,10 +2334,10 @@ function etfPct(v) {
 }
 
 // 图表宽度：按容器实际宽度出图，避免固定 viewBox 被横向拉伸导致文字变形
-// （body 有 max-width 560px，左右各 12px padding）
-function etfChartWidth() {
+// （body 有 max-width 560px，左右各 12px padding；extra 为容器额外内缩，如盘面面板卡片的边框+内边距）
+function etfChartWidth(extra = 0) {
   const vw = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 400;
-  return Math.max(300, Math.min(vw, 560) - 24);
+  return Math.max(280, Math.min(vw, 560) - 24 - extra);
 }
 
 // 移动加权平均成本（AVCO）：买入累加成本，卖出按当时均价结转已实现盈亏
@@ -2250,25 +2382,52 @@ async function loadEtfTrack() {
   }
 }
 
-// 新提示 → 浮层 + （可选）桌面通知；首次加载只登记不弹窗
+// 「该出手了」类提示：首次打开页面也要弹（否则开盘时条件已满足就静默错过）
+const ETF_ALERT_URGENT = /^(buy_opportunity|buy_probe|premium_cross_dn|macd_flip_pos|macd_flip_neg|break_ma21)/;
+
+// 新提示 → 浮层 + 提示音 +（可选）桌面通知
+// 首次加载只登记；但「买入机会 / 减仓信号 / 穿越买入线」这类会照常弹出
 function processEtfAlerts(alerts) {
   const first = ETF_ALERT_SEEN === null;
   if (first) ETF_ALERT_SEEN = new Set();
   for (const a of alerts) {
     if (!a || !a.key || ETF_ALERT_SEEN.has(a.key)) continue;
     ETF_ALERT_SEEN.add(a.key);
-    if (first) continue;
+    const urgent = ETF_ALERT_URGENT.test(a.key);
+    if (first && !urgent) continue;
     const time = nowStr();
-    ETF_ALERT_LOG.unshift({ ...a, time });
+    ETF_ALERT_LOG.unshift({ ...a, time, first });
     if (ETF_ALERT_LOG.length > 40) ETF_ALERT_LOG.length = 40;
-    etfToast({ ...a, time });
+    etfToast({ ...a, time }, urgent);
   }
   // 条件解除后允许再次提示
   const keys = new Set(alerts.map(a => a && a.key).filter(Boolean));
   for (const k of [...ETF_ALERT_SEEN]) if (!keys.has(k)) ETF_ALERT_SEEN.delete(k);
 }
 
-function etfToast(a) {
+// 短促提示音（WebAudio 合成，无需音频文件；未交互过的页面会被浏览器拦截，静默跳过）
+function etfBeep(urgent) {
+  if (!ETF_SOUND) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = (etfBeep.ctx && etfBeep.ctx.state !== 'closed') ? etfBeep.ctx : (etfBeep.ctx = new Ctx());
+    if (ctx.state === 'suspended') ctx.resume();
+    const beep = (freq, at, dur) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + at);
+      g.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + at + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + dur);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(ctx.currentTime + at); o.stop(ctx.currentTime + at + dur + 0.02);
+    };
+    if (urgent) { beep(880, 0, 0.14); beep(1320, 0.18, 0.18); }
+    else beep(660, 0, 0.12);
+  } catch { /* 忽略 */ }
+}
+
+function etfToast(a, urgent) {
   let box = document.getElementById('toast-box');
   if (!box) {
     box = document.createElement('div');
@@ -2277,14 +2436,37 @@ function etfToast(a) {
     document.body.appendChild(box);
   }
   const el = document.createElement('div');
-  el.className = `toast ${a.level || 'info'}`;
+  el.className = `toast ${a.level || 'info'}${urgent ? ' urgent' : ''}`;
   el.innerHTML = `<div class="toast-title">${a.title || '提示'}</div><div class="toast-text">${a.text || ''}</div><div class="toast-time">${a.time || nowStr()}</div>`;
   el.onclick = () => el.remove();
   box.appendChild(el);
-  setTimeout(() => el && el.remove(), 25000);
-  if (ETF_NOTIFY && 'Notification' in window && Notification.permission === 'granted') {
-    try { new Notification(`159509 · ${a.title || '提示'}`, { body: a.text || '' }); } catch { /* 忽略 */ }
+  setTimeout(() => el && el.remove(), urgent ? 60000 : 25000);
+  etfBeep(urgent);
+  // 页面在后台时闪一下标签页标题，切回来能看到
+  if (urgent && typeof document !== 'undefined' && document.hidden) {
+    if (!etfToast._title) etfToast._title = document.title;
+    document.title = `🔔 ${a.title || '提示'} · 159509`;
+    if (!etfToast._onVis) {
+      etfToast._onVis = true;
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && etfToast._title) { document.title = etfToast._title; etfToast._title = null; }
+      });
+    }
   }
+  if (ETF_NOTIFY && 'Notification' in window && Notification.permission === 'granted') {
+    try {
+      const n = new Notification(`159509 · ${a.title || '提示'}`, { body: a.text || '', tag: a.key || undefined });
+      n.onclick = () => { try { window.focus(); n.close(); } catch { /* 忽略 */ } };
+    } catch { /* 忽略 */ }
+  }
+}
+
+// 提示音开关（首次点击即解锁 WebAudio）
+function etfToggleSound() {
+  ETF_SOUND = !ETF_SOUND;
+  localStorage.setItem('etf-sound', ETF_SOUND ? '1' : '0');
+  if (ETF_SOUND) { etfBeep(false); etfToast({ level: 'info', title: '提示音已开启', text: '出现买入机会 / 减仓信号时会响两声' }); }
+  renderEtfPosition();
 }
 
 function etfToggleNotify() {
@@ -2306,52 +2488,48 @@ function etfToggleNotify() {
   });
 }
 
-// ── 行情头 ──
+// ── 行情头（盘面面板首屏：一眼看到价格 / 涨跌 / 溢价 / 盘口） ──
 function etfHeroHtml() {
   const t = ETF_TRACK;
   if (!t) return `<div class="etf-hero"><div class="etf-empty">加载中…</div></div>`;
   const q = t.quote || {};
+  const s = t.session || {};
   const chg = q.changePct;
   const price = q.price != null ? q.price : t.ind.price;
   const band = (t.premium && t.premium.band) || { level: 'neutral', label: '—' };
   const prem = t.premium ? t.premium.current : null;
-  const amt = q.amount != null ? `${(q.amount / 10000).toFixed(2)}亿` : '—';
-  const staleTag = q.quoteDate && q.quoteDate !== t.today
-    ? `<span class="etf-badge neutral">休市 · 数据 ${q.quoteDate} ${(q.quoteTime || '').slice(11) || ''}</span>`
-    : '';
+  // 交易状态（盘中 / 已收盘 / 节假日休市）
+  const stCls = s.trading ? 'trading' : ((s.realtime && !s.holidayClosed) ? 'closed' : 'holiday');
+  const stTxt = s.trading ? 'A股交易中 · 实时'
+    : (s.holidayClosed ? '休市 · 节假日' : (s.realtime ? '已收盘' : '休市'));
   return `
     <div class="etf-hero">
-      <div class="etf-hero-top">
+      <div class="etf-hero-head">
         <span class="etf-hero-name">${t.name}</span>
-        <span class="etf-hero-code">${t.fundCode} · 深交所</span>
-      </div>
-      <div class="etf-hero-price-row">
         <span class="etf-hero-price ${cls(chg)}">${price != null ? price.toFixed(3) : '--'}</span>
         <span class="etf-hero-chg ${cls(chg)}">${q.price != null ? `${q.price - q.prevClose >= 0 ? '+' : ''}${(q.price - q.prevClose).toFixed(3)} (${fmtPct(chg)})` : ''}</span>
-      </div>
-      <div class="etf-badges">
         <span class="etf-badge ${band.level}">溢价 ${prem != null ? prem.toFixed(2) + '%' : '—'} · ${band.label}</span>
-        ${(() => {
-          const pr = (t.premium && t.premium.prices) || null;
-          const p = t.premium || {};
-          if (!pr || prem == null) return '';
-          const isBuy = pr.buy && price != null && price <= pr.buy.price;
-          const isAdd = pr.add && price != null && price <= pr.add.price;
-          if (isAdd) return `<span class="etf-badge cheap">≤ 加仓价 ${pr.add.price}，可多买</span>`;
-          if (isBuy) return `<span class="etf-badge ok">≤ 买入价 ${pr.buy.price}，可买入</span>`;
-          const d = pr.buy && price != null ? (price / pr.buy.price - 1) * 100 : null;
-          return d != null ? `<span class="etf-badge neutral">距买入价 ${d.toFixed(2)}%（${pr.buy.price}）</span>` : '';
-        })()}
-        ${staleTag}
-      </div>
-      <div class="etf-hero-pm">
-        <span>IOPV <b>${t.premium.iopv != null ? t.premium.iopv.toFixed(4) : '—'}</b></span>
-        <span>净值 <b>${t.premium.nav != null ? t.premium.nav.toFixed(4) : '—'}</b></span>
-        <span>今开 <b>${q.open != null ? q.open.toFixed(3) : '—'}</b></span>
-        <span>高/低 <b>${q.high != null ? q.high.toFixed(3) : '—'}/${q.low != null ? q.low.toFixed(3) : '—'}</b></span>
-        <span>成交 <b>${amt}</b></span>
+        <span class="etf-live-tag ${stCls}">${stTxt}</span>
       </div>
     </div>`;
+}
+
+// ── 盘口数据（IOPV / 净值 / 今开 / 昨收 / 高低）：随分时走势排布在图表底部 ──
+function etfQuoteInlineHtml() {
+  const t = ETF_TRACK;
+  if (!t) return '';
+  const q = t.quote || {};
+  const num = (v, d = 3) => (v != null && isFinite(v) ? v.toFixed(d) : '—');
+  const items = [
+    ['IOPV', num(t.premium && t.premium.iopv, 4)],
+    ['净值', num(t.premium && t.premium.nav, 4)],
+    ['今开', num(q.open)],
+    ['昨收', num(q.prevClose)],
+    ['高/低', `${num(q.high)}/${num(q.low)}`],
+  ].filter(x => x[1] !== '—');
+  if (!items.length) return '';
+  return `<div class="etf-quote-inline">${items.map(([k, v]) => `<span><i>${k}</i><b>${v}</b></span>`).join('')}
+    <span class="etf-q-upd">更新 ${nowStr()}<span class="${LAST_STALE ? 'dot' : 'dot live'}"></span></span></div>`;
 }
 
 // ── 今日操作建议 ──
@@ -2360,7 +2538,14 @@ function etfAdviceHtml() {
   if (!t || !t.advice) return `<div class="etf-advice"><div class="etf-empty">建议生成中…</div></div>`;
   const a = t.advice;
   const clsMap = { danger: 'danger', warn: 'warn', buy: 'buy', hold: 'hold', wait: 'wait' };
-  const color = { danger: '#e84c3d', warn: '#e8a03d', buy: '#e84c3d', hold: '#4a9fe0', wait: '#8899aa' }[a.level] || '#8899aa';
+  // 动作徽章的渐变色（wait/hold 也给出明显色块，不再是一块灰）
+  const color = {
+    danger: 'linear-gradient(180deg,#f0574a,#c93526)',
+    warn:   'linear-gradient(180deg,#f0ac4d,#cf8420)',
+    buy:    'linear-gradient(180deg,#f0574a,#c93526)',
+    hold:   'linear-gradient(180deg,#5aa8e8,#2f7cba)',
+    wait:   'linear-gradient(180deg,#8ba4bb,#5f7a94)',
+  }[a.level] || 'linear-gradient(180deg,#8ba4bb,#5f7a94)';
   const icon = { danger: '⚠', warn: '⚠', buy: '▲', hold: '●', wait: '○' }[a.level] || '○';
   const levelsHtml = (a.levels || []).map(l => `
     <div class="etf-level">
@@ -2375,16 +2560,17 @@ function etfAdviceHtml() {
       <span class="etf-reason-text">${r.text}</span>
     </div>`).join('');
   return `
-    <div class="etf-advice">
+    <div class="etf-advice lv-${a.level}">
       <div class="etf-advice-head">
         <span class="etf-advice-tag">今日操作建议</span>
-        <span class="etf-advice-action" style="color:#fff;background:${color}">${icon} ${a.action}</span>
+        <span class="etf-advice-action" style="background:${color}"><span class="ic">${icon}</span>${a.action}</span>
       </div>
       <div class="etf-advice-body">
         <div class="etf-advice-headline">${a.headline}</div>
         <div class="etf-reasons">${reasonsHtml}</div>
         ${levelsHtml ? `<div class="etf-levels">${levelsHtml}</div>` : ''}
       </div>
+      <div class="etf-advice-metrics" id="etf-metrics">${etfMetricsHtml()}</div>
     </div>`;
 }
 
@@ -2537,20 +2723,47 @@ function etfReviewHtml() {
     </div>`;
 }
 
-// ── 盘中提示 ──
+// ── 盘中提示（面板内紧凑展示，默认只列最重要的 3 条） ──
+const ETF_ALERT_TOP = 3;
 function etfAlertsHtml() {
-  const list = (ETF_TRACK && ETF_TRACK.alerts) || [];
-  const live = list.map(a => `
+  const t = ETF_TRACK || {};
+  const list = t.alerts || [];
+  const s = t.session || {};
+  const shown = ETF_ALERT_EXPAND ? list : list.slice(0, ETF_ALERT_TOP);
+  const live = shown.map(a => `
     <div class="etf-alert ${a.level}">
       <span class="etf-alert-title">${a.title}</span>
       <span class="etf-alert-text">${a.text}</span>
     </div>`).join('');
-  const log = ETF_ALERT_LOG.slice(0, 6).map(e => `
-    <div class="etf-alert-log-item"><span class="etf-alert-log-time">${e.time}</span><span>${e.title} · ${e.text}</span></div>`).join('');
-  if (!live && !log) return `<div class="etf-empty">当前无提示${ETF_TRACK && ETF_TRACK.session && !ETF_TRACK.session.trading ? '（A 股休市，盘中提示将在开盘后生效）' : ''}</div>`;
+  const more = list.length > ETF_ALERT_TOP
+    ? `<div class="etf-more" onclick="etfToggleAlerts()">${ETF_ALERT_EXPAND ? '收起' : `展开全部 ${list.length} 条提示 ▾`}</div>` : '';
+  const logs = ETF_ALERT_LOG || [];
+  const logBlock = logs.length ? `
+    <div class="etf-more" onclick="etfToggleAlertLog()">本次会话已触发 ${logs.length} 条${ETF_ALERT_LOG_OPEN ? ' ▴' : ' ▾'}</div>
+    ${ETF_ALERT_LOG_OPEN ? `<div class="etf-alert-log">${logs.slice(0, 10).map(e => `
+      <div class="etf-alert-log-item"><span class="etf-alert-log-time">${e.time}</span><span>${e.title} · ${e.text}</span></div>`).join('')}</div>` : ''}` : '';
+  const empty = (!live && !logs)
+    ? `<div class="etf-empty" style="padding:3px 0">当前无提示${!s.trading ? '（A 股休市，开盘后生效）' : ''}</div>` : '';
   return `
-    <div class="etf-alerts">${live}</div>
-    ${log ? `<div style="margin-top:9px;"><div class="etf-sec-title" style="margin-bottom:3px;"><span>本次会话已触发</span></div>${log}</div>` : ''}`;
+    <div class="etf-board-head">
+      <span class="${s.trading ? 'live' : ''}">盘中提示</span>
+      <span class="sub">买入 / 减仓机会会弹窗${ETF_NOTIFY ? ' · 通知' : ''}${ETF_SOUND ? ' · 声音' : ''}</span>
+    </div>
+    ${empty}
+    ${live ? `<div class="etf-alerts">${live}</div>` : ''}
+    ${more}
+    ${logBlock}`;
+}
+
+function etfToggleAlerts() {
+  ETF_ALERT_EXPAND = !ETF_ALERT_EXPAND;
+  const el = document.getElementById('etf-alerts');
+  if (el) el.innerHTML = etfAlertsHtml();
+}
+function etfToggleAlertLog() {
+  ETF_ALERT_LOG_OPEN = !ETF_ALERT_LOG_OPEN;
+  const el = document.getElementById('etf-alerts');
+  if (el) el.innerHTML = etfAlertsHtml();
 }
 
 // ── 分时图 ──
@@ -2558,10 +2771,16 @@ function etfIntradayHtml() {
   const t = ETF_TRACK;
   const d = t && t.intraday;
   const q = (t && t.quote) || {};
-  if (!d || !d.points || d.points.length < 2) return `<div class="etf-empty">分时数据不可用</div>`;
+  const s = (t && t.session) || {};
+  const head = (sub) => `
+    <div class="etf-board-head">
+      <span class="${s.trading ? 'live' : ''}">分时走势</span>
+      <span class="sub">${sub}</span>
+    </div>`;
+  if (!d || !d.points || d.points.length < 2) return head('—') + `<div class="etf-empty">分时数据不可用</div>` + etfQuoteInlineHtml();
   const pts = d.points;
   const prevClose = d.prevClose || q.prevClose || pts[0].price;
-  const W = etfChartWidth(), H = 196, PL = 36, PR = 10, PT = 12, PB = 20;
+  const W = etfChartWidth(24), H = 158, PL = 36, PR = 10, PT = 12, PB = 20;   // 面板卡片：左右边框1+内边距11
   const vals = [];
   pts.forEach(p => { vals.push(p.price); if (p.avg != null) vals.push(p.avg); });
   vals.push(prevClose);
@@ -2622,9 +2841,11 @@ function etfIntradayHtml() {
   const lastDot = `<circle cx="${X(n - 1).toFixed(1)}" cy="${Y(lastP).toFixed(1)}" r="2.6" fill="${main}"/>`;
 
   const chgFromPrev = ((lastP / prevClose - 1) * 100);
+  const dataTime = (q.quoteTime || '').slice(11);
   return `
+    ${head(`${d.date || '—'}${dataTime ? ` · 数据 ${dataTime}` : ''}`)}
     <div class="etf-chart-wrap">
-      <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="height:196px">
+      <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="height:158px">
         <defs>
           <linearGradient id="etf-ia" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="${main}" stop-opacity="0.28"/>
@@ -2643,7 +2864,8 @@ function etfIntradayHtml() {
       <span><i style="background:${main}"></i>价格 ${lastP.toFixed(3)}（${chgFromPrev >= 0 ? '+' : ''}${chgFromPrev.toFixed(2)}%）</span>
       <span><i style="background:#e8a03d"></i>均价</span>
       <span><i style="background:var(--text-muted)"></i>昨收</span>
-    </div>`;
+    </div>
+    ${etfQuoteInlineHtml()}`;
 }
 
 // ── 买卖信号清单 ──
@@ -2829,19 +3051,24 @@ function etfMetricsHtml() {
   const t = ETF_TRACK;
   if (!t) return '';
   const i = t.ind || {};
+  const q = t.quote || {};
   const f = (v, d = 3) => (v != null && isFinite(v) ? v.toFixed(d) : '—');
+  const now = q.price != null ? q.price : i.price;
+  const ma = (k, v) => ({ k, v: f(v), tone: (now != null && v != null) ? (now >= v ? 'up' : 'down') : 'flat' });
+  const amp = (q.high != null && q.low != null && q.prevClose) ? ((q.high - q.low) / q.prevClose * 100) : null;
   const items = [
-    { k: 'MA5', v: f(i.ma5), tone: i.price >= i.ma5 ? 'up' : 'down' },
-    { k: 'MA10', v: f(i.ma10), tone: i.price >= i.ma10 ? 'up' : 'down' },
-    { k: 'MA21', v: f(i.ma21), tone: i.price >= i.ma21 ? 'up' : 'down' },
-    { k: 'MA60', v: f(i.ma60), tone: i.price >= i.ma60 ? 'up' : 'down' },
-    { k: '近20日高', v: f(i.high20), tone: 'flat' },
+    ma('MA5', i.ma5), ma('MA10', i.ma10), ma('MA21', i.ma21), ma('MA60', i.ma60),
+    { k: '20日最高', v: f(i.high20), tone: 'flat' },
     { k: '距20日高', v: i.drawdownFromHigh20 != null ? `${i.drawdownFromHigh20.toFixed(2)}%` : '—', tone: i.drawdownFromHigh20 >= 0 ? 'up' : 'down' },
-    { k: '20日年化波动', v: i.vol20 != null ? `${i.vol20.toFixed(1)}%` : '—', tone: 'flat' },
-    { k: '分时日期', v: t.intraday ? t.intraday.date.slice(5) : '—', tone: 'flat' },
-    { k: '数据时间', v: (t.quote && t.quote.quoteTime ? t.quote.quoteTime.slice(11) : '—'), tone: 'flat' },
+    { k: '20日波动', v: i.vol20 != null ? `${i.vol20.toFixed(1)}%` : '—', tone: 'flat' },
+    { k: '今日振幅', v: amp != null ? `${amp.toFixed(2)}%` : '—', tone: 'flat' },
   ];
-  return `<div class="etf-metrics">${items.map(x => `
+  return `
+    <div class="etf-board-head">
+      <span>关键指标</span>
+      <span class="sub">价格与均线比较：${now != null ? now.toFixed(3) : '—'}</span>
+    </div>
+    <div class="etf-metrics compact">${items.map(x => `
     <div class="etf-metric">
       <div class="etf-metric-k">${x.k}</div>
       <div class="etf-metric-v ${x.tone}">${x.v}</div>
@@ -2892,6 +3119,7 @@ function etfPositionHtml() {
     <div class="etf-trade-form" style="border-top:none;margin-top:2px;padding-top:0">
       <button class="etf-btn" onclick="etfFillPrice()">填入现价</button>
       <button class="etf-btn" onclick="etfToggleNotify()">${ETF_NOTIFY ? '● 桌面通知已开' : '○ 开启桌面通知'}</button>
+      <button class="etf-btn" onclick="etfToggleSound()">${ETF_SOUND ? '🔔 提示音已开' : '🔕 提示音已关'}</button>
     </div>
     ${rows ? `<div class="etf-trades">${rows}</div>` : `<div class="etf-empty" style="padding:8px 0">还没有交易记录，添加后会据此给出持仓相关的建议</div>`}`;
 }
@@ -2942,32 +3170,19 @@ function etfSignalsSectionInner() {
 function renderEtfView() {
   const t = ETF_TRACK;
   ETF_RENDERED_DATE = t && t.session ? t.session.lastTradingDate : null;
-  const statusMarket = t && t.session
-    ? (t.session.trading ? 'A 股交易中' : (t.session.realtime ? '已收盘' : '休市'))
-    : '—';
-  const dataTime = t && t.quote && t.quote.quoteTime ? t.quote.quoteTime : '—';
+  // 顶部不再单独占一行状态栏：名称 / 更新时间 / 交易状态 / 数据新鲜度 已全部并入行情头
   document.getElementById('app').innerHTML = `
     ${tabbarHtml('etf')}
-    <div class="status-bar">纳指科技ETF 跟踪 · 买卖信号 · 盘中提示&ensp;更新于 ${nowStr()}(<span class="mkt">${statusMarket}</span>)<span class="${LAST_STALE ? 'dot' : 'dot live'}"></span>
+    <div class="etf-board">
+      <div id="etf-hero">${etfHeroHtml()}</div>
+      <div class="etf-board-sec" id="etf-alerts">${etfAlertsHtml()}</div>
+      <div class="etf-board-sec" id="etf-intraday">${etfIntradayHtml()}</div>
     </div>
-    <div id="etf-hero">${etfHeroHtml()}</div>
     ${ETF_LOAD_ERR ? `<div class="etf-section"><div class="etf-alert danger"><span class="etf-alert-title">数据异常</span><span class="etf-alert-text">${ETF_LOAD_ERR}</span></div></div>` : ''}
     <div id="etf-advice-wrap">${etfAdviceHtml()}</div>
     <div class="etf-section">
       <div class="etf-sec-title"><span>溢价档位 · 买入线</span><span class="sub">${(t && t.premium && t.premium.rules) ? `≤${t.premium.rules.buy}% 买入 · ＜${t.premium.rules.add}% 多买` : '策略阈值'}</span></div>
       <div id="etf-zones">${etfPremiumZonesHtml()}</div>
-    </div>
-    <div class="etf-section">
-      <div class="etf-sec-title"><span>盘中提示</span><span class="sub">新提示会弹窗提醒${ETF_NOTIFY ? '（已开桌面通知）' : ''}</span></div>
-      <div id="etf-alerts">${etfAlertsHtml()}</div>
-    </div>
-    <div class="etf-section">
-      <div class="etf-sec-title"><span>分时走势</span><span class="sub">${t && t.intraday ? t.intraday.date : '—'} · 数据 ${dataTime}</span></div>
-      <div id="etf-intraday">${etfIntradayHtml()}</div>
-    </div>
-    <div class="etf-section">
-      <div class="etf-sec-title"><span>关键指标</span><span class="sub">MA 与波动</span></div>
-      ${etfMetricsHtml()}
     </div>
     <div class="etf-section">
       <div class="etf-sec-title"><span>MACD 柱（日K）</span><span class="sub">信号口径与 macd买卖 视图一致</span></div>
@@ -3003,10 +3218,11 @@ function updateEtfLive() {
     if (el && el.innerHTML !== html) el.innerHTML = html;
   };
   set('etf-hero', etfHeroHtml());
-  set('etf-advice-wrap', etfAdviceHtml());
+  set('etf-advice-wrap', etfAdviceHtml());   // 含底部的「关键指标」（均线/振幅随实时价变化）
   set('etf-zones', etfPremiumZonesHtml());
   set('etf-alerts', etfAlertsHtml());
   set('etf-intraday', etfIntradayHtml());
+  set('etf-macd', etfMacdHtml());         // 盘中最后一根柱会随实时价变化
 }
 
 function renderList() {
@@ -3526,10 +3742,13 @@ window.setHistoryPeriod = setHistoryPeriod;
 window.toggleHistorySort = toggleHistorySort;
 window.toggleMacdSection = toggleMacdSection;
 window.etfToggleSignals = etfToggleSignals;
+window.etfToggleAlerts = etfToggleAlerts;
+window.etfToggleAlertLog = etfToggleAlertLog;
 window.etfAddTrade = etfAddTrade;
 window.etfDelTrade = etfDelTrade;
 window.etfFillPrice = etfFillPrice;
 window.etfToggleNotify = etfToggleNotify;
+window.etfToggleSound = etfToggleSound;
 
 bootstrap();
 </script>

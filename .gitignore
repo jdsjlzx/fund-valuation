@@ -28,3 +28,6 @@ npm-debug.log*
 
 # 日韩台股官方收盘累积存储（运行时生成，逐日自愈）
 data/intl-closes.json
+
+# ETF 磁盘兜底缓存（运行时生成，不入库）
+data/etf-mkt-cache.json
