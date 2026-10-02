@@ -1602,9 +1602,9 @@ app.get('/api/quotes', async (req, res) => {
           })
         )
       ).then((arr) => arr.filter(Boolean)),
-      // 夜盘时段：Yahoo fullday 走后台扫描（直连→Render代理→Vercel 链路，
+      // 夜盘/盘前时段：Yahoo fullday 走后台扫描（直连→Render代理→Vercel 链路，
       // 全量标的需数分钟），请求路径直接用缓存快照，绝不阻塞行情响应
-      usState === 'OVERNIGHT' && emSymbols.length
+      (usState === 'OVERNIGHT' || usState === 'PRE') && emSymbols.length
         ? (async () => { kickYahooExtSweep(emSymbols); return yahooExtSnapshot(emSymbols); })()
         : Promise.resolve(new Map()),
       // 夜盘时段：拉取外盘期货 (NQ/ES/YM) 作为指数ETF夜盘代理
@@ -1691,9 +1691,22 @@ app.get('/api/quotes', async (req, res) => {
       }
       const sina = sinaMap[em.symbol];
       if (sina && sina.postMarketChangePercent !== undefined) {
-        // 盘前时段: sina fields[5] 是盘前实时价，优先用新浪数据
-        // EM f2 在盘前返回的是昨收价，不可用
+        // 盘前时段：新浪盘前价(fields[5])更新极慢（滞后可达分钟级），
+        // 雅虎链路（直连→代理→Vercel）的 fullday 价为真实盘前价，优先采用
         if (usState === 'PRE') {
+          const yhPre = yhExtData && yhExtData.get(em.symbol);
+          if (yhPre && isFinite(yhPre.fulldayPrice)) {
+            return {
+              ...em,
+              regularMarketPrice: yhPre.fulldayPrice,
+              regularMarketChangePercent: yhPre.fulldayChangePercent,
+              preMarketChangePercent: yhPre.fulldayChangePercent,
+              closePrice: yhPre.previousClose,
+              regularMarketPreviousClose: yhPre.previousClose,
+              postMarketChangePercent: sina.postMarketChangePercent || 0,
+              afterHoursPrice: sina.afterHoursPrice || null,
+            };
+          }
           return {
             ...em,
             regularMarketPrice: sina.regularMarketPrice,           // 盘前实时价 (fields[5])
