@@ -158,6 +158,15 @@ function parseHoldingsTable(tableHtml) {
         if (jp) {
           market = 'JP';
           ticker = jp[1];
+        } else if (/^\d{3,4}[A-Z]$/.test(ticker)) {
+          // 东京交易所 2024 年起的新式字母代码（285A 铠侠、215A…），天天基金持仓表里
+          // 常以裸码出现（无 JT 后缀），此前不匹配任何规则 → 被当 other 剔除。
+          // 台股为 4 位纯数字、A 股 6 位、韩股 6 位，不会与之撞车。
+          market = 'JP';
+        } else if (/^[A-Z]{2}[0-9A-Z]{9}[0-9]$/.test(ticker)) {
+          // ISIN 形式（JP3236330001 铠侠控股、KR7009150004 三星电机…）：
+          // 韩股 ISIN 可本地解码，日股 ISIN 不含交易所代码 → 后续按名称在线解析
+          market = 'ISIN';
         } else if (/^\d{4}$/.test(ticker)) {
           market = 'AMBIG';
         }
@@ -270,6 +279,65 @@ async function resolveAmbiguousHoldings(holdings) {
     await new Promise((r) => setTimeout(r, 150));  // 判别接口节流
   }
   return ambig.length;
+}
+
+// ──────────────────────────────────────────
+//  ISIN 形式持仓的市场解析
+//  天天基金对部分海外持仓只给 ISIN（JP3236330001 铠侠控股、KR7009150004 三星电机…），
+//  无法直接定价 → 此前一律按 other 剔除。解析链：
+//    1) 韩国 ISIN 本地解码：KR7 + 6 位代码（KR7009150004 → 009150）→ KR
+//    2) 其余按名称查东财 suggest，取名称吻合的 176/177/178（日/韩/台）条目代码
+//       （日股 ISIN 不内嵌交易所代码，只能按名称反查；名称先剥离公司后缀再查）
+//  仍无法解析的（欧洲 ISIN、ADR 等无可用行情通道）→ 退回 other 由既有逻辑剔除
+// ──────────────────────────────────────────
+const KR_ISIN_RE = /^KR7(\d{6})/;
+
+function stripCorpSuffix(n) {
+  return String(n || '')
+    .replace(/(株式会社|股份有限公司|有限公司|股份公司|控股集团|控股|集团|实业|公司)/g, '')
+    .trim();
+}
+
+async function resolveIsinMarket(ticker, nameCn) {
+  const krm = ticker.match(KR_ISIN_RE);
+  if (krm) return { market: 'KR', s: krm[1] };
+
+  const base = stripCorpSuffix(nameCn);
+  const variants = [...new Set([nameCn, base, base.slice(0, 4), base.slice(0, 2)]
+    .filter((v) => v && v.length >= 2))];
+
+  for (const v of variants) {
+    let ds = [];
+    try {
+      ds = await emSuggest(v);
+    } catch (e) {
+      continue;
+    }
+    for (const d of ds) {
+      const mk = MARKET_BY_MKTNUM[d.MktNum];
+      if (!mk || d.Code === ticker) continue;      // 只要日/韩/台条目
+      if (nameMatches(d.Name || '', nameCn) || nameMatches(d.Name || '', base)) {
+        return { market: mk, s: d.Code };
+      }
+    }
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  return null;
+}
+
+async function resolveIsinHoldings(holdings) {
+  const rows = holdings.filter((h) => h.market === 'ISIN');
+  for (const h of rows) {
+    const r = await resolveIsinMarket(h.s, h.name_cn || '');
+    if (r) {
+      h.market = r.market;
+      h.s = r.s;                                   // ISIN → 交易所代码
+    } else {
+      h.market = 'other';                          // 无法定价 → 交给既有剔除逻辑
+    }
+    await new Promise((r2) => setTimeout(r2, 150));
+  }
+  return rows.length;
 }
 
 function parseAllSections(text) {
@@ -399,6 +467,9 @@ async function fetchFundHoldings(code) {
 
   // 裸 4 位代码（台/日难分）在线判别市场，必须在剔除 other 之前完成
   await resolveAmbiguousHoldings(holdings);
+
+  // ISIN 形式持仓（韩股本地解码 / 日股按名称反查代码），同样必须在剔除 other 之前完成
+  await resolveIsinHoldings(holdings);
 
   // 剔除无法定价的市场（other）：它们进了 coverageWeight 却算不出涨跌，
   // 会造成「声称覆盖但实际没算」的系统性偏差

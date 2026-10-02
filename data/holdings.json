@@ -176,8 +176,8 @@
     "code": "006555",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 34,
-    "coverageWeight": 0.8170000000000001,
+    "totalCount": 35,
+    "coverageWeight": 0.9051,
     "dataMode": "latest_plus_full_report",
     "holdings": [
       {
@@ -185,6 +185,13 @@
         "w": 0.09519999999999999,
         "name_cn": "闪迪",
         "market": "105",
+        "source": "latest_report"
+      },
+      {
+        "s": "285A",
+        "w": 0.08810000000000001,
+        "name_cn": "KIOXIA",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -425,8 +432,8 @@
     "code": "270023",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 61,
-    "coverageWeight": 0.7836999999999996,
+    "totalCount": 62,
+    "coverageWeight": 0.8243999999999996,
     "dataMode": "latest_plus_full_report",
     "holdings": [
       {
@@ -455,6 +462,13 @@
         "w": 0.0435,
         "name_cn": "阿斯麦",
         "market": "105",
+        "source": "latest_report"
+      },
+      {
+        "s": "285A",
+        "w": 0.0407,
+        "name_cn": "KIOXIA",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -1900,8 +1914,8 @@
     "code": "012920",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 49,
-    "coverageWeight": 0.8517999999999997,
+    "totalCount": 50,
+    "coverageWeight": 0.9106999999999996,
     "dataMode": "latest_plus_full_report",
     "holdings": [
       {
@@ -1909,6 +1923,13 @@
         "w": 0.0641,
         "name_cn": "拉姆研究",
         "market": "105",
+        "source": "latest_report"
+      },
+      {
+        "s": "285A",
+        "w": 0.058899999999999994,
+        "name_cn": "KIOXIA",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -2254,8 +2275,8 @@
     "code": "006373",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 31,
-    "coverageWeight": 0.8318000000000001,
+    "totalCount": 32,
+    "coverageWeight": 0.8524,
     "dataMode": "latest_plus_full_report",
     "holdings": [
       {
@@ -2354,6 +2375,13 @@
         "w": 0.0229,
         "name_cn": "阿斯麦",
         "market": "105",
+        "source": "latest_report"
+      },
+      {
+        "s": "285A",
+        "w": 0.0206,
+        "name_cn": "KIOXIA",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -2773,8 +2801,8 @@
     "code": "539002",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 19,
-    "coverageWeight": 0.7873999999999999,
+    "totalCount": 22,
+    "coverageWeight": 0.8161999999999999,
     "dataMode": "latest_plus_full_report",
     "holdings": [
       {
@@ -2887,6 +2915,27 @@
         "w": 0.016399999999999998,
         "name_cn": "台光电",
         "market": "TW",
+        "source": "latest_report"
+      },
+      {
+        "s": "6981",
+        "w": 0.0149,
+        "name_cn": "村田制作所",
+        "market": "JP",
+        "source": "latest_report"
+      },
+      {
+        "s": "009150",
+        "w": 0.0078000000000000005,
+        "name_cn": "三星电机公司",
+        "market": "KR",
+        "source": "latest_report"
+      },
+      {
+        "s": "6976",
+        "w": 0.0060999999999999995,
+        "name_cn": "太阳诱电株式会社",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -4248,8 +4297,8 @@
     "code": "002891",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 38,
-    "coverageWeight": 0.8295999999999999,
+    "totalCount": 39,
+    "coverageWeight": 0.8755,
     "dataMode": "latest_plus_full_report",
     "holdings": [
       {
@@ -4285,6 +4334,13 @@
         "w": 0.049400000000000006,
         "name_cn": "英特尔",
         "market": "105",
+        "source": "latest_report"
+      },
+      {
+        "s": "285A",
+        "w": 0.045899999999999996,
+        "name_cn": "KIOXIA",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -5688,10 +5744,17 @@
     "code": "016664",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 76,
-    "coverageWeight": 0.7213999999999996,
+    "totalCount": 81,
+    "coverageWeight": 0.7935999999999998,
     "dataMode": "latest_plus_full_report",
     "holdings": [
+      {
+        "s": "285A",
+        "w": 0.0388,
+        "name_cn": "铠侠控股株式会社",
+        "market": "JP",
+        "source": "latest_report"
+      },
       {
         "s": "02476",
         "w": 0.0333,
@@ -5732,6 +5795,13 @@
         "w": 0.0202,
         "name_cn": "康宁",
         "market": "106",
+        "source": "latest_report"
+      },
+      {
+        "s": "3110",
+        "w": 0.0187,
+        "name_cn": "日东纺织",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -6099,6 +6169,13 @@
         "source": "latest_report"
       },
       {
+        "s": "5803",
+        "w": 0.005600000000000001,
+        "name_cn": "藤仓株式会社",
+        "market": "JP",
+        "source": "latest_report"
+      },
+      {
         "s": "600522",
         "w": 0.0052,
         "name_cn": "中天科技",
@@ -6134,6 +6211,13 @@
         "source": "latest_report"
       },
       {
+        "s": "6857",
+        "w": 0.004699999999999999,
+        "name_cn": "爱德万测试",
+        "market": "JP",
+        "source": "latest_report"
+      },
+      {
         "s": "688610",
         "w": 0.0045000000000000005,
         "name_cn": "埃科光电",
@@ -6152,6 +6236,13 @@
         "w": 0.0044,
         "name_cn": "Onto Innovation Inc",
         "market": "106",
+        "source": "latest_report"
+      },
+      {
+        "s": "6146",
+        "w": 0.0044,
+        "name_cn": "Disco公司",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -6231,8 +6322,8 @@
     "code": "100055",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 32,
-    "coverageWeight": 0.8741,
+    "totalCount": 33,
+    "coverageWeight": 0.9199,
     "dataMode": "latest_plus_full_report",
     "holdings": [
       {
@@ -6275,6 +6366,13 @@
         "w": 0.0458,
         "name_cn": "三星电子",
         "market": "KR",
+        "source": "latest_report"
+      },
+      {
+        "s": "285A",
+        "w": 0.0458,
+        "name_cn": "KIOXIA",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -6466,8 +6564,8 @@
     "code": "163813",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 18,
-    "coverageWeight": 0.1424,
+    "totalCount": 19,
+    "coverageWeight": 0.14620000000000002,
     "dataMode": "latest_plus_full_report",
     "holdings": [
       {
@@ -6552,6 +6650,13 @@
         "w": 0.005,
         "name_cn": "泰瑞达",
         "market": "105",
+        "source": "latest_report"
+      },
+      {
+        "s": "285A",
+        "w": 0.0038,
+        "name_cn": "KIOXIA",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -7111,8 +7216,8 @@
     "code": "005534",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 50,
-    "coverageWeight": 0.8273,
+    "totalCount": 51,
+    "coverageWeight": 0.8646000000000001,
     "dataMode": "latest_plus_full_report",
     "holdings": [
       {
@@ -7162,6 +7267,13 @@
         "w": 0.0379,
         "name_cn": "中际旭创",
         "market": "0",
+        "source": "latest_report"
+      },
+      {
+        "s": "285A",
+        "w": 0.0373,
+        "name_cn": "KIOXIA",
+        "market": "JP",
         "source": "latest_report"
       },
       {
@@ -7472,8 +7584,8 @@
     "code": "002230",
     "reportDate": "2026-06-30",
     "annualDate": "2026-06-30",
-    "totalCount": 37,
-    "coverageWeight": 0.8224000000000001,
+    "totalCount": 38,
+    "coverageWeight": 0.8573000000000002,
     "dataMode": "latest_plus_full_report",
     "holdings": [
       {
@@ -7530,6 +7642,13 @@
         "w": 0.0368,
         "name_cn": "沪电股份",
         "market": "0",
+        "source": "latest_report"
+      },
+      {
+        "s": "285A",
+        "w": 0.0349,
+        "name_cn": "KIOXIA",
+        "market": "JP",
         "source": "latest_report"
       },
       {
