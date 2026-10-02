@@ -158,7 +158,9 @@ function toSinaId(symbol) {
     return 'sh' + symbol; // safe default
   }
   // HK stocks: 4-5 digit numeric (e.g. 00981 SMIC)
-  if (/^\d{4,5}$/.test(symbol)) return 'hk' + symbol.padStart(5, '0');
+  // 用 rt_hk 实时通道（而非 hk 延时通道）：延时通道收盘后会冻结在收盘竞价前的
+  // 价格，漏掉 16:00–16:10 收盘竞价（CAS）的定盘价，导致港股涨跌幅系统性偏小。
+  if (/^\d{4,5}$/.test(symbol)) return 'rt_hk' + symbol.padStart(5, '0');
   return 'gb_' + symbol.toLowerCase();
 }
 
@@ -1333,13 +1335,17 @@ function parseSinaResponse(text, requestedSymbols) {
       continue;
     }
 
-    if (id.startsWith('hk')) {
-      // HK stock fields:
+    if (id.startsWith('rt_hk') || id.startsWith('hk')) {
+      // HK stock fields (rt_hk 实时通道与 hk 延时通道字段布局一致)：
       //  [2] open  [3] prev_close  [4] high  [5] low
       //  [6] current  [7] change_amt  [8] change_%
       //  [17] 日期(YYYY/MM/DD)  [18] 时间
-      const ticker = id.slice(2);
+      // 优先 rt_hk（实时）：延时通道 hk 在收盘后冻结在收盘竞价前的价格
+      // （例 ASMPT 00522 冻结于 15:58 的 172.70/+7.94%，漏掉竞价定盘 173.00/+8.13%）
+      const isRtHk = id.startsWith('rt_hk');
+      const ticker = isRtHk ? id.slice(5) : id.slice(2);
       const symbol = symMap.get(ticker) || symMap.get(ticker.replace(/^0+/, '')) || ticker;
+      if (!isRtHk && map[symbol]) continue;  // 延时通道仅作兜底，不覆盖实时价
       const price = parseFloat(fields[6]);
       const chgPct = parseFloat(fields[8]);
       if (isNaN(price) || isNaN(chgPct)) continue;
@@ -1545,7 +1551,11 @@ app.get('/api/quotes', async (req, res) => {
       emSymbols.map((s) => emMap[s]).filter(Boolean),
       (async () => {
         if (sinaAll.length === 0) return [];
-        const text = await fetchSina(sinaAll.map(toSinaId));
+        // 港股额外请求延时(hk)通道作兜底：实时 rt_hk 缺失时才有用（解析时实时优先）
+        const hkFallbackIds = sinaAll
+          .filter((s) => /^\d{4,5}$/.test(s))
+          .map((s) => 'hk' + s.padStart(5, '0'));
+        const text = await fetchSina([...sinaAll.map(toSinaId), ...hkFallbackIds]);
         const m = parseSinaResponse(text, sinaAll);
         return { map: m, list: sinaAll.map((s) => m[s]).filter(Boolean) };
       })(),
