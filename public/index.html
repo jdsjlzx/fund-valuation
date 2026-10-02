@@ -1269,8 +1269,8 @@ function effectiveChange(q, opts = {}) {
     if (q.afterHoursPrice && closePrice) {
       return ((q.afterHoursPrice - closePrice) / closePrice) * 100;
     }
-    // 无盘外价 fallback
-    return q.postMarketChangePercent ?? 0;
+    // 无盘外价 fallback：非美市场收盘后仍显示当日最终涨跌幅
+    return q.regularMarketChangePercent ?? q.postMarketChangePercent ?? 0;
   }
 
   if (s === 'REGULAR') return q.regularMarketChangePercent ?? null;
