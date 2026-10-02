@@ -25,3 +25,6 @@ npm-debug.log*
 
 # WorkBuddy workspace memory (本地会话数据，不入库)
 .workbuddy/
+
+# 日韩台股官方收盘累积存储（运行时生成，逐日自愈）
+data/intl-closes.json

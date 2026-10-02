@@ -548,19 +548,13 @@ async function fetchTencentKrQuotes(symbols) {
 }
 
 // ──────────────────────────────────────────
-//  日韩股「昨日涨跌幅」(yesterdayChangePercent) —— 收盘估值视图用
+//  日/韩/台/港股「昨日涨跌幅」(yesterdayChangePercent) —— 收盘估值视图用
 //  背景：QDII 基金净值 T+2 滞后（实测 457001/539002 等最新净值仅到 9/29），
-//        昨日日韩 session 的涨跌尚未计入净值。估值若用今日盘中实时值，
-//        会把昨日的大涨跌完全漏掉（例：三星电子 10.1 +2.4%，今日盘中仅 +0.2%）。
-//        故 default(收盘) 视图日韩股按昨日涨跌幅计，由前端 effectiveChange 使用。
+//        昨日各亚洲市场 session 的涨跌尚未计入净值。估值若用今日盘中实时值，
+//        会把昨日的大涨跌完全漏掉（例：三星电子 10.1 +2.79%，今日盘中仅 +0.2%）。
+//        故 default(收盘) 视图按昨日涨跌幅计，由前端 effectiveChange 使用。
 //  口径：昨日收盘优先用行情源实时「昨收」（腾讯定盘口径，官方值），
-//        前日收盘取自日K。Naver 日K不含 15:30 KST 收盘竞价定盘价（实测
-//        三星 10.1 Naver=274500 vs 官方定盘=276000），故昨日收盘不用日K值；
-//        前日收盘暂无官方源（KRX/雅虎/Daum 均不可达），残余误差 ~0.3-0.4%。
-//        日股 Yahoo Japan 日K为东证官方收盘（已与腾讯昨收交叉核验），无此问题。
-//  数据源（当前网络出口实测）：
-//    韩股：Naver siseJson 日K（与 KOSPI 同款接口）
-//    日股：Yahoo Japan 時系列页 —— Next.js RSC payload 内嵌完整日K，服务端渲染无需 JS
+//        前日收盘取自各市场日K（韩股经涨跌额锚定反推、亦为官方值）。
 //  K线行缓存 30 分钟（昨日K线日内不变）；后台预取，绝不阻塞行情响应。
 // ──────────────────────────────────────────
 const INTL_YDAY_TTL = 30 * 60_000;         // K线行缓存时长
@@ -572,22 +566,37 @@ let intlYdayActive = 0;
 const INTL_YDAY_CONCURRENCY = 2;           // Yahoo Japan 突发并发会断连，保守并发
 const INTL_YDAY_REQ_GAP = 400;             // 相邻请求间隔(ms)
 
-// 韩股日K：Naver siseJson（行格式同 KOSPI，见 fetchNaverIndexKline）
-async function fetchNaverStockDaily(symbol, days = 20) {
-  const start = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10).replace(/-/g, '');
-  const url =
-    `https://api.finance.naver.com/siseJson.naver` +
-    `?symbol=${encodeURIComponent(symbol)}&requestType=1` +
-    `&startTime=${start}&endTime=20501231&timeframe=day`;
-  const txt = await httpGet(url, { 'Accept-Language': 'ko-KR,en;q=0.9' });
-  const rows = [];
-  const re = /\["(\d{8})"\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/g;
-  let m;
-  while ((m = re.exec(txt)) !== null) {
-    rows.push({ date: `${m[1].slice(0, 4)}-${m[1].slice(4, 6)}-${m[1].slice(6, 8)}`, close: parseFloat(m[5]) });
+// 韩股官方日K：Naver 移动端 /price 接口 + 「涨跌额锚定」反推官方收盘。
+// 背景：Naver 所有日K（siseJson/fchart/price）的 closePrice 都是 15:20 竞价前
+// 最后成交价，不含 15:30 KST 收盘竞价定盘（实测海力士 10.1 Naver=1,828,000
+// vs 官方定盘=1,833,000）。但每行的 compareToPreviousClosePrice（涨跌额）是
+// 相对**官方前日收盘**计算的：closePrice(当日) − 涨跌额 = 前一交易日的官方收盘。
+// 用「次交易日行」的锚定值即可反推出每个交易日的官方收盘：
+//   官方收盘(D) = closePrice(次交易日行) − 涨跌额(次交易日行)
+// 已交叉验证：海力士 10.2行 1,848,000−15,000=1,833,000（=腾讯昨收/官方10.1收盘）；
+//   海力士 10.1行 1,828,000−52,000=1,776,000（=官方9/30收盘，官方10.1涨幅
+//   1,833,000/1,776,000=+3.21% 与东财一致）。
+async function fetchNaverMobilePriceOfficial(symbol) {
+  const url = `https://m.stock.naver.com/api/stock/${encodeURIComponent(symbol)}/price`;
+  const txt = await httpGet(url, {
+    Referer: 'https://m.stock.naver.com/',
+    Accept: 'application/json',
+  });
+  let arr;
+  try { arr = JSON.parse(txt); } catch { return []; }
+  if (!Array.isArray(arr)) return [];
+  const num = (v) => parseFloat(String(v).replace(/,/g, ''));
+  // arr 为日期降序（[0]=最新）。anchor(arr[i]) = 官方收盘(arr[i+1] 的日期)
+  const official = [];
+  for (let i = 0; i < arr.length - 1; i++) {
+    const close = num(arr[i].closePrice);
+    const chg = num(arr[i].compareToPreviousClosePrice);
+    const d = arr[i + 1].localTradedAt;
+    if (!d || !isFinite(close) || !isFinite(chg) || !isFinite(num(arr[i + 1].closePrice))) continue;
+    official.push({ date: d, close: close - chg });
   }
-  rows.sort((a, b) => a.date.localeCompare(b.date));
-  return rows;
+  official.sort((a, b) => a.date.localeCompare(b.date));
+  return official;
 }
 
 // 从文本中按括号配对提取 JSON 数组/对象（跳过字符串内的括号）
@@ -731,21 +740,70 @@ async function fetchYahooChartDaily(fullSym, tzOffsetHours) {
   }
 }
 
+// ──────────────────────────────────────────
+//  台股官方收盘累积存储（data/intl-closes.json）
+//  台股在当前网络无任何可达历史K线源（雅虎台湾为错误页、TWSE 官方日线
+//  www.twse.com.tw 被墙、腾讯/雪球不覆盖台股）。TWSE 实时行情的昨收(y)
+//  = 前一交易日官方收盘 —— 每个交易日记录「当日的昨收」，随时间累积出
+//  官方收盘序列：store[session D] = 官方收盘(D 的前一 session)。
+//  读取：官方收盘(D) = store[次 session(D)]；store 的 key 即 session 序列
+//  （节假日无行情无 key，天然保持相邻性）。从部署后第 2 个交易日起自愈，
+//  此前端回落今日实时值。
+// ──────────────────────────────────────────
+const INTL_CLOSES_PATH = path.join(__dirname, 'data', 'intl-closes.json');
+const intlOfficialCloses = {};   // sym → { 'YYYY-MM-DD': 前一session官方收盘 }
+let intlClosesDirty = false;
+
+(function loadIntlCloses() {
+  try {
+    const j = JSON.parse(fs.readFileSync(INTL_CLOSES_PATH, 'utf-8'));
+    for (const k of Object.keys(j)) intlOfficialCloses[k] = j[k];
+    console.log('[intl-closes] loaded', Object.keys(intlOfficialCloses).length, 'symbols');
+  } catch { /* 首次运行无文件 */ }
+})();
+
+function recordIntlClose(sym, sessionDate, prevOfficialClose) {
+  if (!sym || !sessionDate || !isFinite(prevOfficialClose) || prevOfficialClose <= 0) return;
+  if (!intlOfficialCloses[sym]) intlOfficialCloses[sym] = {};
+  if (intlOfficialCloses[sym][sessionDate] === prevOfficialClose) return;
+  intlOfficialCloses[sym][sessionDate] = prevOfficialClose;
+  intlClosesDirty = true;
+}
+
+// 由累积存储构建官方收盘 rows（升序）：官方收盘(D_i) = store[D_{i+1}]
+function twOfficialRows(sym) {
+  const m = intlOfficialCloses[sym] || {};
+  const sessions = Object.keys(m).sort();
+  const rows = [];
+  for (let i = 1; i < sessions.length; i++) {
+    rows.push({ date: sessions[i - 1], close: m[sessions[i]] });
+  }
+  return rows;
+}
+
+setInterval(() => {
+  if (!intlClosesDirty) return;
+  intlClosesDirty = false;
+  try {
+    fs.writeFileSync(INTL_CLOSES_PATH, JSON.stringify(intlOfficialCloses), 'utf-8');
+  } catch (e) {
+    console.error('[intl-closes] write fail:', e.message);
+  }
+}, 60_000);
+
 // 日K数据源分市场路由：
 //   日股 → Yahoo Japan 時系列页（本地可达，官方收盘）
 //   港股 → 腾讯 hk 通道日K（本地可达，官方收盘）
-//   韩股 → Yahoo .KS（官方；不可达时 Naver 兜底，竞价前价有 ~0.4% 偏差）
-//   台股 → Yahoo .TW（官方；不可达时无兜底，前端回落今日实时）
+//   韩股 → Naver 移动端 /price 涨跌额锚定反推官方收盘（本地可达，见其函数注释）
+//   台股 → 本地累积的官方收盘存储；未积累前回落 Yahoo 代理，再无则今日实时
 function fetchIntlYdayRows(sym) {
   if (JP_STOCKS_SET.has(sym)) return fetchYahooJapanDaily(sym);
   if (HK_STOCKS_SET.has(sym)) return fetchTencentHkDaily(sym);
-  if (TW_STOCKS_SET.has(sym)) return fetchYahooChartDaily(sym + '.TW', 8);
-  if (KR_STOCKS.has(sym)) {
-    return (async () => {
-      const rows = await fetchYahooChartDaily(sym + '.KS', 9);
-      if (rows && rows.length) return rows;
-      return fetchNaverStockDaily(sym);
-    })();
+  if (KR_STOCKS.has(sym)) return fetchNaverMobilePriceOfficial(sym);
+  if (TW_STOCKS_SET.has(sym)) {
+    const rows = twOfficialRows(sym);
+    if (rows.length) return Promise.resolve(rows);
+    return fetchYahooChartDaily(sym + '.TW', 8);
   }
   return Promise.resolve(null);
 }
@@ -800,6 +858,10 @@ function attachIntlYday(quote) {
     !JP_STOCKS_SET.has(sym) && !KR_STOCKS.has(sym) &&
     !TW_STOCKS_SET.has(sym) && !HK_STOCKS_SET.has(sym)
   ) return quote;
+  // 台股：累积「当日昨收 = 前一交易日官方收盘」序列
+  if (TW_STOCKS_SET.has(sym) && quote.tradingToday === true && quote.sessionDate) {
+    recordIntlClose(sym, quote.sessionDate, quote.regularMarketPreviousClose);
+  }
   const c = intlYdayRowsCache.get(sym);
   if (c && c.rows && c.rows.length) {
     if (Date.now() - c.ts >= INTL_YDAY_TTL) prefetchIntlYdayRows(sym);
@@ -821,6 +883,7 @@ let xueqiuCookieTs = 0;
 const XUEQIU_COOKIE_TTL = 30 * 60_000;  // 30 分钟
 const xueqiuQuoteCache = new Map();
 const XUEQIU_QUOTE_TTL = 10_000;  // 10 秒
+const XUEQIU_ETF_MAX_LAG_MS = 5 * 60_000;
 
 // 注：雪球夜盘数据不做"距今多少分钟"式的过期判定。
 // 夜盘尾声（约 03:30 ET 后）成交稀少，推送间隔会自然拉长，但最后一条仍是
@@ -1317,17 +1380,18 @@ function computeOvernightQuote({
     (!sina?.afterHoursPrice || Math.abs(yahooFullday - sina.afterHoursPrice) > 1e-4);
 
   // 雪球夜盘（富途同款 Blue Ocean 通道）是否可用：
-  //   判据 = 时间戳落在"本轮夜盘"内（30 分钟时钟容差），而不是"距今多少分钟"。
-  //   夜盘尾声成交稀少导致推送间隔变长，不代表数据失效。
+  //   个股 = 时间戳落在"本轮夜盘"内；指数 ETF 有连续期货代理，雪球滞后时改用期货。
   const xqTs = xq && xq.timestampNight != null ? xq.timestampNight : null;
+  const xqAge = xqTs ? Date.now() - xqTs : Infinity;
   const xqInSession = xqTs != null && xqTs >= overnightSessionStart - 30 * 60000;
+  const xqFreshEnough = !etfFut || xqAge <= XUEQIU_ETF_MAX_LAG_MS;
   const xqPrice = xq && xq.currentNight != null ? xq.currentNight : null;
 
   let chg = null;
   let price = null;
   let source = null;
 
-  if (xqInSession && xqPrice != null && closeForOvernight > 0) {
+  if (xqInSession && xqFreshEnough && xqPrice != null && closeForOvernight > 0) {
     // 雪球自带的 percent_night_session 即"相对正股收盘价"的夜盘涨跌幅，
     // 与富途 App 完全同口径，优先直接采用，避免自行换算再引入偏差。
     chg = isFinite(xq.percentNight)
