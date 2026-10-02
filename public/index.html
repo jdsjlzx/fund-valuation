@@ -1218,7 +1218,9 @@
     .etf-hero-head .etf-live-tag { margin-left: auto; }
     .etf-hero-name { font-size: 13px; font-weight: 700; color: var(--text-primary); }
     .etf-hero-price { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.2px; }
-    .etf-hero-chg { font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .etf-hero-chg { font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; display: inline-flex; flex-direction: column; line-height: 1.25; align-self: center; }
+    .etf-hero-chg b { font-weight: 600; }
+    .etf-hero-chg i { font-style: normal; opacity: .85; }
     .etf-badge {
       display: inline-flex; align-items: center; gap: 4px;
       padding: 1px 6px; border-radius: 9px;
@@ -2539,7 +2541,7 @@ function etfHeroHtml() {
       <div class="etf-hero-head">
         <span class="etf-hero-name">${t.name}</span>
         <span class="etf-hero-price ${cls(chg)}">${price != null ? price.toFixed(3) : '--'}</span>
-        <span class="etf-hero-chg ${cls(chg)}">${q.price != null ? `${q.price - q.prevClose >= 0 ? '+' : ''}${(q.price - q.prevClose).toFixed(3)} (${fmtPct(chg)})` : ''}</span>
+        <span class="etf-hero-chg ${cls(chg)}">${q.price != null ? `<b>${q.price - q.prevClose >= 0 ? '+' : ''}${(q.price - q.prevClose).toFixed(3)}</b><i>(${fmtPct(chg)})</i>` : ''}</span>
         <span class="etf-badge ${band.level}">溢价 ${prem != null ? prem.toFixed(2) + '%' : '—'} · ${band.label}</span>
         <span class="etf-live-tag ${stCls}">${stTxt}</span>
       </div>
