@@ -1233,6 +1233,9 @@
     .etf-badge.high    { color: #f0752e; background: rgba(240,117,46,0.15);  border-color: rgba(240,117,46,0.4); }
     .etf-badge.extreme { color: #ff5f52; background: rgba(232,76,61,0.18);   border-color: rgba(232,76,61,0.5); }
     .etf-badge.neutral { color: var(--text-secondary); background: var(--etf-panel); border-color: var(--border-badge); }
+    .etf-badge.col { flex-direction: column; gap: 0; line-height: 1.3; align-self: center; border-radius: 7px; padding: 2px 7px; text-align: center; }
+    .etf-badge.col b { font-weight: 700; }
+    .etf-badge.col i { font-style: normal; opacity: .85; }
 
     /* ── 今日操作建议（按等级高亮） ── */
     .etf-advice {
@@ -2542,7 +2545,7 @@ function etfHeroHtml() {
         <span class="etf-hero-name">${t.name}</span>
         <span class="etf-hero-price ${cls(chg)}">${price != null ? price.toFixed(3) : '--'}</span>
         <span class="etf-hero-chg ${cls(chg)}">${q.price != null ? `<b>${q.price - q.prevClose >= 0 ? '+' : ''}${(q.price - q.prevClose).toFixed(3)}</b><i>(${fmtPct(chg)})</i>` : ''}</span>
-        <span class="etf-badge ${band.level}">溢价 ${prem != null ? prem.toFixed(2) + '%' : '—'} · ${band.label}</span>
+        <span class="etf-badge col ${band.level}"><b>溢价 ${prem != null ? prem.toFixed(2) + '%' : '—'}</b><i>${band.label}</i></span>
         <span class="etf-live-tag ${stCls}">${stTxt}</span>
       </div>
     </div>`;
