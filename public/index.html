@@ -1152,7 +1152,7 @@ const CN_NAME = {
 //   0 SZ A-share   1 SH A-share
 //   KR (synthetic)  Korean KRX, fetched via Naver Finance
 //   JP (synthetic)  Japan TSE, fetched via Tencent Finance
-const COVERED_MARKETS = new Set(['105', '106', '107', '116', '0', '1', 'KR', 'JP', 'INDEX']);
+const COVERED_MARKETS = new Set(['105', '106', '107', '116', '0', '1', 'KR', 'JP', 'TW', 'INDEX']);
 const CNY_MARKETS     = new Set(['0', '1']);  // A-shares are already in CNY
 function isCovered(h) { return COVERED_MARKETS.has(String(h.market)); }
 function isCnyHolding(h) { return CNY_MARKETS.has(String(h.market)); }
@@ -1165,6 +1165,7 @@ function marketTag(m) {
   if (m === '1') return 'A股·沪';
   if (m === 'JP') return '日股';
   if (m === 'KR') return '韩股';
+  if (m === 'TW') return '台股';
   return '';
 }
 
@@ -1233,10 +1234,17 @@ function effectiveChange(q, opts = {}) {
   const mode = opts.mode || 'default';
   const s = q.marketState;
 
-  // 休市日（节假日/周末）：行情源仍在返回"上一交易日"的收盘与涨跌幅。
-  // 在 24h 视图里这个值代表的是"本时段涨跌"，用上一交易日的数据会张冠李戴
-  // （例：A 股国庆休市，却显示 9/30 的涨幅），故按 0 计。
-  if (mode === '24h' && q.tradingToday === false) return 0;
+  // 收盘估值(default)视图：日韩股按「昨日涨跌幅」计（后端 yesterdayChangePercent）。
+  // QDII 基金净值 T+2 滞后（实测 457001 等最新净值仅到 9/29），昨日日韩 session
+  // 的涨跌尚未计入净值；若用今日盘中实时值会把昨日大涨跌完全漏掉
+  // （例：三星电子 10.1 +2.4%，今日盘中仅 +0.2%）。24h 视图仍用实时值。
+  if (mode !== '24h' && q.yesterdayChangePercent != null) return q.yesterdayChangePercent;
+
+  // 休市日（节假日/周末）：行情源仍在返回"上一交易日"的收盘与涨跌幅，
+  // 直接采用会把上一交易日的涨跌误报成今日涨跌
+  // （例：10.2 A 股国庆休市，估值里却计入了 9.30 的涨跌幅）。
+  // 收盘估值(default)与 24h 视图统一口径：该市场今日无交易 → 按 0 计。
+  if (q.tradingToday === false) return 0;
 
   // 现货指数报价（znb_ 通道，如 NDXTMC）：仅美股盘中存在实时变动，
   // 盘前/夜盘/盘后没有真实净值变化 → 按 0（不参与盘前估值）
@@ -2072,15 +2080,18 @@ function renderDetail(idx, mode) {
     // 夜盘实测源（雪球/Yahoo）不可用时的回退值来自期货/β 模型，标注"≈"避免误认为实时价
     const approx = !!(mode === '24h' && q && q.marketState === 'OVERNIGHT' && q.overnightEstimated);
     // 休市（节假日/周末）：该市场今日无交易，涨幅按 0 计，并标注出来避免误解
-    const closed = !!(mode === '24h' && q && q.tradingToday === false);
+    const closed = !!(q && q.tradingToday === false);
     const closedTip = closed ? `该市场今日休市，涨幅按 0 计（行情源最近报价日 ${q.sessionDate}）` : '';
+    // 日韩股收盘估值按「昨日涨跌幅」计（QDII 净值 T+2 滞后，昨日行情尚未计入净值）
+    const ydayTip = (mode !== '24h' && q && q.yesterdayChangePercent != null)
+      ? `日韩股按昨日(${q.yesterdayDate})涨跌幅计：QDII净值T+2滞后，昨日行情尚未计入最新净值` : '';
     // 夜盘实测值：夜盘尾声成交稀少，数据可能滞后数十分钟，标注成交时间避免被误读为实时
     const nightAsOf = (mode === '24h' && !approx && q && q.marketState === 'OVERNIGHT' && q.overnightAsOf)
       ? q.overnightAsOf : null;
     const nightTip = nightAsOf
       ? `夜盘成交价（富途同源口径），数据时间 ${fmtEtHm(nightAsOf)}${q.overnightLagMin > 1 ? `，约 ${q.overnightLagMin} 分钟前` : ''}`
       : '';
-    const chgTip = approx ? '夜盘实时源暂不可用，此值为模型估算' : (nightTip || closedTip);
+    const chgTip = approx ? '夜盘实时源暂不可用，此值为模型估算' : (nightTip || closedTip || ydayTip);
     const tag = marketTag(h.market);
     return `
       <div class="holding-row">

@@ -151,11 +151,15 @@ function parseHoldingsTable(tableHtml) {
         // 已全量核验 26 只基金的全持仓：裸 6 位代码无一是 A 股（A 股均带行情链接）
         market = 'KR';
       } else {
-        const jp = ticker.match(/^(\d{3,4}[A-Z]?)(?:JT|JP)?$/);
+        // 日股代码在天天基金持仓表里常带 JT/JP 后缀（6976JT、285AJT、6871JP），直接剥离。
+        // 裸 4 位数字代码台/日难分（2330 台积电 vs 日 Forside 同码撞车）→ 标记 AMBIG，
+        // 拉取完后用 resolveAmbiguousMarket 在线判别（见下方）。
+        const jp = ticker.match(/^(\d{3,4}[A-Z]?)(?:JT|JP)$/);
         if (jp) {
-          // 东京交易所代码：6976JT→6976、285AJT→285A、6871JP→6871
           market = 'JP';
           ticker = jp[1];
+        } else if (/^\d{4}$/.test(ticker)) {
+          market = 'AMBIG';
         }
       }
     }
@@ -166,6 +170,106 @@ function parseHoldingsTable(tableHtml) {
     rows.push({ s: ticker, w, name_cn: stripTags(nameCell), market });
   }
   return rows;
+}
+
+// ──────────────────────────────────────────
+//  裸 4 位数字代码的市场判别（台股 vs 日股）
+//  天天基金持仓表对台/日股都不带行情链接（data-texch 为空），代码同为 4 位数字，
+//  且台日存在同码撞车（2330: 台积电 / 日 Forside；5706: 三井金属 / 台 凤凰），
+//  直接按前缀路由会拿到完全不相干公司的行情。判别链（结果全局缓存）：
+//    1) 东财 suggest 接口（按代码 + 按名称双查，取 Code 恰好等于本代码的
+//       176日/177韩/178台条目）。178 台股条目名称为简体，可与持仓名直接比对；
+//       多市场撞码时选名称吻合的一侧。
+//    2) TWSE 实时通道存在性 + 繁简归一化名称比对：代码在 TWSE 存在且名称
+//       吻合 → 台股；存在但名称不符（撞码日股）或不存在 → 日股。
+// ──────────────────────────────────────────
+const MARKET_BY_MKTNUM = { 176: 'JP', 177: 'KR', 178: 'TW' };
+const AMBIG_MARKET = 'AMBIG';
+const ambigMarketCache = new Map();  // `ticker|name` → market
+
+const TRAD_SIMP = {
+  電: '电', 積: '积', 興: '兴', 發: '发', 廣: '广', 億: '亿', 廠: '厂', 業: '业',
+  鳳: '凤', 勝: '胜', 龍: '龙', 華: '华', 達: '达', 聯: '联', 創: '创', 為: '为',
+  國: '国', 臺: '台', 灣: '湾', 豐: '丰', 順: '顺', 訊: '讯', 網: '网', 證: '证',
+  隆: '隆', 鴻: '鸿', 遠: '远', 東: '东', 陽: '阳', 實: '实', 環: '环', 營: '营',
+};
+function normCn(s) {
+  return String(s || '')
+    .split('')
+    .map((ch) => TRAD_SIMP[ch] || ch)
+    .join('')
+    .replace(/[-–].*$/, '');   // 剥离 "-KY" 等挂牌后缀
+}
+
+async function emSuggest(input) {
+  const url =
+    `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(input)}` +
+    `&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=10`;
+  const txt = await httpGet(url, { Referer: 'https://quote.eastmoney.com/' });
+  let j;
+  try { j = JSON.parse(txt); } catch { return []; }
+  return (j && j.QuotationCodeTable && j.QuotationCodeTable.Data) || [];
+}
+
+function nameMatches(a, b) {
+  const x = normCn(a), y = normCn(b);
+  return !!(x && y && (x === y || x.includes(y) || y.includes(x)));
+}
+
+async function resolveAmbiguousMarket(ticker, nameCn) {
+  const key = `${ticker}|${nameCn}`;
+  if (ambigMarketCache.has(key)) return ambigMarketCache.get(key);
+
+  let decided = false;
+  let result = 'JP';  // 兜底：日股（腾讯 jp 通道对绝大多数 4 位代码有行情）
+
+  // 1) 东财 suggest：按代码 + 按名称双查，收集 Code 精确匹配的 176/177/178 条目。
+  //    注意 suggest 排序不稳定（同一查询 178 台积电 时有时无），单候选不可直接采信，
+  //    只有名称与持仓名吻合的候选才作数；否则继续 TWSE 判别。
+  const cands = new Map();  // market → name
+  try {
+    for (const input of [ticker, nameCn]) {
+      for (const d of await emSuggest(input)) {
+        if (d.Code === ticker && MARKET_BY_MKTNUM[d.MktNum]) {
+          cands.set(MARKET_BY_MKTNUM[d.MktNum], d.Name || '');
+        }
+      }
+    }
+  } catch (e) {
+    console.warn(`  [ambig] suggest 查询失败 ${ticker}:`, e.message);
+  }
+  for (const [mkt, nm] of cands) {
+    if (nameMatches(nm, nameCn)) { result = mkt; decided = true; break; }
+  }
+
+  // 2) TWSE 存在性 + 名称比对（台股在 TWSE 有行、名称繁简归一后与持仓名吻合）
+  if (!decided) {
+    try {
+      const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_${ticker}.tw&json=1&delay=0`;
+      const txt = await httpGet(url, { Referer: 'https://mis.twse.com.tw/' });
+      let j;
+      try { j = JSON.parse(txt); } catch { j = null; }
+      const row = j && (j.msgArray || []).find((m) => m.c === ticker);
+      if (row && parseFloat(row.y) > 0 && nameMatches(row.n || row.nf, nameCn)) {
+        result = 'TW';
+      }
+      // TWSE 不存在该代码 / 名称不符 → 维持日股兜底
+    } catch (e) {
+      console.warn(`  [ambig] TWSE 查询失败 ${ticker}:`, e.message);
+    }
+  }
+
+  ambigMarketCache.set(key, result);
+  return result;
+}
+
+async function resolveAmbiguousHoldings(holdings) {
+  const ambig = holdings.filter((h) => h.market === AMBIG_MARKET);
+  for (const h of ambig) {
+    h.market = await resolveAmbiguousMarket(h.s, h.name_cn || '');
+    await new Promise((r) => setTimeout(r, 150));  // 判别接口节流
+  }
+  return ambig.length;
 }
 
 function parseAllSections(text) {
@@ -292,6 +396,9 @@ async function fetchFundHoldings(code) {
   let holdings = fullReport
     ? mergeLatestWithFull(latest, fullReport)
     : cleanHoldings(latest.holdings, 'latest_report');
+
+  // 裸 4 位代码（台/日难分）在线判别市场，必须在剔除 other 之前完成
+  await resolveAmbiguousHoldings(holdings);
 
   // 剔除无法定价的市场（other）：它们进了 coverageWeight 却算不出涨跌，
   // 会造成「声称覆盖但实际没算」的系统性偏差

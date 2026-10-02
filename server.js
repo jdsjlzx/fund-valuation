@@ -79,6 +79,8 @@ let fundsCacheTs = 0;
 const tickerMarket = {};   // US ticker → eastmoney market id (105/106/107), built from holdings
 const JP_STOCKS_SET = new Set();  // 日股，从 holdings market=JP 填充，用腾讯行情
 const KR_STOCKS = new Set(['000660', '005930']);  // 韩股，腾讯 kr 通道；从 holdings market=KR 动态补充
+const TW_STOCKS_SET = new Set();  // 台股，从 holdings market=TW 填充，用 TWSE 行情
+const HK_STOCKS_SET = new Set();  // 港股（5位代码），新浪行情；日K走腾讯 hk 通道
 
 function loadHoldingsFromFile() {
   const filePath = path.join(__dirname, 'data', 'holdings.json');
@@ -96,6 +98,8 @@ function loadHoldingsFromFile() {
       if (m === '105' || m === '106' || m === '107') tickerMarket[h.s] = m;
       if (m === 'JP') JP_STOCKS_SET.add(h.s);
       if (m === 'KR') KR_STOCKS.add(h.s);
+      if (m === 'TW') TW_STOCKS_SET.add(h.s);
+      if (m === '116') HK_STOCKS_SET.add(h.s);
     }
   }
   console.log(`[funds] loaded ${fundsCache.length} funds from data/holdings.json`);
@@ -126,7 +130,8 @@ const YAHOO_EXT_TTL = 60_000;
 function isKoreanSymbol(s) { return KR_STOCKS.has(s); }
 
 // 台股: 用 TWSE 官方 API (mis.twse.com.tw)，无频率限制
-function isTaiwanSymbol(s) { return /\.TW$/i.test(s); }
+// 代码来源：holdings market=TW（裸 4 位数字代码）或 .TW 后缀符号
+function isTaiwanSymbol(s) { return TW_STOCKS_SET.has(s) || /\.TW$/i.test(s); }
 // 日股: market=JP，用腾讯行情 qt.gtimg.cn
 function isJapanSymbol(s) { return JP_STOCKS_SET.has(s); }
 // Yahoo Finance: 新加坡 (.SI) 等其他国际市场
@@ -240,6 +245,7 @@ function parseNaverQuote(json, ticker) {
   const changePct = sign * Math.abs(parseNum(json.fluctuationsRatio) || 0);
   const prevClose = price - changeAbs;
 
+  const tradedAtMs = Date.parse(json.localTradedAt);
   return withTradingDay({
     symbol: ticker,
     regularMarketPrice: price,
@@ -248,6 +254,7 @@ function parseNaverQuote(json, ticker) {
     preMarketChangePercent: changePct,
     postMarketChangePercent: 0,
     marketState: json.marketStatus === 'OPEN' ? 'REGULAR' : 'CLOSED',
+    sourceTimeMs: isFinite(tradedAtMs) ? tradedAtMs : null,
   }, 'KR', json.localTradedAt);
 }
 
@@ -261,6 +268,9 @@ async function fetchKoreanQuote(ticker) {
 //  ticker 格式: "2330.TW"  → ex_ch: "tse_2330.tw"
 // ──────────────────────────────────────────
 async function fetchTaiwanQuotes(symbols) {
+  // symbols 可能是裸 4 位代码（holdings market=TW）或 "2330.TW" 式符号；
+  // 返回的 symbol 保持请求时的原样，确保与前端 qmap 键一致
+  const codeToSym = new Map(symbols.map((s) => [s.replace(/\.TW$/i, ''), s]));
   // 默认 tse_ (上市)，OTC 上柜用 otc_
   const exCh = symbols.map((s) => {
     const code = s.replace(/\.TW$/i, '');
@@ -273,10 +283,29 @@ async function fetchTaiwanQuotes(symbols) {
   const arr = (j && j.msgArray) || [];
   return arr.map((m) => {
     const code = m.c;
-    const sym = `${code}.TW`;
-    const price = parseFloat(m.z);
+    if (!code) return null;
+    const sym = codeToSym.get(code) || `${code}.TW`;
+    // z 为最新成交价，但逐笔交易间隔期会闪现为 '-'；此时最新一笔成交价在 trade.z 里
+    let price = (m.z && m.z !== '-') ? parseFloat(m.z)
+              : (m.trade && m.trade.z) ? parseFloat(m.trade.z)
+              : NaN;
     const prev  = parseFloat(m.y);
-    if (isNaN(price) || isNaN(prev) || price <= 0) return null;
+    if (isNaN(price) || price <= 0) {
+      // 迟迟无成交：用昨收兜底显示 0 涨跌
+      if (!isNaN(prev) && prev > 0) {
+        return withTradingDay({
+          symbol: sym,
+          regularMarketPrice: prev,
+          regularMarketChangePercent: 0,
+          regularMarketPreviousClose: prev,
+          preMarketChangePercent: 0,
+          postMarketChangePercent: 0,
+          marketState: 'REGULAR',
+        }, 'TW', m.d);
+      }
+      return null;
+    }
+    if (isNaN(prev) || prev <= 0) return null;
     const chgPct = ((price - prev) / prev) * 100;
     return withTradingDay({
       symbol: sym,
@@ -358,7 +387,11 @@ async function fetchYahooQuote(symbol) {
 // ──────────────────────────────────────────
 async function fetchYahooFulldayOne(symbol) {
   const cached = yahooExtCache.get(symbol);
-  if (cached && Date.now() - cached.ts < YAHOO_EXT_TTL) return cached.data;
+  if (cached) {
+    // hardUntil: 限流/被墙的硬退避截止时间，期间直接返回缓存(null)，不再重试
+    if (cached.hardUntil && Date.now() < cached.hardUntil) return cached.data;
+    if (Date.now() - cached.ts < YAHOO_EXT_TTL) return cached.data;
+  }
 
   const url =
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
@@ -367,11 +400,17 @@ async function fetchYahooFulldayOne(symbol) {
   try {
     text = await httpGetWithStatus(url, { Accept: 'application/json' });
   } catch (e) {
-    // Yahoo 429/503 限流：backoff 5 分钟；其他错误 backoff 30s
+    // Yahoo 429/503 限流：backoff 5 分钟
+    // 403（出口网络被墙）：硬退避 1 小时 —— 被墙网络下不退避会造成每次冷启动
+    // 重扫全部美股符号，/api/quotes 阻塞数十秒（首页转圈的主因之一）
     const isRateLimited = /HTTP\s+(429|503)/i.test(e.message);
+    const isBlocked = /HTTP\s+403/i.test(e.message);
     if (isRateLimited) {
       console.warn('[yahoo-ext]', symbol, 'rate limited, backoff 5min');
-      yahooExtCache.set(symbol, { data: null, ts: Date.now() - YAHOO_EXT_TTL * 5 / 6 });
+      yahooExtCache.set(symbol, { data: null, ts: Date.now(), hardUntil: Date.now() + 5 * 60_000 });
+    } else if (isBlocked) {
+      console.error('[yahoo-ext]', symbol, 'blocked(403), backoff 1h');
+      yahooExtCache.set(symbol, { data: null, ts: Date.now(), hardUntil: Date.now() + 60 * 60_000 });
     } else {
       console.error('[yahoo-ext]', symbol, 'http fail:', e.message);
       yahooExtCache.set(symbol, { data: null, ts: Date.now() - YAHOO_EXT_TTL / 2 });
@@ -467,12 +506,13 @@ async function fetchJapanQuotes(symbols) {
 }
 
 // ──────────────────────────────────────────
-//  Tencent fetcher (Korean stocks) — 韩股主源
+//  Tencent fetcher (Korean stocks) — 韩股收盘后主源
 //  背景：Naver 的 /basic 与 fchart 日线在收盘后都不会更新为 15:30 KST 定盘价，
 //        而是冻结在收盘竞价开始前（约 15:20）的最后成交价 —— 实测三星电子
 //        2026-10-01 定盘 276000(+2.79%)，Naver 始终返回 273000(+1.68%)。
-//        腾讯 qt.gtimg.cn 的 kr 前缀通道返回定盘价（东财"收涨2.79%"与之吻合），
-//        故韩股主源切到腾讯，Naver 降为兜底。
+//        腾讯 qt.gtimg.cn 的 kr 前缀通道返回定盘价（东财"收涨2.79%"与之吻合）。
+//        但腾讯 kr 通道盘中更新滞后数十分钟（实测冻结于 25 分钟前），盘中不实时，
+//        故与 Naver 在 /api/quotes 中按 sourceTimeMs 择新合并（盘中用 Naver 实时价）。
 //  字段与日股同构: [3]现价 [4]昨收；[30]为日期时间，注意是**北京时间**(KST-1h)
 // ──────────────────────────────────────────
 async function fetchTencentKrQuotes(symbols) {
@@ -492,6 +532,7 @@ async function fetchTencentKrQuotes(symbols) {
     const dateField = fields.find((f) => /^\d{4}-\d{2}-\d{2}[ T]/.test(f));
     // 时区偏移传 8（北京时间）：腾讯收盘后时间戳定格在收盘时刻（北京 14:30 = KST 15:30），
     // 若按 KR(+9) 判定，北京时间 23:00 后 KST 已跨日，会把"今日已交易"误判为休市
+    const tMs = Date.parse(String(dateField || '').replace(' ', 'T') + '+08:00');
     map[sym] = withTradingDay({
       symbol: sym,
       regularMarketPrice: price,
@@ -500,9 +541,274 @@ async function fetchTencentKrQuotes(symbols) {
       preMarketChangePercent: chgPct,
       postMarketChangePercent: 0,
       marketState: 'REGULAR',
+      sourceTimeMs: isFinite(tMs) ? tMs : null,
     }, 8, dateField);
   }
   return map;
+}
+
+// ──────────────────────────────────────────
+//  日韩股「昨日涨跌幅」(yesterdayChangePercent) —— 收盘估值视图用
+//  背景：QDII 基金净值 T+2 滞后（实测 457001/539002 等最新净值仅到 9/29），
+//        昨日日韩 session 的涨跌尚未计入净值。估值若用今日盘中实时值，
+//        会把昨日的大涨跌完全漏掉（例：三星电子 10.1 +2.4%，今日盘中仅 +0.2%）。
+//        故 default(收盘) 视图日韩股按昨日涨跌幅计，由前端 effectiveChange 使用。
+//  口径：昨日收盘优先用行情源实时「昨收」（腾讯定盘口径，官方值），
+//        前日收盘取自日K。Naver 日K不含 15:30 KST 收盘竞价定盘价（实测
+//        三星 10.1 Naver=274500 vs 官方定盘=276000），故昨日收盘不用日K值；
+//        前日收盘暂无官方源（KRX/雅虎/Daum 均不可达），残余误差 ~0.3-0.4%。
+//        日股 Yahoo Japan 日K为东证官方收盘（已与腾讯昨收交叉核验），无此问题。
+//  数据源（当前网络出口实测）：
+//    韩股：Naver siseJson 日K（与 KOSPI 同款接口）
+//    日股：Yahoo Japan 時系列页 —— Next.js RSC payload 内嵌完整日K，服务端渲染无需 JS
+//  K线行缓存 30 分钟（昨日K线日内不变）；后台预取，绝不阻塞行情响应。
+// ──────────────────────────────────────────
+const INTL_YDAY_TTL = 30 * 60_000;         // K线行缓存时长
+const INTL_YDAY_FAIL_BACKOFF = 5 * 60_000; // 取数失败后的重试间隔
+const INTL_YDAY_TZ = 9;                    // 日韩均为 UTC+9
+const intlYdayRowsCache = new Map();       // sym → { rows, ts, inflight }
+const intlYdayQueue = [];
+let intlYdayActive = 0;
+const INTL_YDAY_CONCURRENCY = 2;           // Yahoo Japan 突发并发会断连，保守并发
+const INTL_YDAY_REQ_GAP = 400;             // 相邻请求间隔(ms)
+
+// 韩股日K：Naver siseJson（行格式同 KOSPI，见 fetchNaverIndexKline）
+async function fetchNaverStockDaily(symbol, days = 20) {
+  const start = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10).replace(/-/g, '');
+  const url =
+    `https://api.finance.naver.com/siseJson.naver` +
+    `?symbol=${encodeURIComponent(symbol)}&requestType=1` +
+    `&startTime=${start}&endTime=20501231&timeframe=day`;
+  const txt = await httpGet(url, { 'Accept-Language': 'ko-KR,en;q=0.9' });
+  const rows = [];
+  const re = /\["(\d{8})"\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/g;
+  let m;
+  while ((m = re.exec(txt)) !== null) {
+    rows.push({ date: `${m[1].slice(0, 4)}-${m[1].slice(4, 6)}-${m[1].slice(6, 8)}`, close: parseFloat(m[5]) });
+  }
+  rows.sort((a, b) => a.date.localeCompare(b.date));
+  return rows;
+}
+
+// 从文本中按括号配对提取 JSON 数组/对象（跳过字符串内的括号）
+function extractJsonAt(text, startIdx) {
+  let depth = 0, inStr = false, esc = false;
+  for (let i = startIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '[' || ch === '{') depth++;
+    else if (ch === ']' || ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(startIdx, i + 1);
+    }
+  }
+  return null;
+}
+
+// 日股日K：Yahoo Japan 時系列页，日K在 Next.js RSC payload 的 "histories" 数组里
+// values 顺序：始値/高値/安値/終値/出来高，收盘取 values[3]（已与腾讯昨收交叉核验）
+// 注意： finance.yahoo.co.jp 对突发并发会直接 socket hang up，失败需退避重试
+async function fetchYahooJapanDaily(symbol) {
+  const url =
+    `https://finance.yahoo.co.jp/quote/${encodeURIComponent(symbol)}.T/history?period=1M&term=daily`;
+  let html;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      html = await httpGet(url, { Accept: 'text/html,application/xhtml+xml' });
+      if (html && html.length > 10000) break;
+      html = null;
+    } catch (e) {
+      if (attempt > 0) throw e;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+  if (!html) return [];
+  let merged = '';
+  const re = /self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    try { merged += JSON.parse('"' + m[1] + '"'); } catch { /* 忽略坏块 */ }
+  }
+  const i = merged.indexOf('"histories"');
+  if (i < 0) return [];
+  const arrTxt = extractJsonAt(merged, merged.indexOf('[', i));
+  if (!arrTxt) return [];
+  let arr;
+  try { arr = JSON.parse(arrTxt); } catch { return []; }
+  const rows = (Array.isArray(arr) ? arr : []).map((h) => ({
+    date: h && h.date,
+    close: parseFloat(String((h.values && h.values[3] && h.values[3].value) || '').replace(/,/g, '')),
+  })).filter((r) => r.date && isFinite(r.close));
+  rows.sort((a, b) => a.date.localeCompare(b.date));   // histories 为日期降序，统一转升序
+  return rows;
+}
+
+// 昨日涨跌幅（结合行情源 quote 对齐官方昨收）：
+//   A. 行情源停在昨日 session（今日休市/未开盘）：腾讯价 = 昨日官方收盘、
+//      昨收 = 前日官方收盘 → 行情源涨跌幅即昨日官方涨跌幅
+//   B. 昨日无K线（休市）且不符 A → 0
+//   C. 昨日有K线：昨日收盘用 quote.昨收（官方，tradingToday 时对齐昨日），
+//      日K值兜底；前日收盘取日K。缺前收基准 → null（不附加字段）
+function calcYesterdayChange(rows, quote, tzOffsetHours) {
+  const yKey = new Date(Date.now() + tzOffsetHours * 3600_000 - 86400_000).toISOString().slice(0, 10);
+  if (
+    quote && quote.tradingToday === false && quote.sessionDate === yKey &&
+    isFinite(quote.regularMarketChangePercent)
+  ) {
+    return { pct: quote.regularMarketChangePercent, date: yKey };
+  }
+  const idx = rows.findIndex((r) => r.date === yKey);
+  if (idx < 0) return { pct: 0, date: yKey };
+  if (idx === 0) return null;
+  let yClose = rows[idx].close;
+  if (
+    quote && quote.tradingToday === true &&
+    isFinite(quote.regularMarketPreviousClose) && quote.regularMarketPreviousClose > 0
+  ) {
+    yClose = quote.regularMarketPreviousClose;
+  }
+  const prevClose = rows[idx - 1].close;
+  if (!isFinite(yClose) || !isFinite(prevClose) || prevClose <= 0) return null;
+  return { pct: (yClose / prevClose - 1) * 100, date: yKey };
+}
+
+// ──────────────────────────────────────────
+//  Yahoo 官方日K（韩股 .KS / 台股 .TW）—— 收盘价为交易所官方定盘口径
+//  本地网络出口访问 query1 Yahoo 被墙(403)：直连失败时走已部署的 Render 实例
+//  代理（其出口可达 Yahoo，见 /api/_hist 端点）；在 Render 上运行时直连即命中。
+// ──────────────────────────────────────────
+const HIST_PROXY_URL = process.env.HIST_PROXY_URL || 'https://fund-valuation-m37d.onrender.com';
+const histProxyCache = new Map();   // sym → { rows, ts }（含失败退避）
+const HIST_PROXY_TTL = 10 * 60_000;
+const HIST_PROXY_FAIL_BACKOFF = 5 * 60_000;
+
+function parseYahooChart(j, tzOffsetHours) {
+  const result = j && j.chart && j.chart.result && j.chart.result[0];
+  if (!result || !result.timestamp) return [];
+  const closes = (result.indicators && result.indicators.quote && result.indicators.quote[0] && result.indicators.quote[0].close) || [];
+  const rows = [];
+  for (let i = 0; i < result.timestamp.length; i++) {
+    const c = closes[i];
+    if (c == null || !isFinite(c)) continue;
+    rows.push({ date: new Date(result.timestamp[i] * 1000 + tzOffsetHours * 3600_000).toISOString().slice(0, 10), close: c });
+  }
+  rows.sort((a, b) => a.date.localeCompare(b.date));
+  return rows;
+}
+
+async function fetchYahooChartDaily(fullSym, tzOffsetHours) {
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(fullSym)}` +
+    `?interval=1d&range=1mo`;
+  try {
+    const text = await httpGetWithStatus(url, { Accept: 'application/json' });
+    return parseYahooChart(JSON.parse(text), tzOffsetHours);
+  } catch (e) {
+    // 本地出口被墙 → 走部署实例代理
+  }
+  const cached = histProxyCache.get(fullSym);
+  if (cached) {
+    if (cached.rows) return cached.rows;
+    if (Date.now() - cached.ts < HIST_PROXY_FAIL_BACKOFF) return [];
+  }
+  try {
+    const proxyUrl = `${HIST_PROXY_URL}/api/_hist?symbol=${encodeURIComponent(fullSym)}&tz=${tzOffsetHours}`;
+    const text = await httpGet(proxyUrl, { Accept: 'application/json' });
+    const j = JSON.parse(text);
+    const rows = (j && j.rows) || [];
+    histProxyCache.set(fullSym, { rows: rows.length ? rows : null, ts: Date.now() });
+    return rows;
+  } catch (e) {
+    histProxyCache.set(fullSym, { rows: null, ts: Date.now() });
+    console.warn('[hist-proxy]', fullSym, e.message);
+    return [];
+  }
+}
+
+// 日K数据源分市场路由：
+//   日股 → Yahoo Japan 時系列页（本地可达，官方收盘）
+//   港股 → 腾讯 hk 通道日K（本地可达，官方收盘）
+//   韩股 → Yahoo .KS（官方；不可达时 Naver 兜底，竞价前价有 ~0.4% 偏差）
+//   台股 → Yahoo .TW（官方；不可达时无兜底，前端回落今日实时）
+function fetchIntlYdayRows(sym) {
+  if (JP_STOCKS_SET.has(sym)) return fetchYahooJapanDaily(sym);
+  if (HK_STOCKS_SET.has(sym)) return fetchTencentHkDaily(sym);
+  if (TW_STOCKS_SET.has(sym)) return fetchYahooChartDaily(sym + '.TW', 8);
+  if (KR_STOCKS.has(sym)) {
+    return (async () => {
+      const rows = await fetchYahooChartDaily(sym + '.KS', 9);
+      if (rows && rows.length) return rows;
+      return fetchNaverStockDaily(sym);
+    })();
+  }
+  return Promise.resolve(null);
+}
+
+function pumpIntlYdayQueue() {
+  while (intlYdayActive < INTL_YDAY_CONCURRENCY && intlYdayQueue.length) {
+    const sym = intlYdayQueue.shift();
+    const entry = intlYdayRowsCache.get(sym);
+    if (!entry || entry.inflight) continue;
+    entry.inflight = true;
+    intlYdayActive++;
+    (async () => {
+      try {
+        const rows = await fetchIntlYdayRows(sym);
+        if (rows && rows.length) {
+          entry.rows = rows;
+          entry.ts = Date.now();
+          console.log('[intl-yday]', sym, 'rows=' + rows.length, rows[rows.length - 1].date, '~', rows[0].date);
+        } else {
+          entry.ts = Date.now();  // 无历史/解析失败 → 记录尝试时间用于退避
+          console.warn('[intl-yday]', sym, 'empty rows');
+        }
+      } catch (e) {
+        entry.ts = Date.now();
+        console.error('[intl-yday]', sym, e.message);
+      } finally {
+        await new Promise((r) => setTimeout(r, INTL_YDAY_REQ_GAP));
+        entry.inflight = false;
+        intlYdayActive--;
+        pumpIntlYdayQueue();
+      }
+    })();
+  }
+}
+
+function prefetchIntlYdayRows(sym) {
+  let entry = intlYdayRowsCache.get(sym);
+  if (!entry) {
+    entry = { rows: null, ts: 0, inflight: false };
+    intlYdayRowsCache.set(sym, entry);
+  }
+  if (entry.inflight || intlYdayQueue.includes(sym)) return;
+  intlYdayQueue.push(sym);
+  pumpIntlYdayQueue();
+}
+
+// 同步附加：有K线即结合当前行情源计算（官方昨收对齐随行情实时刷新）；
+// 无K线触发后台预取；失败退避期内不重试。绝不阻塞本次响应。
+function attachIntlYday(quote) {
+  const sym = quote.symbol;
+  if (
+    !JP_STOCKS_SET.has(sym) && !KR_STOCKS.has(sym) &&
+    !TW_STOCKS_SET.has(sym) && !HK_STOCKS_SET.has(sym)
+  ) return quote;
+  const c = intlYdayRowsCache.get(sym);
+  if (c && c.rows && c.rows.length) {
+    if (Date.now() - c.ts >= INTL_YDAY_TTL) prefetchIntlYdayRows(sym);
+    const calc = calcYesterdayChange(c.rows, quote, INTL_YDAY_TZ);
+    if (calc) return { ...quote, yesterdayChangePercent: calc.pct, yesterdayDate: calc.date };
+    return quote;
+  }
+  if (!c || Date.now() - c.ts >= INTL_YDAY_FAIL_BACKOFF) prefetchIntlYdayRows(sym);
+  return quote;
 }
 
 // ──────────────────────────────────────────
@@ -1109,26 +1415,35 @@ app.get('/api/quotes', async (req, res) => {
         const m = parseSinaResponse(text, sinaAll);
         return { map: m, list: sinaAll.map((s) => m[s]).filter(Boolean) };
       })(),
-      // 韩股主源：腾讯 kr 通道（收盘后返回 15:30 KST 定盘价）；Naver 兜底
-      // （Naver 的 /basic 与 fchart 收盘后冻结在竞价前价格，见 fetchTencentKrQuotes 注释）
+      // 韩股双源并行，按报价时间戳(sourceTimeMs)取更新者：
+      //   盘中：腾讯 kr 通道滞后数十分钟，Naver 实时 → Naver 胜出
+      //   收盘后：Naver 冻结在 15:20 竞价前旧价，腾讯为 15:30 定盘价 → 腾讯胜出
+      // 单边失败时用另一边兜底
       (async () => {
         if (!krSymbols.length) return [];
-        const tencentKr = await fetchTencentKrQuotes(krSymbols).catch((e) => {
-          console.error('[tencent-kr]', e.message);
-          return {};
-        });
-        const missing = krSymbols.filter((s) => !tencentKr[s]);
-        const naverList = missing.length
-          ? (await Promise.all(
-              missing.map((s) =>
-                fetchKoreanQuote(s).catch((e) => {
-                  console.error('[naver]', s, e.message);
-                  return null;
-                })
-              )
-            )).filter(Boolean)
-          : [];
-        return [...Object.values(tencentKr), ...naverList];
+        const [tencentKr, naverList] = await Promise.all([
+          fetchTencentKrQuotes(krSymbols).catch((e) => {
+            console.error('[tencent-kr]', e.message);
+            return {};
+          }),
+          Promise.all(
+            krSymbols.map((s) =>
+              fetchKoreanQuote(s).catch((e) => {
+                console.error('[naver]', s, e.message);
+                return null;
+              })
+            )
+          ),
+        ]);
+        const naverMap = {};
+        for (const q of naverList) if (q) naverMap[q.symbol] = q;
+        return krSymbols
+          .map((s) => {
+            const t = tencentKr[s], n = naverMap[s];
+            if (t && n) return (n.sourceTimeMs ?? 0) > (t.sourceTimeMs ?? 0) ? n : t;
+            return t || n;
+          })
+          .filter(Boolean);
       })(),
       twSymbols.length
         ? fetchTaiwanQuotes(twSymbols).catch((e) => {
@@ -1308,7 +1623,17 @@ app.get('/api/quotes', async (req, res) => {
       });
     }
 
-    const data = [...mergedEmData, ...puresinaData, ...krData, ...twData, ...jpData, ...yhData];
+    // 日/韩/台/港股附加「昨日涨跌幅」(yesterdayChangePercent)：缓存命中同步附加，
+    // 未命中后台预取（下一轮行情请求即可带上），绝不阻塞本次响应。
+    // puresinaData 里含港股/A股/参考标的，attachIntlYday 按市场集合过滤，非目标市场原样返回
+    const data = [
+      ...mergedEmData,
+      ...puresinaData.map(attachIntlYday),
+      ...krData.map(attachIntlYday),
+      ...twData.map(attachIntlYday),
+      ...jpData.map(attachIntlYday),
+      ...yhData,
+    ];
     if (data.length === 0) throw new Error('No quotes returned');
     quoteCache.set(cacheKey, { data, ts: Date.now() });
     if (diag) {
@@ -1344,6 +1669,39 @@ app.get('/api/quotes', async (req, res) => {
     const stale = quoteCache.get(cacheKey);
     if (stale) return res.json({ success: true, data: stale.data, stale: true });
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ──────────────────────────────────────────
+//  /api/_hist — Yahoo 官方日K代理端点（韩股/台股「昨日涨跌幅」数据源）
+//  本地网络出口访问 Yahoo 被墙(403)时，其他实例可通过本端点取数——
+//  需本端点部署在可达 Yahoo 的环境（如 Render）。
+//  用法: GET /api/_hist?symbol=005930.KS&tz=9 → { symbol, rows:[{date, close}] }
+// ──────────────────────────────────────────
+const HIST_API_CACHE = new Map();  // key → { data, ts }
+const HIST_API_TTL = 10 * 60_000;
+
+app.get('/api/_hist', async (req, res) => {
+  const symbol = String(req.query.symbol || '').trim();
+  const tz = Number(req.query.tz) || 8;
+  if (!/^[A-Za-z0-9.\-]{1,20}$/.test(symbol)) return res.status(400).json({ error: 'bad symbol' });
+  const key = symbol + ':' + tz;
+  const cached = HIST_API_CACHE.get(key);
+  if (cached && Date.now() - cached.ts < HIST_API_TTL) {
+    return res.json(cached.data);
+  }
+  try {
+    const url =
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+      `?interval=1d&range=1mo`;
+    const text = await httpGetWithStatus(url, { Accept: 'application/json' });
+    const rows = parseYahooChart(JSON.parse(text), tz);
+    const out = { symbol, rows };
+    HIST_API_CACHE.set(key, { data: out, ts: Date.now() });
+    res.json(out);
+  } catch (err) {
+    if (cached) return res.json({ ...cached.data, stale: true });
+    res.status(502).json({ error: err.message });
   }
 });
 
@@ -1577,7 +1935,19 @@ async function fetchTencentDayKline(symbol, limit = 120) {
   try { j = JSON.parse(txt); } catch { return []; }
   const sym = j && j.data && j.data[symbol];
   const rows = (sym && (sym.day || sym.qfqday)) || [];
-  return rows.map(r => ({ date: r[0], close: parseFloat(r[1]) }));
+  // 注意 r[1]=开 r[2]=收（曾误用 r[1]，等于拿开盘价算 MACD）
+  return rows.map(r => ({ date: r[0], close: parseFloat(r[2]) }));
+}
+
+// 港股日K（腾讯 hk 前缀通道，官方收盘价）
+async function fetchTencentHkDaily(symbol, limit = 20) {
+  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=hk${symbol},day,,,${limit},qfq`;
+  const txt = await httpGet(url, { Referer: 'https://gu.qq.com/' });
+  let j;
+  try { j = JSON.parse(txt); } catch { return []; }
+  const node = j && j.data && j.data[`hk${symbol}`];
+  const rows = (node && (node.day || node.qfqday)) || [];
+  return rows.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(r => r.date && isFinite(r.close));
 }
 const INDEX_MACD_CACHE = { data: null, ts: 0 };
 const INDEX_MACD_TTL_NORMAL  = 3600_000; // 非交易时间：1小时
