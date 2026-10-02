@@ -1746,7 +1746,7 @@ app.get('/api/quotes', async (req, res) => {
 // ──────────────────────────────────────────
 const HIST_API_CACHE = new Map();  // key → { data, ts }
 const HIST_API_TTL = 10 * 60_000;
-const SECONDARY_HIST_PROXY_URL = process.env.SECONDARY_HIST_PROXY_URL || '';
+const SECONDARY_HIST_PROXY_URL = process.env.SECONDARY_HIST_PROXY_URL || 'https://fund-valuation-yypz.vercel.app';
 
 app.get('/api/_hist', async (req, res) => {
   const symbol = String(req.query.symbol || '').trim();
