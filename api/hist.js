@@ -1,8 +1,9 @@
-// 雅虎官方日K代理 — Vercel Serverless Function
-// 用法: GET /api/_hist?symbol=2330.TW&tz=8 → { symbol, rows: [{date, close}] }
+// 雅虎官方日K代理 — Vercel Serverless Function（仓库根目录 api/，git push 自动部署）
+// 用法: GET /api/hist?symbol=2330.TW&tz=8 → { symbol, rows: [{date, close}] }
 // 背景：主应用部署在 Render（免费层），其出口 IP 被 Yahoo 429 限流；
 //       本函数跑在 Vercel（不同平台 IP 池）兜底取数，仅被 Render 服务端调用。
-export default async function handler(req, res) {
+// 注意：根目录 package.json 为 CommonJS（server.js 用 require），此处用 module.exports。
+module.exports = async (req, res) => {
   const symbol = String(req.query.symbol || '').trim();
   const tz = Number(req.query.tz) || 8;
   if (!/^[A-Za-z0-9.\-]{1,20}$/.test(symbol)) {
@@ -41,4 +42,4 @@ export default async function handler(req, res) {
     }
   }
   return res.status(502).json({ error: lastErr });
-}
+};
