@@ -9,30 +9,36 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'bad symbol' });
   }
   res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=3600');
-  try {
-    const url =
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
-      `?interval=1d&range=1mo`;
-    const r = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
-    });
-    if (!r.ok) return res.status(502).json({ error: `yahoo ${r.status}` });
-    const j = await r.json();
-    const result = j && j.chart && j.chart.result && j.chart.result[0];
-    if (!result || !result.timestamp) return res.status(502).json({ error: 'empty result' });
-    const closes = (result.indicators && result.indicators.quote && result.indicators.quote[0] && result.indicators.quote[0].close) || [];
-    const rows = [];
-    for (let i = 0; i < result.timestamp.length; i++) {
-      const c = closes[i];
-      if (c == null || !isFinite(c)) continue;
-      rows.push({
-        date: new Date(result.timestamp[i] * 1000 + tz * 3600_000).toISOString().slice(0, 10),
-        close: c,
+  // 双主机容灾：query1 失败（限流/抖动）时换 query2 再试
+  const hosts = ['query1.finance.yahoo.com', 'query2.finance.yahoo.com'];
+  let lastErr = 'no host tried';
+  for (const host of hosts) {
+    try {
+      const url =
+        `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}` +
+        `?interval=1d&range=1mo`;
+      const r = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
       });
+      if (!r.ok) { lastErr = `yahoo ${r.status}`; continue; }
+      const j = await r.json();
+      const result = j && j.chart && j.chart.result && j.chart.result[0];
+      if (!result || !result.timestamp) { lastErr = 'empty result'; continue; }
+      const closes = (result.indicators && result.indicators.quote && result.indicators.quote[0] && result.indicators.quote[0].close) || [];
+      const rows = [];
+      for (let i = 0; i < result.timestamp.length; i++) {
+        const c = closes[i];
+        if (c == null || !isFinite(c)) continue;
+        rows.push({
+          date: new Date(result.timestamp[i] * 1000 + tz * 3600_000).toISOString().slice(0, 10),
+          close: c,
+        });
+      }
+      rows.sort((a, b) => a.date.localeCompare(b.date));
+      return res.status(200).json({ symbol, rows });
+    } catch (e) {
+      lastErr = e.message;
     }
-    rows.sort((a, b) => a.date.localeCompare(b.date));
-    return res.status(200).json({ symbol, rows });
-  } catch (e) {
-    return res.status(502).json({ error: e.message });
   }
+  return res.status(502).json({ error: lastErr });
 }
