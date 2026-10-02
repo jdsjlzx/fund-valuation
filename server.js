@@ -1778,7 +1778,10 @@ app.get('/api/_hist', async (req, res) => {
           HIST_API_CACHE.set(key, { data: j, ts: Date.now() });
           return res.json(j);
         }
-      } catch (e2) { /* 二级代理也失败 → 走缓存兜底 */ }
+        return res.status(502).json({ error: err.message, secondary: text.slice(0, 200) });
+      } catch (e2) {
+        return res.status(502).json({ error: err.message, secondary: e2.message });
+      }
     }
     if (cached) return res.json({ ...cached.data, stale: true });
     res.status(502).json({ error: err.message });
