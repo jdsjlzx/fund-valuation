@@ -1265,7 +1265,7 @@
     }
     .etf-advice-head {
       display: flex; align-items: center; gap: 8px;
-      padding: 10px 11px;
+      padding: 5px 11px;
       border-bottom: 1px solid var(--border-header);
       background: linear-gradient(90deg, rgba(255,255,255,0.045), transparent 70%);
     }
@@ -1282,15 +1282,15 @@
     }
     .etf-advice-action {
       margin-left: auto;
-      display: inline-flex; align-items: center; gap: 6px;
-      font-size: 17px; font-weight: 800; letter-spacing: 1px;
-      padding: 8px 18px; border-radius: 9px;
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 15px; font-weight: 800; letter-spacing: 1px;
+      padding: 4px 14px; border-radius: 8px;
       color: #fff !important;
       border: 1px solid rgba(255,255,255,0.34);
       text-shadow: 0 1px 2px rgba(0,0,0,0.3);
       box-shadow: 0 0 20px -4px var(--lv), inset 0 1px 0 rgba(255,255,255,0.28);
     }
-    .etf-advice-action .ic { font-size: 15px; line-height: 1; }
+    .etf-advice-action .ic { font-size: 13px; line-height: 1; }
     .etf-advice.lv-buy .etf-advice-action, .etf-advice.lv-danger .etf-advice-action {
       animation: etfPulseRed 1.7s ease-out infinite;
     }
@@ -1299,20 +1299,20 @@
     }
     @keyframes etfPulseRed   { 0% { box-shadow: 0 0 0 0 rgba(232,76,61,0.5); } 75%, 100% { box-shadow: 0 0 0 10px rgba(232,76,61,0); } }
     @keyframes etfPulseAmber { 0% { box-shadow: 0 0 0 0 rgba(232,160,61,0.45); } 75%, 100% { box-shadow: 0 0 0 10px rgba(232,160,61,0); } }
-    .etf-advice-body { padding: 11px 12px 12px; }
-    .etf-advice-headline { font-size: 14.5px; font-weight: 700; line-height: 1.5; color: var(--text-primary); }
-    .etf-reasons { margin-top: 9px; display: flex; flex-direction: column; gap: 6px; }
-    .etf-reason { display: flex; gap: 7px; font-size: 11px; line-height: 1.55; }
-    .etf-reason-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; margin-top: 5px; }
+    .etf-advice-body { padding: 8px 11px 9px; }
+    .etf-advice-headline { font-size: 13.5px; font-weight: 700; line-height: 1.45; color: var(--text-primary); }
+    .etf-reasons { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+    .etf-reason { display: flex; gap: 7px; font-size: 11px; line-height: 1.45; }
+    .etf-reason-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; margin-top: 4px; }
     .etf-reason-dot.good { background: #e84c3d; }
     .etf-reason-dot.bad  { background: #2ebd85; }
     .etf-reason-dot.neutral { background: #8899aa; }
     .etf-reason-label { flex: 0 0 auto; font-weight: 700; color: var(--text-name); }
     .etf-reason-text { color: var(--text-secondary); }
     .etf-levels {
-      margin-top: 11px;
+      margin-top: 8px;
       border-top: 1px dashed var(--border-header);
-      padding-top: 9px;
+      padding-top: 7px;
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
       gap: 6px 12px;
@@ -1328,11 +1328,11 @@
     .etf-advice-metrics {
       border-top: 1px solid var(--border-header);
       background: var(--bg-entry);
-      padding: 9px 12px 12px;
+      padding: 6px 11px 8px;
     }
     /* 买点确认：溢价达标 + 「不追高」过滤器 */
-    .etf-confirm { margin-top: 11px; border-top: 1px dashed var(--border-header); padding-top: 9px; }
-    .etf-confirm-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 7px; }
+    .etf-confirm { margin-top: 8px; border-top: 1px dashed var(--border-header); padding-top: 7px; }
+    .etf-confirm-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 5px; }
     .etf-confirm-title { font-size: 11.5px; font-weight: 700; color: var(--text-name); }
     .etf-confirm-badge {
       font-size: 10px; font-weight: 700; padding: 1.5px 7px; border-radius: 9px;
@@ -1353,7 +1353,7 @@
     .etf-confirm-item.ok .mk { color: #e84c3d; }
     .etf-confirm-item.no { opacity: 0.7; }
     .etf-confirm-item.no .mk { color: #8899aa; }
-    .etf-confirm-note { margin-top: 7px; font-size: 10.5px; line-height: 1.6; color: var(--text-muted); }
+    .etf-confirm-note { margin-top: 5px; font-size: 10.5px; line-height: 1.55; color: var(--text-muted); }
 
     /* ── 溢价档位条 ── */
     .etf-zones { padding: 2px 0 0; }
@@ -2838,7 +2838,7 @@ function etfIntradayHtml() {
   if (!d || !d.points || d.points.length < 2) return head('—') + `<div class="etf-empty">分时数据不可用</div>` + etfQuoteInlineHtml();
   const pts = d.points;
   const prevClose = d.prevClose || q.prevClose || pts[0].price;
-  const W = etfChartWidth(24), H = 158, PL = 36, PR = 10, PT = 12, PB = 20;   // 面板卡片：左右边框1+内边距11
+  const W = etfChartWidth(24), H = 124, PL = 36, PR = 10, PT = 9, PB = 18;   // 面板卡片：左右边框1+内边距11
   const vals = [];
   pts.forEach(p => { vals.push(p.price); if (p.avg != null) vals.push(p.avg); });
   vals.push(prevClose);
@@ -2903,7 +2903,7 @@ function etfIntradayHtml() {
   return `
     ${head(`${d.date || '—'}${dataTime ? ` · 数据 ${dataTime}` : ''}`)}
     <div class="etf-chart-wrap">
-      <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="height:158px">
+      <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="height:124px">
         <defs>
           <linearGradient id="etf-ia" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="${main}" stop-opacity="0.28"/>
