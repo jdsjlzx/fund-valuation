@@ -1776,8 +1776,9 @@ app.get('/api/_hist', async (req, res) => {
     } catch { /* URL 解析失败则不跳过 */ }
     if (secondaryUrl) {
       try {
+        // 注意 Vercel 函数路由是 /api/hist（下划线开头的文件 Vercel 不注册路由）
         const text = await httpGet(
-          `${secondaryUrl}/api/_hist?symbol=${encodeURIComponent(symbol)}&tz=${tz}`,
+          `${secondaryUrl}/api/hist?symbol=${encodeURIComponent(symbol)}&tz=${tz}`,
           { Accept: 'application/json' }
         );
         const j = JSON.parse(text);
