@@ -121,7 +121,7 @@ const quoteCache = new Map();
 const QUOTE_TTL = 4 * 1000;
 // Yahoo extended-hours 缓存（夜盘用，fulldayPrice 数据 60s 内复用，避免 Yahoo 限流）
 const yahooExtCache = new Map();
-const YAHOO_EXT_TTL = 60_000;
+const YAHOO_EXT_TTL = 120_000;  // 120 秒：夜盘成交稀疏，且走代理链路需控制雅虎调用量
 
 // Known international tickers handled by a non-Sina fetcher
 // (国内财经 API 不覆盖韩/日/台/欧实时行情，需要单独走 Naver/Yahoo Japan 等)
@@ -388,7 +388,7 @@ async function fetchYahooQuote(symbol) {
 async function fetchYahooFulldayOne(symbol) {
   const cached = yahooExtCache.get(symbol);
   if (cached) {
-    // hardUntil: 限流/被墙的硬退避截止时间，期间直接返回缓存(null)，不再重试
+    // hardUntil: 整链路失败的硬退避截止时间，期间直接返回缓存(null)，不再重试
     if (cached.hardUntil && Date.now() < cached.hardUntil) return cached.data;
     if (Date.now() - cached.ts < YAHOO_EXT_TTL) return cached.data;
   }
@@ -396,25 +396,43 @@ async function fetchYahooFulldayOne(symbol) {
   const url =
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
     `?interval=1d&range=1d&includePrePost=true`;
-  let text;
+  let text = null;
   try {
     text = await httpGetWithStatus(url, { Accept: 'application/json' });
   } catch (e) {
-    // Yahoo 429/503 限流：backoff 5 分钟
-    // 403（出口网络被墙）：硬退避 1 小时 —— 被墙网络下不退避会造成每次冷启动
-    // 重扫全部美股符号，/api/quotes 阻塞数十秒（首页转圈的主因之一）
-    const isRateLimited = /HTTP\s+(429|503)/i.test(e.message);
-    const isBlocked = /HTTP\s+403/i.test(e.message);
-    if (isRateLimited) {
-      console.warn('[yahoo-ext]', symbol, 'rate limited, backoff 5min');
-      yahooExtCache.set(symbol, { data: null, ts: Date.now(), hardUntil: Date.now() + 5 * 60_000 });
-    } else if (isBlocked) {
-      console.error('[yahoo-ext]', symbol, 'blocked(403), backoff 1h');
-      yahooExtCache.set(symbol, { data: null, ts: Date.now(), hardUntil: Date.now() + 60 * 60_000 });
-    } else {
-      console.error('[yahoo-ext]', symbol, 'http fail:', e.message);
-      yahooExtCache.set(symbol, { data: null, ts: Date.now() - YAHOO_EXT_TTL / 2 });
+    // 本地出口 403 被墙 / Render 出口 429 限流 → 走代理链路
+  }
+
+  if (text == null) {
+    // 代理链路：本地/Render → HIST_PROXY_URL 实例 /api/fullday → 其 Vercel 二级（不同 IP 池）。
+    // 雪球限流或不可用时，这是夜盘真实价的唯一来源（β 模型估算偏差可达 0.5%+）
+    try {
+      const proxyText = await httpGet(
+        `${HIST_PROXY_URL}/api/fullday?symbol=${encodeURIComponent(symbol)}`,
+        { Accept: 'application/json' }
+      );
+      const j = JSON.parse(proxyText);
+      if (j && j.noPrePost) {
+        // 当前没有盘前/盘后/夜盘活动
+        yahooExtCache.set(symbol, { data: null, ts: Date.now() });
+        return null;
+      }
+      if (j && isFinite(j.fulldayPrice)) {
+        const data = {
+          fulldayPrice: j.fulldayPrice,
+          fulldayChange: j.fulldayChange,
+          fulldayChangePercent: j.fulldayChangePercent,
+          previousClose: j.previousClose,
+          regularMarketPrice: j.regularMarketPrice,
+        };
+        yahooExtCache.set(symbol, { data, ts: Date.now() });
+        return data;
+      }
+    } catch (e2) {
+      console.error('[yahoo-ext]', symbol, 'proxy fail:', e2.message);
     }
+    // 直连 + 代理全失败 → 硬退避 5 分钟，避免整轮扫描期间反复硬撞
+    yahooExtCache.set(symbol, { data: null, ts: Date.now(), hardUntil: Date.now() + 5 * 60_000 });
     return null;
   }
   let j;
@@ -446,19 +464,41 @@ async function fetchYahooFulldayOne(symbol) {
   return data;
 }
 
-async function fetchYahooExtended(symbols) {
+let yahooExtSweepRunning = false;
+
+// 请求路径取缓存快照（全量扫描需数分钟，绝不能阻塞 /api/quotes）
+function yahooExtSnapshot(symbols) {
   const map = new Map();
-  if (!symbols || symbols.length === 0) return map;
-  // Yahoo 限流较严：2 并发 + 250ms 间隔避免触发 429
-  const CONCURRENCY = 2;
+  for (const s of symbols) {
+    const c = yahooExtCache.get(s);
+    if (c && c.data) map.set(s, c.data);
+  }
+  return map;
+}
+
+function kickYahooExtSweep(symbols) {
+  if (yahooExtSweepRunning || !symbols || !symbols.length) return;
+  yahooExtSweepRunning = true;
+  (async () => {
+    try {
+      await sweepYahooExtended(symbols);
+    } finally {
+      yahooExtSweepRunning = false;
+    }
+  })();
+}
+
+// 全量扫描 Yahoo fullday（直连→代理链路），并发 4 + 250ms 节流（雅虎调用量控制）
+async function sweepYahooExtended(symbols) {
+  if (!symbols || symbols.length === 0) return;
+  const CONCURRENCY = 4;
   const REQ_DELAY_MS = 250;
   let i = 0;
   async function worker() {
     while (i < symbols.length) {
       const sym = symbols[i++];
       try {
-        const data = await fetchYahooFulldayOne(sym);
-        if (data) map.set(sym, data);
+        await fetchYahooFulldayOne(sym);
       } catch (e) {
         console.error('[yahoo-ext]', sym, e.message);
       }
@@ -466,7 +506,12 @@ async function fetchYahooExtended(symbols) {
     }
   }
   await Promise.all(Array(Math.min(CONCURRENCY, symbols.length)).fill(0).map(worker));
-  return map;
+}
+
+// 兼容旧调用（调试端点等待完整扫描后返回结果）
+async function fetchYahooExtended(symbols) {
+  await sweepYahooExtended(symbols);
+  return yahooExtSnapshot(symbols);
 }
 
 // ──────────────────────────────────────────
@@ -882,7 +927,9 @@ let xueqiuCookie = null;
 let xueqiuCookieTs = 0;
 const XUEQIU_COOKIE_TTL = 30 * 60_000;  // 30 分钟
 const xueqiuQuoteCache = new Map();
-const XUEQIU_QUOTE_TTL = 10_000;  // 10 秒
+let xqCircuitOpenUntil = 0;    // 雪球熔断截止时间（整批失败/被限流时暂停调用）
+let xqConsecutiveFails = 0;
+const XUEQIU_QUOTE_TTL = 30_000;  // 30 秒：夜盘成交稀疏，且全量标的每轮刷新的调用量很大（高频会触发雪球限流）
 const XUEQIU_ETF_MAX_LAG_MS = 5 * 60_000;
 
 // 注：雪球夜盘数据不做"距今多少分钟"式的过期判定。
@@ -985,6 +1032,9 @@ async function fetchXueqiuQuote(symbol) {
 
 async function fetchXueqiuQuotes(symbols) {
   if (!symbols.length) return new Map();
+  // 熔断：被限流（整批失败返回防爬 HTML）时暂停 5 分钟，
+  // 否则每轮刷新重撞限流墙，且永远恢复不了
+  if (Date.now() < xqCircuitOpenUntil) return new Map();
   const map = new Map();
   // 雪球每个请求是单标的，并发 5 个够用
   const CONCURRENCY = 5;
@@ -1001,6 +1051,16 @@ async function fetchXueqiuQuotes(symbols) {
     }
   }
   await Promise.all(Array(Math.min(CONCURRENCY, symbols.length)).fill(0).map(worker));
+  if (map.size === 0 && symbols.length > 0) {
+    xqConsecutiveFails++;
+    if (xqConsecutiveFails >= 2) {
+      xqCircuitOpenUntil = Date.now() + 5 * 60_000;
+      xqConsecutiveFails = 0;
+      console.warn('[xueqiu] 连续整批失败，疑似限流，熔断 5 分钟');
+    }
+  } else {
+    xqConsecutiveFails = 0;
+  }
   return map;
 }
 
@@ -1514,7 +1574,10 @@ app.get('/api/quotes', async (req, res) => {
         return krSymbols
           .map((s) => {
             const t = tencentKr[s], n = naverMap[s];
-            if (t && n) return (n.sourceTimeMs ?? 0) > (t.sourceTimeMs ?? 0) ? n : t;
+            if (t && n) {
+              if (t.marketState === 'CLOSED') return t;
+              return (n.sourceTimeMs ?? 0) > (t.sourceTimeMs ?? 0) ? n : t;
+            }
             return t || n;
           })
           .filter(Boolean);
@@ -1539,12 +1602,10 @@ app.get('/api/quotes', async (req, res) => {
           })
         )
       ).then((arr) => arr.filter(Boolean)),
-      // 夜盘时段：拉取所有美股的 Yahoo fulldayPrice（实时盘前/夜盘价，与富途一致）
+      // 夜盘时段：Yahoo fullday 走后台扫描（直连→Render代理→Vercel 链路，
+      // 全量标的需数分钟），请求路径直接用缓存快照，绝不阻塞行情响应
       usState === 'OVERNIGHT' && emSymbols.length
-        ? fetchYahooExtended(emSymbols).catch((e) => {
-            console.error('[yahoo-ext bulk]', e.message);
-            return new Map();
-          })
+        ? (async () => { kickYahooExtSweep(emSymbols); return yahooExtSnapshot(emSymbols); })()
         : Promise.resolve(new Map()),
       // 夜盘时段：拉取外盘期货 (NQ/ES/YM) 作为指数ETF夜盘代理
       // Yahoo 在国内被阻断(403)时，这是唯一与富途一致的实时夜盘涨跌来源
@@ -1794,6 +1855,73 @@ app.get('/api/_hist', async (req, res) => {
         const j = JSON.parse(text);
         if (j && Array.isArray(j.rows)) {
           HIST_API_CACHE.set(key, { data: j, ts: Date.now() });
+          return res.json(j);
+        }
+        return res.status(502).json({ error: err.message, secondary: text.slice(0, 200) });
+      } catch (e2) {
+        return res.status(502).json({ error: err.message, secondary: e2.message });
+      }
+    }
+    if (cached) return res.json({ ...cached.data, stale: true });
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// ──────────────────────────────────────────
+//  /api/fullday — 美股夜盘(fulldayPrice)代理端点，链路同 /api/_hist：
+//  直连雅虎（本出口 429 时走 Vercel 二级代理），60s 缓存去重。
+//  用法: GET /api/fullday?symbol=ASML
+// ──────────────────────────────────────────
+const FULLDAY_API_CACHE = new Map();  // sym → { data, ts }
+const FULLDAY_API_TTL = 60_000;
+
+app.get('/api/fullday', async (req, res) => {
+  const symbol = String(req.query.symbol || '').trim();
+  if (!/^[A-Za-z0-9.\-]{1,20}$/.test(symbol)) return res.status(400).json({ error: 'bad symbol' });
+  const cached = FULLDAY_API_CACHE.get(symbol);
+  if (cached && Date.now() - cached.ts < FULLDAY_API_TTL) {
+    return res.json(cached.data);
+  }
+  try {
+    const url =
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
+      `?interval=1d&range=1d&includePrePost=true`;
+    const text = await httpGetWithStatus(url, { Accept: 'application/json' });
+    const j = JSON.parse(text);
+    const meta = j && j.chart && j.chart.result && j.chart.result[0] && j.chart.result[0].meta;
+    if (!meta) return res.status(502).json({ error: 'empty result' });
+    if (!meta.hasPrePostMarketData) {
+      const out = { symbol, noPrePost: true };
+      FULLDAY_API_CACHE.set(symbol, { data: out, ts: Date.now() });
+      return res.json(out);
+    }
+    const out = {
+      symbol,
+      fulldayPrice: meta.fulldayPrice,
+      fulldayChange: meta.fulldayChange,
+      fulldayChangePercent: meta.fulldayChangePercent,
+      previousClose: meta.chartPreviousClose || meta.previousClose,
+      regularMarketPrice: meta.regularMarketPrice,
+    };
+    FULLDAY_API_CACHE.set(symbol, { data: out, ts: Date.now() });
+    res.json(out);
+  } catch (err) {
+    // 二级代理（Vercel api/fullday，防自引用同 /api/_hist）
+    let secondaryUrl = SECONDARY_HIST_PROXY_URL;
+    try {
+      if (secondaryUrl && req.headers.host && new URL(secondaryUrl).host === req.headers.host) {
+        secondaryUrl = '';
+      }
+    } catch { /* URL 解析失败则不跳过 */ }
+    if (secondaryUrl) {
+      try {
+        const text = await httpGet(
+          `${secondaryUrl}/api/fullday?symbol=${encodeURIComponent(symbol)}`,
+          { Accept: 'application/json' }
+        );
+        const j = JSON.parse(text);
+        if (j && (j.fulldayPrice != null || j.noPrePost)) {
+          FULLDAY_API_CACHE.set(symbol, { data: j, ts: Date.now() });
           return res.json(j);
         }
         return res.status(502).json({ error: err.message, secondary: text.slice(0, 200) });
