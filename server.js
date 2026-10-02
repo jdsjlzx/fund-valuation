@@ -2689,6 +2689,61 @@ function movingAvgSeries(closes, period) {
   return out;
 }
 
+// ── ETF 额外技术指标 ──
+// 依据 scripts/etf-indicator-study.js 对 159509 的 764 日回测：
+//   · 摆动指标（RSI / 威廉%R / KDJ / 布林）单独择时全部大幅跑输买入持有——
+//     趋势标的上「超买继续涨、超卖继续跌」，按 RSI>70 卖出等于卖在主升浪起点。
+//   · 因此这些指标在本项目里只用于「买点确认」（避免在冲高中买入），不用于卖出信号。
+//   · 三者作为买点过滤器在回测中表现几乎一致（年化 56.7%~57.6%），此处一并给出、互为参照。
+
+// 威廉%R：取值 -100~0，越接近 -100 表示收盘价越贴近区间低点
+function williamsRSeries(highs, lows, closes, period = 14) {
+  const out = new Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++) {
+    let hh = -Infinity, ll = Infinity;
+    for (let j = i + 1 - period; j <= i; j++) {
+      if (highs[j] > hh) hh = highs[j];
+      if (lows[j] < ll) ll = lows[j];
+    }
+    out[i] = hh === ll ? -50 : +(((hh - closes[i]) / (hh - ll)) * -100).toFixed(2);
+  }
+  return out;
+}
+
+// RSI（Wilder 平滑）
+function rsiSeries(closes, period = 14) {
+  const out = new Array(closes.length).fill(null);
+  let g = 0, l = 0;
+  for (let i = 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    const up = d > 0 ? d : 0, dn = d < 0 ? -d : 0;
+    if (i <= period) {
+      g += up; l += dn;
+      if (i === period) { g /= period; l /= period; out[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l); }
+    } else {
+      g = (g * (period - 1) + up) / period;
+      l = (l * (period - 1) + dn) / period;
+      out[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l);
+    }
+  }
+  return out;
+}
+
+// 布林带（20, 2）
+function bollingerSeries(closes, period = 20, mult = 2) {
+  const mid = movingAvgSeries(closes, period);
+  const up = new Array(closes.length).fill(null);
+  const dn = new Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++) {
+    let s = 0;
+    for (let j = i + 1 - period; j <= i; j++) s += (closes[j] - mid[i]) ** 2;
+    const sd = Math.sqrt(s / period);
+    up[i] = mid[i] + mult * sd;
+    dn[i] = mid[i] - mult * sd;
+  }
+  return { mid, up, dn };
+}
+
 const ETF_SIGNAL_META = {
   buy:       { label: '强买',   action: '买入',     side: 'buy'  },
   buy_weak:  { label: '弱买',   action: '小仓试仓', side: 'buy'  },
@@ -2837,6 +2892,10 @@ function buildEtfHistoryReview(klines, navMap, signals) {
   // 状态机回测：按日推进，买入/卖出条件各自判断（用于非信号类规则）
   const sma = (arr, p) => arr.map((_, i) => i + 1 < p ? null : +(arr.slice(i + 1 - p, i + 1).reduce((s, v) => s + v, 0) / p).toFixed(4));
   const ma21 = sma(klines.map(k => k.close), 21);
+  const willR14 = williamsRSeries(
+    klines.map(k => (isFinite(k.high) ? k.high : k.close)),
+    klines.map(k => (isFinite(k.low) ? k.low : k.close)),
+    klines.map(k => k.close), 14);
   const stateMachine = (name, buyFn, sellFn) => {
     let cash = 1, shares = 0, trades = 0, wins = 0, entry = 0, exposure = 0;
     const curve = [];
@@ -2873,6 +2932,13 @@ function buildEtfHistoryReview(klines, navMap, signals) {
     stateMachine(`纯溢价：<${PREMIUM_BUY}% 买 / ≥${PREMIUM_DANGER}% 卖`,
       (i, p) => p != null && p < PREMIUM_BUY,
       (i, p) => p != null && p >= PREMIUM_DANGER),
+    // 溢价 + 「不追高」过滤器（实测优于纯溢价与 MACD 择时，见 scripts/etf-indicator-study.js）
+    stateMachine(`溢价 ≤${PREMIUM_BUY}% ∩ 威廉%R ≤ -60 买 / 溢价 ≥${PREMIUM_WATCH}% 卖`,
+      (i, p) => p != null && p <= PREMIUM_BUY && willR14[i] != null && willR14[i] <= -60,
+      (i, p) => p != null && p >= PREMIUM_WATCH),
+    stateMachine(`溢价 ≤${PREMIUM_BUY}% ∩ 收盘 < MA21 买 / 溢价 ≥${PREMIUM_WATCH}% 卖`,
+      (i, p) => p != null && p <= PREMIUM_BUY && ma21[i] != null && klines[i].close < ma21[i],
+      (i, p) => p != null && p >= PREMIUM_WATCH),
     stateMachine(`溢价 ≤${PREMIUM_BUY}% 买入 · 跌破 MA21 减仓（持有为主）`,
       (i, p) => p != null && p <= PREMIUM_BUY,
       (i, p) => ma21[i] != null && klines[i].close < ma21[i]),
@@ -3011,6 +3077,42 @@ function buildEtfAdvice(ctx) {
   if (lastBuy) levels.push({ label: '最近买点', price: +lastBuy.close.toFixed(3), note: lastBuy.date, tone: 'buy' });
   if (lastSell) levels.push({ label: '最近卖点', price: +lastSell.close.toFixed(3), note: lastSell.date, tone: 'sell' });
 
+  // ── 买点确认：溢价达标之外，再确认「没有在冲高」──
+  // 回测依据（scripts/etf-indicator-study.js，764 个交易日）：
+  //   · 溢价 ≤18% 单独用 → 年化 56.1% / Calmar 1.84；
+  //   · 叠加一个「不追高」过滤（威廉%R≤-60 / 价格<MA21 / 价格<布林中轨，三者效果几乎一致）
+  //     → 年化 57.6% / Calmar 1.89，且 3 年只交易 6 次（不增加操作频率）。
+  //   · 溢价 18~22% 区间买入的未来 20 日期望收益为 -0.91%（胜率 39%），故溢价未达标时不谈买点。
+  //   · 这些指标只用来过滤买点，不生成卖出信号——回测中按 RSI>70 等卖出会卖飞主升浪。
+  const filterDefs = [
+    {
+      key: 'willr', label: '威廉%R ≤ -60', ok: ind.willR != null && ind.willR <= -60,
+      value: ind.willR != null ? ind.willR.toFixed(1) : '—', hint: '14 日，≤-60 说明已回调到区间下沿',
+    },
+    {
+      key: 'ma21', label: '价格 < MA21', ok: ind.ma21 != null && price < ind.ma21,
+      value: ind.ma21 != null ? `${price.toFixed(3)} vs ${ind.ma21.toFixed(3)}` : '—', hint: '21 日均线下方，属回调而非追高',
+    },
+    {
+      key: 'boll', label: '价格 < 布林中轨', ok: ind.bollMid != null && price < ind.bollMid,
+      value: ind.bollMid != null ? `${price.toFixed(3)} vs ${ind.bollMid.toFixed(3)}` : '—', hint: '20 日均线中轨下方',
+    },
+  ];
+  const premiumOk = premium != null && premium <= PREMIUM_BUY;
+  const hitFilters = filterDefs.filter(f => f.ok);
+  const confirm = {
+    premiumOk,
+    filters: filterDefs,
+    hit: hitFilters.map(f => f.label),
+    hitCount: hitFilters.length,
+    level: !premiumOk ? 'none' : hitFilters.length ? 'good' : 'chasing',
+    note: !premiumOk
+      ? '溢价未达买入线，先等价格回落或溢价收敛（历史分档：溢价 18~22% 区间买入的未来 20 日期望收益为 -0.91%）'
+      : hitFilters.length
+        ? `溢价已达标，且「${hitFilters.map(f => f.label).join('、')}」命中——回测中期望收益最好的买点形态，可分批买入`
+        : '溢价已达标，但价格仍在冲高（三项过滤器均未命中）；回测显示此时买入的短期期望收益偏低，建议先下一笔、留足子弹',
+  };
+
   let level = 'wait';
   let action = '观望';
   let headline = '';
@@ -3090,7 +3192,7 @@ function buildEtfAdvice(ctx) {
     }
   }
 
-  return { level, action, headline, reasons, levels, held, zone: zone.key };
+  return { level, action, headline, reasons, levels, held, zone: zone.key, confirm };
 }
 
 // 盘中提示：状态型条件（每次请求重算，前端按 key 去重后只提示新增项）
@@ -3259,6 +3361,13 @@ async function getEtfMarketData() {
   };
   const { signals, bars, stats } = buildEtfSignals(klines);
 
+  // 买点确认用指标（威廉%R / RSI / 布林带）；仅作买点过滤与展示，不生成卖出信号
+  const highs = klines.map(k => (isFinite(k.high) ? k.high : k.close));
+  const lows = klines.map(k => (isFinite(k.low) ? k.low : k.close));
+  const willR = williamsRSeries(highs, lows, closes, 14);
+  const rsi14 = rsiSeries(closes, 14);
+  const boll = bollingerSeries(closes, 20, 2);
+
   // 溢价率历史：日K收盘 ÷ 同日单位净值
   const premiumHist = [];
   for (const k of klines) {
@@ -3319,6 +3428,9 @@ async function getEtfMarketData() {
       ma5: ma.ma5[lastIdx], ma10: ma.ma10[lastIdx], ma20: ma.ma20[lastIdx],
       ma21: ma.ma21[lastIdx], ma60: ma.ma60[lastIdx],
       dif: lastBar.dif, dea: lastBar.dea, bar: lastBar.bar,
+      // 买点确认辅助指标（仅用于「别在冲高中买入」，不用于卖出）
+      willR: willR[lastIdx], rsi14: rsi14[lastIdx],
+      bollMid: boll.mid[lastIdx], bollUp: boll.up[lastIdx], bollDn: boll.dn[lastIdx],
       high20, low20,
       drawdownFromHigh20: +(((closes[lastIdx] - high20) / high20) * 100).toFixed(2),
       vol20: +vol20.toFixed(1),

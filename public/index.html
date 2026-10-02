@@ -1330,6 +1330,30 @@
       background: var(--bg-entry);
       padding: 9px 12px 12px;
     }
+    /* 买点确认：溢价达标 + 「不追高」过滤器 */
+    .etf-confirm { margin-top: 11px; border-top: 1px dashed var(--border-header); padding-top: 9px; }
+    .etf-confirm-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 7px; }
+    .etf-confirm-title { font-size: 11.5px; font-weight: 700; color: var(--text-name); }
+    .etf-confirm-badge {
+      font-size: 10px; font-weight: 700; padding: 1.5px 7px; border-radius: 9px;
+      background: rgba(136,153,170,0.16); color: var(--text-secondary);
+    }
+    .etf-confirm.lv-good .etf-confirm-badge { background: rgba(232,76,61,0.15); color: #e84c3d; }
+    .etf-confirm.lv-chasing .etf-confirm-badge { background: rgba(232,160,61,0.18); color: #c4861f; }
+    .etf-confirm-items { display: flex; flex-wrap: wrap; gap: 6px; }
+    .etf-confirm-item {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 10.5px; line-height: 1.4; padding: 3px 8px; border-radius: 6px;
+      background: var(--bg-entry); color: var(--text-secondary);
+      border: 1px solid transparent; font-variant-numeric: tabular-nums;
+    }
+    .etf-confirm-item b { font-weight: 700; color: var(--text-primary); }
+    .etf-confirm-item .mk { font-weight: 700; }
+    .etf-confirm-item.ok { background: rgba(232,76,61,0.10); border-color: rgba(232,76,61,0.34); color: var(--text-primary); }
+    .etf-confirm-item.ok .mk { color: #e84c3d; }
+    .etf-confirm-item.no { opacity: 0.7; }
+    .etf-confirm-item.no .mk { color: #8899aa; }
+    .etf-confirm-note { margin-top: 7px; font-size: 10.5px; line-height: 1.6; color: var(--text-muted); }
 
     /* ── 溢价档位条 ── */
     .etf-zones { padding: 2px 0 0; }
@@ -2533,6 +2557,39 @@ function etfQuoteInlineHtml() {
 }
 
 // ── 今日操作建议 ──
+// ── 买点确认：溢价达标 + 「不追高」过滤器（威廉%R / MA21 / 布林中轨）──
+// 依据 764 日回测：只按溢价买 → 年化 56.1%；再要求至少一项过滤器命中 → 57.6%；
+// 而溢价达标但价格仍在冲高时买入，短期期望收益明显偏低。这些指标不用作卖出信号。
+function etfConfirmHtml() {
+  const t = ETF_TRACK;
+  const c = t && t.advice && t.advice.confirm;
+  if (!c) return '';
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const buy = (t.premium && t.premium.rules) ? t.premium.rules.buy : 18;
+  const prem = t.premium ? t.premium.current : null;
+  const rows = [
+    { label: `溢价 ≤ ${buy}%`, value: prem != null ? `${prem.toFixed(2)}%` : '—', ok: c.premiumOk },
+    ...(c.filters || []).map(f => ({ label: f.label, value: f.value, ok: f.ok })),
+  ];
+  const items = rows.map(x => `
+        <span class="etf-confirm-item ${x.ok ? 'ok' : 'no'}" title="${esc(x.ok ? '已满足' : '未满足')}">
+          <span class="mk">${x.ok ? '✓' : '○'}</span>${esc(x.label)}<b>${esc(x.value)}</b>
+        </span>`).join('');
+  const nFilter = (c.filters || []).length;
+  const badge = c.level === 'none' ? '溢价未达标'
+    : c.level === 'good' ? `过滤命中 ${c.hitCount}/${nFilter}`
+      : '溢价达标 · 未见回调';
+  return `
+      <div class="etf-confirm lv-${esc(c.level)}">
+        <div class="etf-confirm-head">
+          <span class="etf-confirm-title">买点确认</span>
+          <span class="etf-confirm-badge">${esc(badge)}</span>
+        </div>
+        <div class="etf-confirm-items">${items}</div>
+        <div class="etf-confirm-note">${esc(c.note)}</div>
+      </div>`;
+}
+
 function etfAdviceHtml() {
   const t = ETF_TRACK;
   if (!t || !t.advice) return `<div class="etf-advice"><div class="etf-empty">建议生成中…</div></div>`;
@@ -2568,6 +2625,7 @@ function etfAdviceHtml() {
       <div class="etf-advice-body">
         <div class="etf-advice-headline">${a.headline}</div>
         <div class="etf-reasons">${reasonsHtml}</div>
+        ${etfConfirmHtml()}
         ${levelsHtml ? `<div class="etf-levels">${levelsHtml}</div>` : ''}
       </div>
       <div class="etf-advice-metrics" id="etf-metrics">${etfMetricsHtml()}</div>
