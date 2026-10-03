@@ -2801,6 +2801,7 @@ function etfPanicHtml() {
     ? `历史 <b>${st.total}</b> 次触发 · 胜率 <b>${st.winRate}%</b> · 平均 <b style="color:${col(st.avgRet)}">${st.avgRet >= 0 ? '+' : ''}${st.avgRet}%</b>（最好 +${st.bestRet}% / 最差 ${st.worstRet}%）`
     : '';
   const capPct = Math.round((cfg.cap || 0.65) * 100);
+  const capAddPct = Math.round((cfg.capAdd || 0.85) * 100);
   return `
     <div class="etf-panic ${tone}">
       <div class="etf-panic-head">
@@ -2811,7 +2812,7 @@ function etfPanicHtml() {
       <div class="etf-panic-bar"><i style="width:${Math.round(score / max * 100)}%"></i></div>
       ${hits ? `<div class="etf-panic-hits">${hits}</div>` : `<div class="etf-panic-note" style="color:var(--text-muted)">当前无恐慌特征（7 项条件均未命中）</div>`}
       <div class="etf-panic-note">${ovTxt}</div>
-      <div class="etf-panic-note" style="margin-top:3px">${esc(cur.levelNote)}${score >= 5 ? `——触发后仓位下限抬到 <b>${capPct}%</b>，建议分 2~3 批建仓，站上 MA21 或 +${Math.round((cfg.takeProfit || 0.12) * 100)}% 止盈后解除。` : ''}</div>
+      <div class="etf-panic-note" style="margin-top:3px">${esc(cur.levelNote)}${score >= 5 ? `——触发后仓位下限抬到 <b>${capPct}%</b>，重新站上 MA21 确认止跌后补到 <b>${capAddPct}%</b>；站上 MA21 或 +${Math.round((cfg.takeProfit || 0.12) * 100)}% 止盈后解除。` : ''}</div>
       ${hist ? `<div class="etf-panic-hist">${hist}</div>` : ''}
       ${recent ? `<div class="etf-panic-hist">最近触发：${recent}</div>` : ''}
     </div>`;
@@ -3195,7 +3196,7 @@ function etfIntradayHtml() {
     ${etfQuoteInlineHtml()}`;
 }
 
-// ── 买卖信号清单（v4：溢价定仓位、趋势定方向）──
+// ── 买卖信号清单（v5：溢价定仓位、趋势定方向、恐慌抄底优先级最高）──
 //  v2 的问题：溢价 ≥22 直接给「减仓」、≥27 给「清仓」，且买点绑定「溢价 ≤18」——
 //  2026-09 溢价全程 22%~32%，清单整月只有减仓/清仓，而同期场内价 +13.1%，与 MACD
 //  9/18 的金叉强买互相打架；更糟的是一旦在高溢价区被震出，就再也等不到 ≤18% 的买点。
@@ -3207,6 +3208,11 @@ function etfIntradayHtml() {
 //      确认减仓（一轮空头只确认一次），金叉 → 少量买入（≤3 成）；
 //      ③ 只有趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）才降到 3 成以内，
 //      溢价 ≥27 且趋势同破才减半。
+//  v5：恐慌抄底窗口升为最高优先级。原因：7/8 溢价 14.87% 因卡在「<15 重仓区」被标成
+//      重仓买入，而 7/30 溢价 15.58%（隔夜费半 -5.33% + %R -98，触发恐慌信号、后 20 日
+//      +12.7%）只因高出 0.7pp 就被标成「买入」——标签被一条硬阈值卡出倒挂。
+//      现在恐慌窗口内（溢价 ≤22%）直接给「重仓买入 / 分批重仓」：触发日先建 65%，
+//      重新站上 MA21 补到 85%。回测 764 日：+310% → +313%（年化 59.0% → 59.3%）。
 //  每段展示：日期段 / 价格 / 溢价 / 信号 / 仓位 / 依据 / 信号后20日涨跌
 function etfSignalsHtml() {
   const t = ETF_TRACK;
@@ -3264,7 +3270,7 @@ function etfSignalsHtml() {
     ${statLine ? `<div class="etf-legend" style="margin-top:6px"><span>${statLine}</span></div>` : ''}
     ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
-      <span>口径（v4）：<b>溢价决定仓位、趋势定方向</b>。<b>高溢价（≥22%）仓位一律压到 3 成以内，≥27% 压到 2 成</b>——所以高溢价时只提示「少量买入」或「持有不加仓」，绝不追高加仓。低溢价买点需命中「不追高」过滤（溢价&lt;18 且 威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）。高溢价区仍保留 MACD 级别的买卖点：<b>死叉 → 减仓</b>、死叉后首次<b>跌破 MA21 → 确认减仓</b>、<b>金叉 → 少量买入（≤3 成）</b>；趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）也降到 3 成以内；溢价 ≥27 且趋势同破才减半。连续同类型合并为段。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>说明这一买点之后确实涨了（买对了），<b class="down">卖出信号为负</b>说明之后确实跌了（减仓躲过了下跌）。</span>
+      <span>口径（v5）：<b>溢价决定仓位、趋势定方向</b>。<b>高溢价（≥22%）仓位一律压到 3 成以内，≥27% 压到 2 成</b>——所以高溢价时只提示「少量买入」或「持有不加仓」，绝不追高加仓。低溢价买点需命中「不追高」过滤（溢价&lt;18 且 威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）。<b>恐慌抄底窗口</b>（隔夜外盘重挫 + 极限超卖共振 ≥5 项）优先级最高，即使溢价在 15~22% 也直接给<b>重仓买入</b>：分批建仓，触发日先建 65%，重新站上 MA21 补到 85%。高溢价区仍保留 MACD 级别的买卖点：<b>死叉 → 减仓</b>、死叉后首次<b>跌破 MA21 → 确认减仓</b>、<b>金叉 → 少量买入（≤3 成）</b>；趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）也降到 3 成以内；溢价 ≥27 且趋势同破才减半。连续同类型合并为段。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>说明这一买点之后确实涨了（买对了），<b class="down">卖出信号为负</b>说明之后确实跌了（减仓躲过了下跌）。</span>
     </div>`;
 }
 
@@ -3542,7 +3548,7 @@ function renderEtfView() {
       <div id="etf-macd">${etfMacdHtml()}</div>
     </div>
     <div class="etf-section">
-      <div class="etf-sec-title"><span>买卖信号清单</span><span class="sub">溢价定仓位（高溢价 ≤3成）· 死叉减仓 / 金叉少量买入 · 全历史 ${t && t.comboSignals && t.comboSignals.signals ? t.comboSignals.signals.length : '—'} 段</span></div>
+      <div class="etf-sec-title"><span>买卖信号清单</span><span class="sub">溢价定仓位（高溢价 ≤3成）· 恐慌抄底优先 · 死叉减仓 / 金叉少量买入 · 全历史 ${t && t.comboSignals && t.comboSignals.signals ? t.comboSignals.signals.length : '—'} 段</span></div>
       <div id="etf-signals">${etfSignalsSectionInner()}</div>
     </div>
     <div class="etf-section">

@@ -2984,7 +2984,17 @@ function buildEtfCompositeSignals(klines, navMap, panic) {
     const willHot = willR[i] != null && willR[i] >= -10;
 
     let code = null, ev = [], tag = null;
-    if (p < 15 && fHit) {
+    // 恐慌抄底窗口：这是系统里最严格的底部条件（7 项共振），可比「溢价<15」更值得重仓。
+    // 否则会出现「7/8 溢价 14.87% 给重仓、7/30 溢价 15.58% 只给买入」这种被 0.7pp 卡出来的倒挂。
+    const isPanic = !!(panic && panic.active && panic.active.has(klines[i].date));
+    if (isPanic && p <= PREMIUM_WATCH) {
+      code = 'buy_strong';
+      ev = [`溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）`, '恐慌抄底信号触发：隔夜外盘重挫 + 极限超卖共振（利空集中兑现，非基本面转坏）'];
+      if (fWill) ev.push(`威廉%R ${willR[i].toFixed(0)} 超卖（≤-60）`);
+      if (fMa) ev.push('收盘 < MA21（回调中）');
+      if (fBoll) ev.push('收盘 < 布林中轨');
+      ev.push('分批重仓：触发日先建 65%，重新站上 MA21 补到 85%');
+    } else if (p < 15 && fHit) {
       code = 'buy_strong';
       ev = [`溢价 ${p.toFixed(1)}%（<15 重仓区）`];
       if (fWill) ev.push(`威廉%R ${willR[i].toFixed(0)} 超卖（≤-60）`);
@@ -3177,8 +3187,15 @@ async function fetchUsIndexHistory() {
 // **外围情绪**：隔夜外盘重挫说明利空在集中兑现，而不是基本面在恶化。
 // 2026-07-30 实测：隔夜纳指 -1.74% / 费半 -5.33% + %R -98 + 布林 2% + 溢价 15.6% → 触发，
 // 4 个交易日 +8.8%（同期价格 +9.4%），而基准仓位只给 59%。
-// 触发条件：7 项共振 ≥5 项；触发后仓位下限抬到 65%，维持至站上 MA21(+2%)、或 +12%、或 30 日。
+// 触发条件：7 项共振 ≥5 项。仓位分两段（「分批重仓」）：
+//   · 触发日起 → 仓位下限 65%（POS_PANIC_CAP），不追高、不赌单日反转；
+//   · 收盘重新站上 MA21（确认止跌）→ 下限补到 85%（POS_PANIC_CAP_ADD）。
+// 为什么不一上来就给 85%：11 次历史触发 7 胜 4 负，且事前无法区分「恐慌底」与「半山腰」
+// ——2025-01-13、2025-03-04、2026-01-21 三次是趋势下跌中继，20 日后 -5% ~ -6%。
+// 回测对比（764 日）：触发即 85% → 累计 +285%；统一 65% → +310%；65% 站上 MA21 再补 85% → +313%。
+// 「等价格确认再加」既满足了重仓诉求，又不为假底买单。
 const POS_PANIC_CAP = 0.65;
+const POS_PANIC_CAP_ADD = 0.85;
 const PANIC_TRIGGER = 5;
 const PANIC_HOLD_DAYS = 30;
 const PANIC_TAKE_PROFIT = 0.12;
@@ -3268,7 +3285,7 @@ function buildEtfPanicSignal(klines, navMap, usIdx) {
   return {
     active, events, recent, current: last,
     levels: PANIC_LEVELS,
-    config: { trigger: PANIC_TRIGGER, cap: POS_PANIC_CAP, holdDays: PANIC_HOLD_DAYS, takeProfit: PANIC_TAKE_PROFIT },
+    config: { trigger: PANIC_TRIGGER, cap: POS_PANIC_CAP, capAdd: POS_PANIC_CAP_ADD, holdDays: PANIC_HOLD_DAYS, takeProfit: PANIC_TAKE_PROFIT },
     stats: {
       total: closed.length, wins,
       winRate: closed.length ? Math.round(wins / closed.length * 100) : null,
@@ -3305,6 +3322,7 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive) {
   }
   const out = [];
   let below = 0, state = 'UP', bull = false;
+  let panicOn = false, panicAdded = false;
   for (let i = 0; i < n; i++) {
     if (ma21[i] == null) { out.push(null); continue; }
     if (C[i] < ma21[i] * (1 - POS_MA_BUF)) below++; else below = 0;
@@ -3324,13 +3342,19 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive) {
     if (state === 'UP' && i > 0 && bars[i - 1] && bars[i - 1].dif >= bars[i - 1].dea && bar.dif != null && bar.dif <= bar.dea && bar.dif < 0) cap *= 0.7;
     const pf = premiumPositionFactor(p);
     let target = Math.max(0, Math.min(1, cap * pf));
-    // 恐慌抄底：隔夜外盘重挫 + 极限超卖共振时，仓位下限抬到 65%（不再被溢价系数打折）
+    // 恐慌抄底：隔夜外盘重挫 + 极限超卖共振时，仓位下限抬到 65%（不再被溢价系数打折）；
+    // 收盘重新站上 MA21 后再补到 85%——「分批重仓」，不为假底一次性买单。
     const panic = !!(panicActive && panicActive.has(rows[i].date));
-    if (panic) target = Math.max(target, POS_PANIC_CAP);
+    if (panic) { if (!panicOn) { panicOn = true; panicAdded = false; } }
+    else panicOn = false;
+    if (panicOn && !panicAdded && C[i] > ma21[i]) panicAdded = true;
+    // 恐慌下限只在高溢价（≥22%）以内生效——溢价极高时仍让「高溢价压仓」规则优先，避免自相矛盾
+    if (panicOn && (p == null || p <= PREMIUM_WATCH)) target = Math.max(target, panicAdded ? POS_PANIC_CAP_ADD : POS_PANIC_CAP);
     out.push({
       date: rows[i].date, close: +C[i].toFixed(3), premium: p == null ? null : +p.toFixed(2),
       state, bull, ma21: ma21[i] == null ? null : +ma21[i].toFixed(3), ma60: ma60[i] == null ? null : +ma60[i].toFixed(3),
-      cap: +cap.toFixed(2), factor: pf, target: +target.toFixed(2), belowDays: below, intraday: !!rows[i].intraday, panic,
+      cap: +cap.toFixed(2), factor: pf, target: +target.toFixed(2), belowDays: below, intraday: !!rows[i].intraday,
+      panic, panicAdded: panicOn && panicAdded,
     });
   }
   return out;
@@ -3352,8 +3376,11 @@ function buildEtfPositionPlan(klines, navMap, live, panic) {
   const prev = series[series.length - 2];
   const changed = prev && Math.abs(last.target - prev.target) >= 0.049;
   if (last.panic) {
-    action = `恐慌抄底 · 仓位下限 ${posPct}%`; tone = 'buy';
-    headline = `触发「恐慌抄底」信号${panic && panic.current ? '（' + panic.current.level + '）' : ''}：隔夜外盘重挫 + 极限超卖共振，属利空集中兑现、而非基本面转坏。仓位下限抬到 ${posPct}%，建议分 2~3 批建仓，别一次打满。`;
+    action = last.panicAdded ? `分批重仓 · ${posPct}%` : `恐慌抄底 · 先建 ${posPct}%`;
+    tone = 'buy';
+    headline = last.panicAdded
+      ? `恐慌抄底信号已获价格确认（重新站上 MA21 ${last.ma21 != null ? last.ma21.toFixed(3) : ''}）——按「分批重仓」把仓位补到 ${posPct}%。`
+      : `触发「恐慌抄底」信号${panic && panic.current ? '（' + panic.current.level + '）' : ''}：隔夜外盘重挫 + 极限超卖共振，属利空集中兑现、而非基本面转坏。先建 ${posPct}% 打底，等重新站上 MA21（约 ${last.ma21 != null ? last.ma21.toFixed(3) : 'MA21'}）确认止跌，再补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%。`;
   } else if (!up) {
     const cheapDip = p != null && p < PREMIUM_BUY;
     action = cheapDip && posPct >= 50 ? `留 ${posPct}% 抄底仓` : `减仓至 ${posPct}%`;
@@ -3429,7 +3456,9 @@ function buildEtfPositionPlan(klines, navMap, live, panic) {
   const trendCap = up ? (last.ma60 != null && last.close < last.ma60 ? 0.6 : 1.0) : 0.3;
   const dipLift = p != null && p < PREMIUM_ADD ? POS_DIP_CAP_CHEAP : (p != null && p < PREMIUM_BUY ? POS_DIP_CAP_BUY : null);
   const capNote = last.panic
-    ? `触发恐慌抄底信号 → 仓位下限抬到 ${Math.round(POS_PANIC_CAP * 100)}%（不再被溢价系数打折）`
+    ? (last.panicAdded
+        ? `恐慌抄底信号已确认（重新站上 MA21）→ 仓位下限从 ${Math.round(POS_PANIC_CAP * 100)}% 补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%`
+        : `触发恐慌抄底信号 → 仓位下限 ${Math.round(POS_PANIC_CAP * 100)}%（不被溢价系数打折）；重新站上 MA21 补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%`)
     : (dipLift != null && dipLift > trendCap)
       ? `趋势基准上限 ${Math.round(trendCap * 100)}%，但溢价 ${p.toFixed(1)}% 属便宜区 → 抬高到 ${Math.round(dipLift * 100)}% 的抄底仓`
       : `${up ? '趋势向上' : '趋势破坏'} → 基准上限 ${Math.round(trendCap * 100)}%`;
