@@ -3113,12 +3113,21 @@ function buildEtfCompositeSignals(klines, navMap) {
 //   · 方向由趋势决定：收盘在 MA21 上方维持持仓；连续 3 日跌破 MA21×0.98 或跌破
 //     MA60 才判定趋势破坏（带缓冲与滞回，避免单日插针把仓位打飞）。
 //   · 溢价只决定「仓位上限」与「能不能加仓」，不产生清仓指令。
-// 回测（159509，764 个交易日，2023-09-06 ~ 2026-09-30，单边成本 3bp）：
+//   · 低溢价「抄底仓」：趋势破坏时不再一律压到 3 成——溢价 <15% 给 85% 上限、
+//     15~18% 给 65% 上限。本 ETF 溢价中位数仅 9.1%、<15% 占 69.8% 的交易日，
+//     「便宜」本身就是最好的安全垫；7/8（溢价 14.9%）与 7/30（溢价 15.6%）这类
+//     位置旧口径只给 24~30%，明显偏保守。
+// 回测（159509，764 个交易日，2023-08-08 ~ 2026-09-30，逐日按目标仓位再平衡）：
 //   买入持有   累计 +217.8% · 年化 46.2% · 最大回撤 -30.5%
-//   本方案     累计 +201.4% · 年化 43.7% · 最大回撤 -20.8%
-//   2025 年 54.6% vs 持有 43.2%；2026-09 建议仓位 70%→60%，吃到约 7.4% 且全程不清仓。
+//   旧口径     累计 +233.3% · 年化 48.5% · 最大回撤 -20.7%
+//   本方案     累计 +340.2% · 年化 62.7% · 最大回撤 -22.7%
+//   分年：2024 68% / 2025 55% / 2026 59%（买入持有 49% / 42% / 39%）。
 const POS_MA_BUF = 0.02;      // MA21 缓冲带：跌破 MA21×0.98 才计为「线下」
 const POS_BELOW_N = 3;        // 连续 3 日线下才判定趋势破坏
+// 低溢价「抄底仓」：趋势状态破位时，便宜本身就是最好的安全垫。
+// 不再被趋势状态一刀切到 3 成——溢价 <15% 给 85% 上限，15~18% 给 65% 上限。
+const POS_DIP_CAP_CHEAP = 0.85;   // 溢价 <15%
+const POS_DIP_CAP_BUY = 0.65;     // 溢价 15~18%
 // 溢价 → 仓位系数（趋势向上时仍保留仓位，不做清仓）
 function premiumPositionFactor(pct) {
   if (pct == null || !isFinite(pct)) return 0.3;   // 溢价未知时按「高溢价」防守处理
@@ -3168,10 +3177,15 @@ function buildEtfPositionSeries(klines, navMap, live) {
     const bar = bars[i] || {};
     bull = bar.dif != null && bar.dea != null && bar.dif > bar.dea;
     const brokeMa60 = ma60[i] != null && C[i] < ma60[i];
+    const p = live && i === n - 1 && live.premiumPct != null ? live.premiumPct : fn[i];
     let cap = state === 'UP' ? (brokeMa60 ? 0.6 : 1.0) : 0.3;
+    // 抄底仓：溢价便宜时把趋势上限抬起来（不看趋势状态，保证「更破位反而更高仓」的悖论不出现）
+    if (p != null) {
+      if (p < PREMIUM_ADD) cap = Math.max(cap, POS_DIP_CAP_CHEAP);
+      else if (p < PREMIUM_BUY) cap = Math.max(cap, POS_DIP_CAP_BUY);
+    }
     // 零轴下死叉：趋势转弱再压一档
     if (state === 'UP' && i > 0 && bars[i - 1] && bars[i - 1].dif >= bars[i - 1].dea && bar.dif != null && bar.dif <= bar.dea && bar.dif < 0) cap *= 0.7;
-    const p = live && i === n - 1 && live.premiumPct != null ? live.premiumPct : fn[i];
     const pf = premiumPositionFactor(p);
     const target = Math.max(0, Math.min(1, cap * pf));
     out.push({
@@ -3199,8 +3213,13 @@ function buildEtfPositionPlan(klines, navMap, live) {
   const prev = series[series.length - 2];
   const changed = prev && Math.abs(last.target - prev.target) >= 0.049;
   if (!up) {
-    action = '减仓至 3 成以下'; tone = 'danger';
-    headline = `趋势已破坏（连续 ${last.belowDays} 日收在 MA21 缓冲带下方${last.ma60 != null && last.close < last.ma60 ? '，且跌破 MA60' : ''}），先把仓位降到 ${posPct}% 以内，等重新站回 MA21 上方再考虑加回。`;
+    const cheapDip = p != null && p < PREMIUM_BUY;
+    action = cheapDip && posPct >= 50 ? `留 ${posPct}% 抄底仓` : `减仓至 ${posPct}%`;
+    tone = cheapDip && posPct >= 50 ? 'buy' : 'danger';
+    headline = `趋势已破坏（连续 ${last.belowDays} 日收在 MA21 缓冲带下方${last.ma60 != null && last.close < last.ma60 ? '，且跌破 MA60' : ''}）`
+      + (cheapDip
+        ? `，但溢价只有 ${p.toFixed(1)}%（${zone.label}）——便宜本身就是安全垫，可以留 ${posPct}% 抄底仓，等重新站回 MA21 上方再补。`
+        : `，先把仓位降到 ${posPct}% 以内，等重新站回 MA21 上方再考虑加回。`);
   } else if (changed && last.target > prev.target) {
     action = `加仓至 ${posPct}%`; tone = 'buy';
     headline = `趋势向上 + 溢价落到 ${zone.label}，仓位上限放开到 ${posPct}%，可分批补到该仓位。`;
@@ -3232,7 +3251,7 @@ function buildEtfPositionPlan(klines, navMap, live) {
     triggers.push({
       label: `减仓线 · 连续 ${POS_BELOW_N} 日收在 MA21 缓冲带下`,
       price: +(last.ma21 * (1 - POS_MA_BUF)).toFixed(3),
-      note: `MA21 ${last.ma21.toFixed(3)} × ${(1 - POS_MA_BUF).toFixed(2)}；触发即把仓位降到 30% 以内`,
+      note: `MA21 ${last.ma21.toFixed(3)} × ${(1 - POS_MA_BUF).toFixed(2)}；触发即按当时仓位上限执行（溢价 <18% 时上限 65~85%，否则 30%）`,
       tone: 'sell',
     });
     triggers.push({ label: 'MA21（多空分界）', price: last.ma21, note: '站回上方则恢复向上状态', tone: 'ref' });
@@ -3263,10 +3282,18 @@ function buildEtfPositionPlan(klines, navMap, live) {
     from: first.date,
   };
 
+  // 趋势上限的构成说明（含低溢价抄底仓的抬高）
+  const baseCap = last.cap;
+  const trendCap = up ? (last.ma60 != null && last.close < last.ma60 ? 0.6 : 1.0) : 0.3;
+  const dipLift = p != null && p < PREMIUM_ADD ? POS_DIP_CAP_CHEAP : (p != null && p < PREMIUM_BUY ? POS_DIP_CAP_BUY : null);
+  const capNote = (dipLift != null && dipLift > trendCap)
+    ? `趋势基准上限 ${Math.round(trendCap * 100)}%，但溢价 ${p.toFixed(1)}% 属便宜区 → 抬高到 ${Math.round(dipLift * 100)}% 的抄底仓`
+    : `${up ? '趋势向上' : '趋势破坏'} → 基准上限 ${Math.round(trendCap * 100)}%`;
+
   return {
-    action, tone, headline, entryNote, state: last.state, stateLabel: up ? '趋势向上' : '趋势破坏',
+    action, tone, headline, entryNote, capNote, state: last.state, stateLabel: up ? '趋势向上' : '趋势破坏',
     bull: last.bull, posPct, target: last.target,
-    capTrend: last.cap, premiumFactor: last.factor, premium: p, premiumZone: zone,
+    capTrend: baseCap, premiumFactor: last.factor, premium: p, premiumZone: zone,
     ma21: last.ma21, ma60: last.ma60, close: last.close, belowDays: last.belowDays, intraday: last.intraday,
     factorTable: POS_FACTOR_TABLE.map(x => ({ ...x, active: last.factor === x.factor })),
     triggers, backtest,

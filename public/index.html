@@ -1388,6 +1388,7 @@
     }
     .etf-pos.down .etf-pos-bar i { background: linear-gradient(90deg,#4cae66,#2ea043); }
     .etf-pos-note { font-size: 10.5px; line-height: 1.6; color: var(--text-secondary); }
+    .etf-pos-capnote { margin-top: 2px; font-size: 9.5px; line-height: 1.5; color: var(--text-muted); }
     .etf-pos-entry {
       margin-top: 4px; font-size: 10px; line-height: 1.6; color: var(--text-muted);
       padding-left: 7px; border-left: 2px solid var(--border-header);
@@ -2720,6 +2721,7 @@ function etfPositionHtml() {
             趋势上限 <b>${Math.round((p.capTrend || 0) * 100)}%</b>
             × 溢价系数 <b>${p.premiumFactor}</b>（溢价 ${premTxt} · ${esc(zoneLabel)}）
             = 建议仓位 <b>${posPct}%</b>
+            ${p.capNote ? `<div class="etf-pos-capnote">${esc(p.capNote)}</div>` : ''}
           </div>
         </div>
         <div class="etf-pos-bar"><i style="width:${posPct}%"></i></div>
