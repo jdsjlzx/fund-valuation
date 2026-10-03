@@ -901,7 +901,8 @@
     .macd-chart-wrap {
       position: relative;
       height: 36px;
-      margin: 20px 0 20px;
+      /* 上下留白要容纳斜排的信号日期（-45° 时日期框斜跨约 35px），否则会压到卡片标题/下一行卡片 */
+      margin: 32px 0 32px;
       overflow: visible;
     }
     .macd-zero-line {
@@ -1064,6 +1065,23 @@
     .macd-signal-pin.sell_weak .macd-signal-date,
     .macd-signal-pin.sell_pre .macd-signal-date  { color: #2ebd85; opacity: 0.65; }
     .macd-signal-pin.sell_ma .macd-signal-date   { color: #e8a03d; }
+
+    /* 信号日期斜排（macd买卖 tab 专用）：连续两天都出信号时，横排日期会叠在一起。
+       统一向左上→右下倾 -45°，相邻日期变为平行斜线，按列距错开。
+       买点日期在柱上方：以「左下角」为轴向右上斜展，整体仍留在柱子之上；
+       卖点日期在柱下方：以「右上角」为轴向左下斜展，整体仍留在柱子之下。
+       translateX(±6px) 用于把斜排后的视觉中心拉回柱子中线。 */
+    .macd-body .macd-signal-date {
+      transform-origin: left bottom;
+      transform: translateX(6px) rotate(-45deg);
+    }
+    .macd-body .macd-signal-pin.sell      .macd-signal-date,
+    .macd-body .macd-signal-pin.sell_weak .macd-signal-date,
+    .macd-body .macd-signal-pin.sell_ma   .macd-signal-date,
+    .macd-body .macd-signal-pin.sell_pre  .macd-signal-date {
+      transform-origin: right top;
+      transform: translateX(-6px) rotate(-45deg);
+    }
 
     /* ── 涨跌幅统计链接入口 ── */
     .vixy-chg-link {
@@ -1389,6 +1407,18 @@
     .etf-pos.down .etf-pos-bar i { background: linear-gradient(90deg,#4cae66,#2ea043); }
     .etf-pos-note { font-size: 10.5px; line-height: 1.6; color: var(--text-secondary); }
     .etf-pos-capnote { margin-top: 2px; font-size: 9.5px; line-height: 1.5; color: var(--text-muted); }
+    /* 美股趋势确认行：低溢价能不能抬仓，最终看这一行 */
+    .etf-pos-us {
+      margin-top: 5px; padding: 4px 8px; border-radius: 6px; font-size: 10px; line-height: 1.6;
+      background: var(--bg-entry); border-left: 2px solid var(--border-header);
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+    }
+    .etf-pos-us b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+    .etf-pos-us-tag { font-weight: 700; padding: 1px 6px; border-radius: 5px; font-size: 9.5px; }
+    .etf-pos-us.ok .etf-pos-us-tag { color: #c93526; background: rgba(232,76,61,0.12); }
+    .etf-pos-us.bad .etf-pos-us-tag { color: #d29922; background: rgba(232,160,61,0.14); }
+    .etf-pos-us.bad { border-left-color: #d29922; }
+    .etf-pos-us-note { flex: 1 1 100%; font-size: 9.5px; color: var(--text-muted); }
     .etf-pos-entry {
       margin-top: 4px; font-size: 10px; line-height: 1.6; color: var(--text-muted);
       padding-left: 7px; border-left: 2px solid var(--border-header);
@@ -2748,7 +2778,16 @@ function etfPosAdviceHtml() {
   const bt = p.backtest;
   const btLine = bt ? `按此仓位执行（${esc(bt.from)} 起）：累计 <b>${bt.totalPct >= 0 ? '+' : ''}${esc(bt.totalPct)}%</b>`
     + (bt.annualPct != null ? ` · 年化 <b>${esc(bt.annualPct)}%</b>` : '')
-    + ` · 最大回撤 <b>${esc(bt.maxDrawdownPct)}%</b>（买入持有同期 46.2% / -30.5%）` : '';
+    + ` · 最大回撤 <b>${esc(bt.maxDrawdownPct)}%</b>（买入持有同期 47.1% / -30.5%）` : '';
+  // 美股趋势确认（v6）：溢价低只说明「有性价比」，能不能抬仓看这一行
+  const u = p.usTrend;
+  const usLine = u && u.close != null ? `
+        <div class="etf-pos-us ${u.ok ? 'ok' : 'bad'}">
+          <span class="etf-pos-us-tag">${u.ok ? '美股确认 ✓' : '美股未确认 ⚠'}</span>
+          <span>纳斯达克 <b>${esc(u.close.toFixed(0))}</b> · MA50 <b>${u.ma50 != null ? esc(u.ma50.toFixed(0)) : '—'}</b></span>
+          <span>距近20日低点 <b>${u.rebound != null ? (u.rebound >= 0 ? '+' : '') + esc(u.rebound.toFixed(1)) + '%' : '—'}</b>（止跌线 +${esc(u.repairPct)}%）</span>
+          <span class="etf-pos-us-note">${esc(u.note)}</span>
+        </div>` : '';
   return `
       <div class="etf-pos ${p.state === 'UP' ? 'up' : 'down'}">
         <div class="etf-pos-head">
@@ -2767,6 +2806,7 @@ function etfPosAdviceHtml() {
         </div>
         <div class="etf-pos-bar"><i style="width:${posPct}%"></i></div>
         <div class="etf-pos-note">${esc(p.headline)}</div>
+        ${usLine}
         ${p.entryNote ? `<div class="etf-pos-entry">${esc(p.entryNote)}</div>` : ''}
         ${trigs ? `<div class="etf-pos-triggers">${trigs}</div>` : ''}
         ${btLine ? `<div class="etf-pos-bt">${btLine}</div>` : ''}
@@ -3229,7 +3269,8 @@ function etfSignalPosChartHtml() {
   const rows = ETF_SIGCHART_RANGE === 'all' ? valid : valid.slice(-60);
   const n = rows.length;
   if (n < 5) return '';
-  const W = etfChartWidth(), H = 158, PL = 34, PR = 34, PT = 28, PB = 16;
+  // H 比绘图区多留 38px 底部空间给「斜排操作日标签」；PB 相应加大，plot 底边与绘图区高度保持不变
+  const W = etfChartWidth(), H = 202, PL = 34, PR = 34, PT = 28, PB = 60;
   const ph = H - PT - PB;                                  // 绘图区高度
   const closes = rows.map(r => r.close);
   let lo = Math.min(...closes), hi = Math.max(...closes);
@@ -3283,9 +3324,12 @@ function etfSignalPosChartHtml() {
   marks += addVline(panicIdx, '恐慌触发', PT - 16);
   marks += addVline(addIdx, `补仓 ${Math.round((t.panicSignal && t.panicSignal.config ? t.panicSignal.config.capAdd : 0.85) * 100)}%`, PT - 3);
 
+  const fmtD = d => `${+String(d).slice(5, 7)}/${+String(d).slice(8, 10)}`;
+
   // 买卖点图钉：买入=底部红色▲，卖出=顶部绿色▼，其余=顶部灰色▼
   //  同一侧（顶/底）相邻 1 个交易日内的重复图钉只保留第一个，避免挤成一团。
   let pins = '';
+  const pinnedOps = [];   // 已画图钉的「操作」（买入/减仓），供底部日期标签复用，保证图钉与日期一一对应
   const d2i = {};
   rows.forEach((r, i) => { d2i[r.date] = i; });
   const sigs = (t.comboSignals && t.comboSignals.signals) ? t.comboSignals.signals : [];
@@ -3304,9 +3348,23 @@ function etfSignalPosChartHtml() {
     const tip = isBuy ? base - 6 : base + 6;
     const pts = `${x.toFixed(1)},${tip.toFixed(1)} ${(x - 3.6).toFixed(1)},${base.toFixed(1)} ${(x + 3.6).toFixed(1)},${base.toFixed(1)}`;
     pins += `<polygon points="${pts}" fill="${col}" opacity="0.95"><title>${s.dateLabel} · ${s.label}（建议仓位 ${s.posPct != null ? s.posPct + '%' : '—'}）</title></polygon>`;
+    if (!isHold) pinnedOps.push({ x, date: rows[i].date, isBuy });
   }
 
-  const fmtD = d => `${+String(d).slice(5, 7)}/${+String(d).slice(8, 10)}`;
+  // 操作日标签：斜排 -45° 贴在绘图区下方
+  //  连续信号（如 07/29 卖 + 07/30 买、08/21~08/25 连减）时，按 (x+y) 递增错开行深，
+  //  保证相邻标签的垂直间距 ≥ 一个字高，日期不会叠在一起。
+  const LABEL_FS = 8.5, LABEL_GAP = 11, LABEL_MAX_PUSH = 20;
+  let dateLabels = '', prevC = -Infinity;
+  for (const o of pinnedOps) {
+    let y = H - PB + 8;
+    let c = o.x + y;
+    if (c - prevC < LABEL_GAP) y += Math.min(LABEL_MAX_PUSH, LABEL_GAP - (c - prevC));
+    prevC = o.x + y;
+    const col = o.isBuy ? '#e84c3d' : '#2ebd85';
+    dateLabels += `<text x="${o.x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="end" font-size="${LABEL_FS}" font-weight="600" fill="${col}" transform="rotate(-45 ${o.x.toFixed(1)} ${y.toFixed(1)})">${fmtD(o.date)}</text>`;
+  }
+
   const lastR = rows[n - 1];
   const lastChg = n > 1 ? (lastR.close / rows[n - 2].close - 1) * 100 : 0;
   return `
@@ -3328,7 +3386,7 @@ function etfSignalPosChartHtml() {
         ${maPath ? `<path d="${maPath}" fill="none" stroke="#8899aa" stroke-width="1" stroke-dasharray="3 3" opacity="0.85"/>` : ''}
         <path d="${pricePath}" fill="none" stroke="#4a9fe0" stroke-width="1.5"/>
         <circle cx="${X(n - 1).toFixed(1)}" cy="${Yp(lastR.close).toFixed(1)}" r="2.4" fill="#4a9fe0"/>
-        ${marks}${pins}
+        ${marks}${pins}${dateLabels}
         <text x="${PL + 1}" y="${H - 4}" font-size="9" fill="var(--text-muted)">${fmtD(rows[0].date)}</text>
         <text x="${W - PR}" y="${H - 4}" text-anchor="end" font-size="9" fill="var(--text-muted)">${fmtD(lastR.date)}</text>
       </svg>
@@ -3339,7 +3397,9 @@ function etfSignalPosChartHtml() {
       <span><i style="background:#8899aa"></i>MA21</span>
       <span><i style="background:#e84c3d"></i>逢低买入 ▲</span>
       <span><i style="background:#2ebd85"></i>减仓 ▼</span>
+      <span><i style="background:#7d8fa8"></i>持有不加仓 ▼</span>
       <span>竖直虚线 = 恐慌触发 / 补仓确认</span>
+      <span>底部斜排日期 = 实际操作日（买卖点）</span>
     </div>`;
 }
 
@@ -3377,7 +3437,11 @@ function etfSignalsHtml() {
     : '';
   // 分类型统计摘要 + 按段操作回测
   const st = combo.stats || {};
-  const typeNames = { buy_strong: '重仓买入', buy: '买入', buy_weak: '试仓', buy_small: '少量买入', sell_weak: '持有不加仓', sell: '减仓', sell_clear: '清仓/减半' };
+  const typeNames = {
+    buy_strong: '重仓买入', buy: '买入', buy_weak: '试仓', buy_small: '少量买入',
+    wait_us: '等美股确认', panic_wait: '抄底未确认',
+    sell_weak: '持有不加仓', sell: '减仓', sell_clear: '清仓/减半',
+  };
   const statLine = Object.entries(typeNames)
     .filter(([k]) => st[k] && st[k].count)
     .map(([k, name]) => {
@@ -3400,7 +3464,12 @@ function etfSignalsHtml() {
     ${statLine ? `<div class="etf-legend" style="margin-top:6px"><span>${statLine}</span></div>` : ''}
     ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
-      <span>口径（v5）：<b>溢价决定仓位、趋势定方向</b>。<b>高溢价（≥22%）仓位一律压到 3 成以内，≥27% 压到 2 成</b>——所以高溢价时只提示「少量买入」或「持有不加仓」，绝不追高加仓。低溢价买点需命中「不追高」过滤（溢价&lt;18 且 威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）。<b>恐慌抄底窗口</b>（隔夜外盘重挫 + 极限超卖共振 ≥5 项）优先级最高，即使溢价在 15~22% 也直接给<b>重仓买入</b>：分批建仓，触发日先建 65%，重新站上 MA21 补到 85%。高溢价区仍保留 MACD 级别的买卖点：<b>死叉 → 减仓</b>、死叉后首次<b>跌破 MA21 → 确认减仓</b>、<b>金叉 → 少量买入（≤3 成）</b>；趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）也降到 3 成以内；溢价 ≥27 且趋势同破才减半。连续同类型合并为段。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>说明这一买点之后确实涨了（买对了），<b class="down">卖出信号为负</b>说明之后确实跌了（减仓躲过了下跌）。</span>
+      <span>口径（v6）：<b>溢价决定仓位、趋势定方向、美股趋势决定「低溢价能不能抬仓」</b>。
+      <b>v6 新增</b>：2026-01~03 只按「溢价低 → 抄底仓 85%」一路加仓，会跟着美股跌 3 个月（跟随者口径均仓 82%、亏损 14.4%）——
+      <b>溢价低只代表「有性价比」，不是抄底/重仓的理由</b>。所以美股（纳指）确认走坏（收在 MA50 下方且 MA50 下行）且未止跌时，
+      低溢价抄底仓一律不生效、整体仓位封顶 40%，清单输出<b>「等美股确认」</b>；等纳指自近 20 日低点反弹 ≥3% 才恢复抬仓。
+      另外<b>恐慌抄底下限有 10 个交易日有效期</b>：触发后若迟迟站不回 MA21，说明是下跌中继（2026-01-21、2025-03-04 两次各亏 6.1% / 5.4%），
+      撤回 65% 下限、清单转为<b>「抄底未确认」</b>。<b>溢价系数按本 ETF 自身分布校准：&lt;15% 满仓、15~18% 九成、18~22% 半仓、22~27% 两成半、≥27% 一成半</b>（18~22% 由八成下调到半仓——2026-01 那波跌就是溢价从 23% 压缩到 15%，当时八成仓位明显过高）——所以高溢价时只提示「少量买入」或「持有不加仓」，绝不追高加仓。低溢价买点需命中「不追高」过滤（溢价&lt;18 且 威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）。<b>恐慌抄底窗口</b>（隔夜外盘重挫 + 极限超卖共振 ≥5 项）优先级最高，即使溢价在 15~22% 也直接给<b>重仓买入</b>：分批建仓，触发日先建 65%，重新站上 MA21 补到 85%。高溢价区仍保留 MACD 级别的买卖点：<b>死叉 → 减仓</b>、死叉后首次<b>跌破 MA21 → 确认减仓</b>、<b>金叉 → 少量买入（≤3 成）</b>；趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）也降到 3 成以内；溢价 ≥27 且趋势同破才减半。连续同类型合并为段。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>说明这一买点之后确实涨了（买对了），<b class="down">卖出信号为负</b>说明之后确实跌了（减仓躲过了下跌）。</span>
     </div>`;
 }
 

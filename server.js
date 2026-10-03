@@ -2936,7 +2936,7 @@ function buildEtfSignals(klines) {
 //      金叉 → 少量买入（溢价偏高，仓位不超过 3 成）
 //  · 布林上轨/威廉超买（≥-10）作为高位过热信号，在「持有不加仓」段里提示别追高
 //  输出按「连续同类型合并为段」，每段带证据列表与信号后 20 日涨跌
-function buildEtfCompositeSignals(klines, navMap, panic) {
+function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
   const n = klines.length;
   if (n < 40) return { signals: [], stats: null, backtest: null };
   const C = klines.map(k => k.close);
@@ -2957,9 +2957,12 @@ function buildEtfCompositeSignals(klines, navMap, panic) {
   // 趋势破坏：连续 3 日收在 MA21 缓冲带下方，或跌破 MA60（与「仓位建议」同一套判定）
   const trendBroken = new Array(n).fill(false);
   { let below = 0; for (let i = 0; i < n; i++) { if (ma21[i] == null) continue; if (C[i] < ma21[i] * (1 - POS_MA_BUF)) below++; else below = 0; trendBroken[i] = below >= POS_BELOW_N || (ma60[i] != null && C[i] < ma60[i]); } }
-  // 段内建议仓位（复用仓位建议的逐日目标仓位）
-  const posSeries = buildEtfPositionSeries(klines, navMap, null, panic && panic.active) || [];
+  // 段内建议仓位（复用仓位建议的逐日目标仓位；已含「美股趋势确认」门控）
+  const posSeries = buildEtfPositionSeries(klines, navMap, null, panic && panic.active, usIdx) || [];
   const posAt = i => (posSeries[i] && posSeries[i].target != null) ? posSeries[i].target : null;
+  // 美股趋势状态（逐日）：低溢价只在美股确认（usOk）时才够格叫「重仓买入」
+  const usTrend = buildUsTrendState(klines, usIdx);
+  const usAt = i => usTrend[i] || null;
 
   const META = {
     buy_strong: { label: '重仓买入', action: '分批重仓', side: 'buy' },
@@ -2967,6 +2970,8 @@ function buildEtfCompositeSignals(klines, navMap, panic) {
     buy_weak:   { label: '试仓',     action: '小仓试仓', side: 'buy' },
     buy_small:  { label: '少量买入', action: '小仓 ≤3成', side: 'buy' },
     sell_weak:  { label: '持有不加仓', action: '持仓不动', side: 'hold' },
+    wait_us:    { label: '等美股确认', action: '暂缓加仓', side: 'hold' },
+    panic_wait: { label: '抄底未确认', action: '撤回防守仓', side: 'hold' },
     sell:       { label: '减仓',     action: '减仓',     side: 'sell' },
     sell_clear: { label: '清仓/减半', action: '清仓或减半', side: 'sell' },
   };
@@ -2984,10 +2989,27 @@ function buildEtfCompositeSignals(klines, navMap, panic) {
     const willHot = willR[i] != null && willR[i] >= -10;
 
     let code = null, ev = [], tag = null;
+    // 美股趋势确认：溢价低只说明「有性价比」，美股趋势没好转就不构成抄底/重仓的理由
+    //（2026-01~03 一路按「低溢价 → 重仓」加仓，跟着美股跌 3 个月）。
+    const usRow = usAt(i);
+    const usOk = !usRow || usRow.ok;
+    const usHint = `美股（纳指 ${usRow ? usRow.close.toFixed(0) : '—'}）仍在 MA50 ${usRow && usRow.ma50 != null ? usRow.ma50.toFixed(0) : '—'} 下方且 MA50 下行`
+      + `（自近 20 日低点 ${usRow && usRow.rebound != null ? (usRow.rebound >= 0 ? '+' : '') + usRow.rebound : '—'}%）`
+      + ` —— 便宜 ≠ 该买，等纳指自 20 日低点反弹 ≥${US_TREND_REPAIR_PCT}% 确认止跌再抬仓`;
     // 恐慌抄底窗口：这是系统里最严格的底部条件（7 项共振），可比「溢价<15」更值得重仓。
     // 否则会出现「7/8 溢价 14.87% 给重仓、7/30 溢价 15.58% 只给买入」这种被 0.7pp 卡出来的倒挂。
     const isPanic = !!(panic && panic.active && panic.active.has(klines[i].date));
-    if (isPanic && p <= PREMIUM_WATCH) {
+    // 恐慌下限已失效（触发后超过 PANIC_US_GRACE_DAYS 个交易日仍站不回 MA21）：
+    // 说明是下跌中继而非恐慌底（2026-01-21、2025-03-04 两次各亏 6.1%/5.4%），
+    // 清单不能再喊「分批重仓」，否则就是用户说的「一路加仓一路亏」。
+    const panicLapsed = !!(posSeries[i] && posSeries[i].panicLapsed);
+    if (isPanic && panicLapsed && p <= PREMIUM_WATCH) {
+      code = 'panic_wait';
+      ev = [`溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）`,
+        `恐慌抄底已触发超过 ${PANIC_US_GRACE_DAYS} 个交易日，价格始终站不回 MA21 ${ma21[i] != null ? ma21[i].toFixed(3) : ''}`,
+        usHint,
+        '判断被证伪：这是下跌中继而非恐慌底 → 撤回 65% 下限，按防守仓位执行'];
+    } else if (isPanic && p <= PREMIUM_WATCH) {
       code = 'buy_strong';
       ev = [`溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）`, '恐慌抄底信号触发：隔夜外盘重挫 + 极限超卖共振（利空集中兑现，非基本面转坏）'];
       if (fWill) ev.push(`威廉%R ${willR[i].toFixed(0)} 超卖（≤-60）`);
@@ -3044,6 +3066,13 @@ function buildEtfCompositeSignals(klines, navMap, panic) {
         if (tp != null) ev.push(`建议仓位上限 ${Math.round(tp * 100)}%（持有，不减仓）`);
       }
     }
+    // 美股未确认止跌（!usOk）时，把所有「买入/加仓」降级为「等美股确认」——
+    // 恐慌抄底属更严格的极端条件，不受此门限制（保持与仓位规则的豁免一致）。
+    if (code && !usOk && !isPanic && (code === 'buy_strong' || code === 'buy' || code === 'buy_weak')) {
+      ev.push(usHint);
+      code = 'wait_us';
+      tag = 'us';
+    }
     if (code) sigs.push({ idx: i, date: klines[i].date, close: C[i], premium: +p.toFixed(2), code, tag: tag || code, ev });
   }
 
@@ -3077,8 +3106,8 @@ function buildEtfCompositeSignals(klines, navMap, panic) {
   }
   const stats = Object.fromEntries(Object.entries(typeStats).map(([code, arr]) => {
     const ok = arr.filter(v => v != null);
-    // 买入段与「持有不加仓」段都以「后 20 日为正」为佳；真减仓/清仓段以「后 20 日为负」为佳
-    const good = (code.startsWith('buy') || code === 'sell_weak') ? ok.filter(v => v > 0) : ok.filter(v => v < 0);
+    // 买入段与「持有不加仓 / 等美股确认 / 抄底未确认」段都以「后 20 日为正」为佳；真减仓/清仓段以「后 20 日为负」为佳
+    const good = (code.startsWith('buy') || code === 'sell_weak' || code === 'wait_us' || code === 'panic_wait') ? ok.filter(v => v > 0) : ok.filter(v => v < 0);
     return [code, {
       count: arr.length,
       avgFwd20: ok.length ? +(ok.reduce((a, v) => a + v, 0) / ok.length).toFixed(1) : null,
@@ -3127,32 +3156,49 @@ function buildEtfCompositeSignals(klines, navMap, panic) {
 //     15~18% 给 65% 上限。本 ETF 溢价中位数仅 9.1%、<15% 占 69.8% 的交易日，
 //     「便宜」本身就是最好的安全垫；7/8（溢价 14.9%）与 7/30（溢价 15.6%）这类
 //     位置旧口径只给 24~30%，明显偏保守。
+//   · **低溢价抄底仓必须叠加「美股趋势确认」**（2026-04 修正，v6）：2026-01~03 按
+//     「低溢价 → 抄底仓 85%」一路加仓，结果是跟着美股一起跌了 3 个月——跟随者口径
+//     （只加不减、现金起步）期间均仓 82%、亏损 -14.4%，用户体感就是「资金很快不够
+//     用、一路加仓一路亏、非常难受」。复盘拆出两件事：
+//       ① 1 月那波跌根本不是美股跌（纳指 1 月还在高位），而是 ETF 溢价从 23%
+//          均值回归到 15%——属估值/情绪维度，所以 18~22% 档的仓位系数由 0.8 压到 0.5；
+//       ② 2 月中 ~ 4 月上旬才是美股真跌（纳指 -12.7%）。此时「溢价低」只代表
+//          「有性价比」，不构成抄底/重仓的理由——美股趋势没好转就不能一路加仓。
+//     于是引入 usOk（见 buildUsTrendState）：纳指走坏且未止跌时，低溢价抄底仓不生效、
+//     整体仓位封顶 POS_US_BAD_CAP(40%)，等纳指自近 20 日低点反弹 ≥3%（止跌确认）
+//     再把仓位抬起来。实测正好命中「把抬仓集中在 3/30 ~ 4/3」的诉求：3 月全程封顶、
+//     4/1 触发止跌确认 → 4/2~4/3 抬到 85%，而 7/30 的恐慌抄底不受影响。
 // 回测（159509，764 个交易日，2023-08-08 ~ 2026-09-30，逐日按目标仓位再平衡）：
-//   买入持有   累计 +217.8% · 年化 46.2% · 最大回撤 -30.5%
-//   旧口径     累计 +233.3% · 年化 48.5% · 最大回撤 -20.7%
-//   本方案     累计 +340.2% · 年化 62.7% · 最大回撤 -22.7%
-//   分年：2024 68% / 2025 55% / 2026 59%（买入持有 49% / 42% / 39%）。
+//   买入持有   累计 +224%   · 年化 47.1% · 最大回撤 -30.5%
+//   旧口径     累计 +339%   · 年化 62.6% · 最大回撤 -23.1%（2026-01~03 跟随者 -14.4%、均仓 82%）
+//   本方案     累计 +337%   · 年化 62.3% · 最大回撤 -15.2%（2026-01~03 跟随者 -12.8%、均仓 75%）
+//   分年：2024 68% / 2025 64% / 2026 52%（买入持有 49% / 42% / 39%）。
+// 即：收益基本持平（-2pp）、回撤显著收敛（-23.1% → -15.2%）、牛市里的仓位反而更高。
 const POS_MA_BUF = 0.02;      // MA21 缓冲带：跌破 MA21×0.98 才计为「线下」
 const POS_BELOW_N = 3;        // 连续 3 日线下才判定趋势破坏
 // 低溢价「抄底仓」：趋势状态破位时，便宜本身就是最好的安全垫。
 // 不再被趋势状态一刀切到 3 成——溢价 <15% 给 85% 上限，15~18% 给 65% 上限。
-const POS_DIP_CAP_CHEAP = 0.85;   // 溢价 <15%
-const POS_DIP_CAP_BUY = 0.65;     // 溢价 15~18%
+// **但必须叠加美股趋势确认（usOk）**：美股走坏且未止跌时这两个上限不生效（见 buildEtfPositionSeries）。
+const POS_DIP_CAP_CHEAP = 0.85;   // 溢价 <15%（需 usOk）
+const POS_DIP_CAP_BUY = 0.65;     // 溢价 15~18%（需 usOk）
 // 溢价 → 仓位系数（趋势向上时仍保留仓位，不做清仓）
+// 档位按本 ETF 自身历史校准：溢价中位数仅 9.1%（<15% 占 69.8% 的交易日），
+// 所以 18~22% 已经是偏高位置（约 85 分位），不该再给 80% 仓位——2026-01 的下跌
+// 就是「溢价从 23% 压缩到 15%」造成的，当时 80% 仓位明显过高。
 function premiumPositionFactor(pct) {
   if (pct == null || !isFinite(pct)) return 0.3;   // 溢价未知时按「高溢价」防守处理
   if (pct < PREMIUM_ADD) return 1.0;      // <15%
   if (pct < PREMIUM_BUY) return 0.9;      // 15~18%
-  if (pct < PREMIUM_WATCH) return 0.8;    // 18~22%
-  if (pct < PREMIUM_DANGER) return 0.3;   // 22~27% 高溢价：三成为限
-  return 0.2;                             // ≥27% 极高溢价：两成为限
+  if (pct < PREMIUM_WATCH) return 0.5;    // 18~22% 偏贵：半仓为限
+  if (pct < PREMIUM_DANGER) return 0.25;  // 22~27% 高溢价：两成半为限
+  return 0.15;                            // ≥27% 极高溢价：一成半为限
 }
 const POS_FACTOR_TABLE = [
   { pct: `<${PREMIUM_ADD}%`, factor: 1.0, note: '加仓区，可满仓' },
   { pct: `${PREMIUM_ADD}~${PREMIUM_BUY}%`, factor: 0.9, note: '买入区，接近满仓' },
-  { pct: `${PREMIUM_BUY}~${PREMIUM_WATCH}%`, factor: 0.8, note: '观望区，八成为限' },
-  { pct: `${PREMIUM_WATCH}~${PREMIUM_DANGER}%`, factor: 0.3, note: '高溢价，三成为限（只少买，不追高）' },
-  { pct: `>${PREMIUM_DANGER}%`, factor: 0.2, note: '极高溢价，两成为限（只减不加）' },
+  { pct: `${PREMIUM_BUY}~${PREMIUM_WATCH}%`, factor: 0.5, note: '偏贵区，半仓为限' },
+  { pct: `${PREMIUM_WATCH}~${PREMIUM_DANGER}%`, factor: 0.25, note: '高溢价，两成半为限（只少买，不追高）' },
+  { pct: `>${PREMIUM_DANGER}%`, factor: 0.15, note: '极高溢价，一成半为限（只减不加）' },
 ];
 
 // ── 外围情绪源：纳指综合 / 费城半导体 日K（新浪美股）──
@@ -3171,14 +3217,65 @@ async function fetchUsIndexHistory() {
       const m = txt.match(/x\((\[[\s\S]*\])\)/);
       if (!m) return;
       const arr = JSON.parse(m[1]).map(r => ({ d: r.d, c: +r.c })).filter(r => r.d && isFinite(r.c));
-      const dates = arr.map(r => r.d), ret = {}, ret5 = {};
+      const dates = arr.map(r => r.d), closes = arr.map(r => r.c), ret = {}, ret5 = {};
       for (let i = 1; i < arr.length; i++) ret[dates[i]] = +((arr[i].c / arr[i - 1].c - 1) * 100).toFixed(2);
       for (let i = 5; i < arr.length; i++) ret5[dates[i]] = +((arr[i].c / arr[i - 5].c - 1) * 100).toFixed(2);
-      out[key] = { dates, ret, ret5 };
+      // closes 供「美股趋势状态」使用（MA50 / 20 日低点）
+      out[key] = { dates, closes, ret, ret5 };
     } catch (e) { console.error('[us-index]', key, e.message); }
   }));
   if (out.ixic) { US_IDX_CACHE.data = out; US_IDX_CACHE.ts = Date.now(); }
   return US_IDX_CACHE.data;
+}
+
+// ── 美股趋势状态：低溢价能不能加仓，最终要看美股有没有止跌 ──────────────────────
+// 起因（2026-01 ~ 03）：ETF 溢价从 23% 一路压缩到 9.7%，同期纳指自 23850 跌到 20795
+// （-12.7%）。旧规则「低溢价 → 抄底仓 85%」不看美股，在下跌段被反复触发：
+// 跟随者口径（只加不减）期间均仓 82%、亏损 -14.4%，用户体感就是「一路加仓、一路亏、
+// 资金很快不够用」。而 1 月的下跌其实不是美股跌（纳指 1 月还在高位），是溢价均值回归
+// ——所以「溢价低」只能说明「有性价比」，不能单独作为抄底/重仓的理由。
+// 两个判定（均以纳指 IXIC 为准；对齐到 A 股交易日，取「美股日期 < ETF 日期」的最后一根，
+// 因为 A 股 d 日收盘时可见的最新美股收盘就是 ET d-1）：
+//   · usDown   纳指 < MA50 且 MA50 较 5 个 ETF 交易日前下行  → 美股确认走坏（真下跌）
+//   · usRepair 纳指距近 20 个美股交易日收盘低点 ≥ +3%        → 美股止跌确认（反弹）
+//   · usOk     = !usDown || usRepair                          → 允许正常买入/加仓
+// 规则：低溢价抄底仓（85%/65%）只在 usOk 时生效；美股走坏且未止跌时整体仓位封顶
+// POS_US_BAD_CAP（只留底仓）。「恐慌抄底」是更严格的极端条件，不受此门限制。
+// 实测：usDown 恰好覆盖 2 月中下旬 ~ 4 月上旬的下跌段（3 月 100%），并在 4/1 因纳指自
+// 20 日低点反弹 3.8% 触发 usRepair 而解除——正好命中「3/30 ~ 4/3 抬仓」的需求；
+// 2025 年的正常回调基本不触发（1 月/7 月/10 月均 0%），所以不会误伤牛市里的回调买点。
+// 回测（764 日）：累计 +337%（旧 +339%）、年化 62.3%（62.6%），但最大回撤 -15.2%（旧 -23.1%）、
+// 2026-01~03 跟随者亏损 -12.8%（旧 -14.4%）、期间均仓 75%（旧 82%），2025 年 64%（旧 55%）。
+const US_TREND_MA50_WIN = 50;
+const US_TREND_REPAIR_PCT = 3;
+const POS_US_BAD_CAP = 0.4;      // 美股走坏且未止跌：整体仓位上限（只留底仓）
+function buildUsTrendState(klines, usIdx) {
+  const n = klines.length;
+  const out = new Array(n).fill(null);
+  const ix = usIdx && usIdx.ixic;
+  if (!ix || !ix.dates || !ix.closes || ix.dates.length < US_TREND_MA50_WIN + 5) return out;
+  const ma50 = movingAvgSeries(ix.closes, US_TREND_MA50_WIN);
+  const idxAt = new Array(n).fill(-1);
+  let p = -1;
+  for (let i = 0; i < n; i++) {
+    const d = klines[i].date;
+    while (p + 1 < ix.dates.length && ix.dates[p + 1] < d) p++;
+    idxAt[i] = p;
+  }
+  for (let i = 0; i < n; i++) {
+    const ui = idxAt[i];
+    if (ui < 20 || ma50[ui] == null) continue;
+    const c = ix.closes[ui], m = ma50[ui];
+    const pi = i >= 5 ? idxAt[i - 5] : -1;
+    const pm = pi >= 0 ? ma50[pi] : null;
+    const down = c < m && pm != null && m < pm;
+    let lo = Infinity;
+    for (let k = Math.max(0, ui - 19); k <= ui; k++) lo = Math.min(lo, ix.closes[k]);
+    const rebound = lo > 0 ? (c / lo - 1) * 100 : 0;
+    const repair = rebound >= US_TREND_REPAIR_PCT;
+    out[i] = { close: +c.toFixed(2), ma50: +m.toFixed(2), down, repair, ok: !down || repair, rebound: +rebound.toFixed(2) };
+  }
+  return out;
 }
 
 // ── 「恐慌抄底」信号 ──
@@ -3196,6 +3293,10 @@ async function fetchUsIndexHistory() {
 // 「等价格确认再加」既满足了重仓诉求，又不为假底买单。
 const POS_PANIC_CAP = 0.65;
 const POS_PANIC_CAP_ADD = 0.85;
+// 恐慌下限的「有效期」：美股仍在走坏且未止跌时，触发后这么多交易日仍未站上 MA21 就撤掉下限。
+// 10 天的依据是两次扛满 30 天的失败案例（2026-01-21 -6.1%、2025-03-04 -5.4%）在第 10 天
+// 前后就已显形，而所有成功案例（4/10/12 天退出）都在 10 天内完成确认，不受影响。
+const PANIC_US_GRACE_DAYS = 10;
 const PANIC_TRIGGER = 5;
 const PANIC_HOLD_DAYS = 30;
 const PANIC_TAKE_PROFIT = 0.12;
@@ -3299,7 +3400,7 @@ function buildEtfPanicSignal(klines, navMap, usIdx) {
 }
 
 // 生成逐日趋势状态（带滞回）与目标仓位；endIdx 为可选的实时覆盖点
-function buildEtfPositionSeries(klines, navMap, live, panicActive) {
+function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
   const rows = klines.map(k => ({ date: k.date, close: k.close }));
   if (live && live.price > 0) {
     const last = rows[rows.length - 1];
@@ -3321,8 +3422,10 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive) {
     fn.push(v > 0 ? C[i] / v * 100 - 100 : null);
   }
   const out = [];
+  // 美股趋势状态：逐日对齐（rows 含盘中实时那一行；按「美股日期 < 交易日」取最新一根收盘）
+  const usTrend = buildUsTrendState(rows, usIdx);
   let below = 0, state = 'UP', bull = false;
-  let panicOn = false, panicAdded = false;
+  let panicOn = false, panicAdded = false, panicStartIdx = -1;
   for (let i = 0; i < n; i++) {
     if (ma21[i] == null) { out.push(null); continue; }
     if (C[i] < ma21[i] * (1 - POS_MA_BUF)) below++; else below = 0;
@@ -3332,12 +3435,18 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive) {
     bull = bar.dif != null && bar.dea != null && bar.dif > bar.dea;
     const brokeMa60 = ma60[i] != null && C[i] < ma60[i];
     const p = live && i === n - 1 && live.premiumPct != null ? live.premiumPct : fn[i];
+    const usRow = usTrend[i];
+    // 无外盘数据时静默降级为旧口径（usOk=true），保证「抓取失败」不等于「不让买」
+    const usOk = !usRow || usRow.ok;
     let cap = state === 'UP' ? (brokeMa60 ? 0.6 : 1.0) : 0.3;
-    // 抄底仓：溢价便宜时把趋势上限抬起来（不看趋势状态，保证「更破位反而更高仓」的悖论不出现）
-    if (p != null) {
+    // 抄底仓：溢价便宜只说明「有性价比」，能不能抬仓最终要看美股趋势。美股确认走坏
+    // 且未止跌（!usOk）时不给低溢价抄底仓，并把整体仓位封顶 POS_US_BAD_CAP——
+    // 这就是 2026-01~03「一路加仓一路亏」的修正点。
+    if (p != null && usOk) {
       if (p < PREMIUM_ADD) cap = Math.max(cap, POS_DIP_CAP_CHEAP);
       else if (p < PREMIUM_BUY) cap = Math.max(cap, POS_DIP_CAP_BUY);
     }
+    if (!usOk) cap = Math.min(cap, POS_US_BAD_CAP);
     // 零轴下死叉：趋势转弱再压一档
     if (state === 'UP' && i > 0 && bars[i - 1] && bars[i - 1].dif >= bars[i - 1].dea && bar.dif != null && bar.dif <= bar.dea && bar.dif < 0) cap *= 0.7;
     const pf = premiumPositionFactor(p);
@@ -3345,23 +3454,33 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive) {
     // 恐慌抄底：隔夜外盘重挫 + 极限超卖共振时，仓位下限抬到 65%（不再被溢价系数打折）；
     // 收盘重新站上 MA21 后再补到 85%——「分批重仓」，不为假底一次性买单。
     const panic = !!(panicActive && panicActive.has(rows[i].date));
-    if (panic) { if (!panicOn) { panicOn = true; panicAdded = false; } }
-    else panicOn = false;
+    if (panic) { if (!panicOn) { panicOn = true; panicAdded = false; panicStartIdx = i; } }
+    else { panicOn = false; panicStartIdx = -1; }
     if (panicOn && !panicAdded && C[i] > ma21[i]) panicAdded = true;
+    // 恐慌下限的「有效期」：11 次历史触发里，站上 MA21 快的（4 天、10 天、12 天）都是好底
+    // （+8.8% / +6.2% / +8.4%），而 2026-01-21、2025-03-04 两次扛满 30 天都站不回 MA21，
+    // 各亏 6.1% / 5.4%——那是下跌中继，不是恐慌底。所以：美股仍在走坏且未止跌（!usOk）时，
+    // 触发后超过 PANIC_US_GRACE_DAYS 个交易日仍未站上 MA21，就撤掉 65% 下限、回到防守仓位。
+    // 注意不能反过来「美股走坏就不让恐慌抄底」——实测 usOk=false 的 6 次反而更准
+    // （平均 +2.7%、胜率 67%，2026-07-30 的最佳案例正是此状态），门控的是「扛多久」。
+    const panicLapsed = panicOn && !panicAdded && !usOk && panicStartIdx >= 0 && (i - panicStartIdx) >= PANIC_US_GRACE_DAYS;
     // 恐慌下限只在高溢价（≥22%）以内生效——溢价极高时仍让「高溢价压仓」规则优先，避免自相矛盾
-    if (panicOn && (p == null || p <= PREMIUM_WATCH)) target = Math.max(target, panicAdded ? POS_PANIC_CAP_ADD : POS_PANIC_CAP);
+    if (panicOn && !panicLapsed && (p == null || p <= PREMIUM_WATCH)) target = Math.max(target, panicAdded ? POS_PANIC_CAP_ADD : POS_PANIC_CAP);
     out.push({
       date: rows[i].date, close: +C[i].toFixed(3), premium: p == null ? null : +p.toFixed(2),
       state, bull, ma21: ma21[i] == null ? null : +ma21[i].toFixed(3), ma60: ma60[i] == null ? null : +ma60[i].toFixed(3),
       cap: +cap.toFixed(2), factor: pf, target: +target.toFixed(2), belowDays: below, intraday: !!rows[i].intraday,
-      panic, panicAdded: panicOn && panicAdded,
+      panic, panicAdded: panicOn && panicAdded, panicLapsed,
+      // 美股趋势（同日的确认状态）：供前端仓位卡与「买卖信号清单」说明为何不加仓
+      usOk, usDown: usRow ? usRow.down : null, usRepair: usRow ? usRow.repair : null,
+      usClose: usRow ? usRow.close : null, usMa50: usRow ? usRow.ma50 : null, usRebound: usRow ? usRow.rebound : null,
     });
   }
   return out;
 }
 
-function buildEtfPositionPlan(klines, navMap, live, panic) {
-  const series = buildEtfPositionSeries(klines, navMap, live, panic && panic.active);
+function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
+  const series = buildEtfPositionSeries(klines, navMap, live, panic && panic.active, usIdx);
   if (!series) return null;
   const last = series[series.length - 1];
   if (!last) return null;
@@ -3371,16 +3490,62 @@ function buildEtfPositionPlan(klines, navMap, live, panic) {
   const zone = premiumZone(p);
   const iopv = live && live.iopv > 0 ? live.iopv : null;
 
+  // 美股趋势确认：低溢价能不能抬仓的前提（见 buildUsTrendState）
+  const usOk = last.usOk !== false;
+  const usPct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%');
+  const usInfo = {
+    ok: usOk,
+    down: !!last.usDown,
+    repair: !!last.usRepair,
+    close: last.usClose != null ? last.usClose : null,
+    ma50: last.usMa50 != null ? last.usMa50 : null,
+    rebound: last.usRebound != null ? last.usRebound : null,
+    repairPct: US_TREND_REPAIR_PCT,
+    badCap: POS_US_BAD_CAP,
+    label: usOk ? (last.usDown ? '美股走坏后已止跌确认' : '美股趋势正常') : '美股走坏且未止跌',
+    note: usOk
+      ? (last.usDown
+        ? `纳指自近 20 日低点已反弹 ${usPct(last.usRebound)}（≥${US_TREND_REPAIR_PCT}%），止跌确认 → 低溢价抄底仓恢复生效`
+        : '纳指在 MA50 上方或 MA50 未下行，趋势健康 → 低溢价抄底仓正常生效')
+      : `纳指 ${last.usClose != null ? last.usClose.toFixed(0) : '—'} 收在 MA50 ${last.usMa50 != null ? last.usMa50.toFixed(0) : '—'} 下方且 MA50 下行（自近 20 日低点 ${usPct(last.usRebound)}）→ 低溢价抄底仓不生效，整体仓位封顶 ${Math.round(POS_US_BAD_CAP * 100)}%`,
+  };
+
   // 动作措辞：趋势破坏 → 真的减；否则即使溢价极高也只是「持有不加仓」
   let action, tone, headline;
   const prev = series[series.length - 2];
   const changed = prev && Math.abs(last.target - prev.target) >= 0.049;
-  if (last.panic) {
+  if (last.panic && last.panicLapsed) {
+    // 触发后超过 PANIC_US_GRACE_DAYS 个交易日仍站不回 MA21 → 这是下跌中继，不是恐慌底
+    action = `抄底未确认 · 撤回 ${posPct}%`;
+    tone = 'warn';
+    headline = `恐慌抄底信号已触发超过 ${PANIC_US_GRACE_DAYS} 个交易日，但价格始终站不回 MA21（约 ${last.ma21 != null ? last.ma21.toFixed(3) : 'MA21'}）——`
+      + `「利空集中兑现」的判断被证伪，这更像下跌中继（历史上 2026-01-21、2025-03-04 两次各亏 6.1% / 5.4%）。`
+      + `撤回 ${Math.round(POS_PANIC_CAP * 100)}% 的仓位下限，按 ${posPct}% 的防守仓位执行${usInfo.ok ? '' : '（美股仍未止跌，整体封顶 ' + Math.round(POS_US_BAD_CAP * 100) + '%）'}；`
+      + `等重新站上 MA21 或美股止跌确认再补回。`;
+  } else if (last.panic) {
+    const panicFloorPct = Math.round((last.panicAdded ? POS_PANIC_CAP_ADD : POS_PANIC_CAP) * 100);
+    const lv = panic && panic.current && panic.current.level && panic.current.level !== '正常' ? `（${panic.current.level}）` : '';
+    const ma21Txt = last.ma21 != null ? last.ma21.toFixed(3) : 'MA21';
     action = last.panicAdded ? `分批重仓 · ${posPct}%` : `恐慌抄底 · 先建 ${posPct}%`;
     tone = 'buy';
+    const addPct = Math.round(POS_PANIC_CAP_ADD * 100);
+    const tailTxt = posPct >= addPct ? `已到 ${addPct}% 上限，不再追加。` : `等重新站上 MA21（约 ${ma21Txt}）确认止跌，再补到 ${addPct}%。`;
     headline = last.panicAdded
-      ? `恐慌抄底信号已获价格确认（重新站上 MA21 ${last.ma21 != null ? last.ma21.toFixed(3) : ''}）——按「分批重仓」把仓位补到 ${posPct}%。`
-      : `触发「恐慌抄底」信号${panic && panic.current ? '（' + panic.current.level + '）' : ''}：隔夜外盘重挫 + 极限超卖共振，属利空集中兑现、而非基本面转坏。先建 ${posPct}% 打底，等重新站上 MA21（约 ${last.ma21 != null ? last.ma21.toFixed(3) : 'MA21'}）确认止跌，再补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%。`;
+      ? `恐慌抄底信号已获价格确认（重新站上 MA21 ${ma21Txt}）——按「分批重仓」把仓位补到 ${posPct}%。`
+      : `触发「恐慌抄底」信号${lv}：隔夜外盘重挫 + 极限超卖共振，属利空集中兑现、而非基本面转坏。`
+        + (posPct > panicFloorPct
+          ? `叠加${last.usRepair ? '美股止跌确认与' : ''}溢价${zone.label}，仓位可直接给到 ${posPct}%（高于 ${panicFloorPct}% 的恐慌下限）；${tailTxt}`
+          : `先建 ${posPct}% 打底，${tailTxt}`);
+    // 美股仍在下跌通道时，把「有效期」讲清楚——这正是 2026-01~03 一路扛仓的教训
+    if (!last.panicAdded && !usInfo.ok) {
+      headline += ` 注意：美股仍在下跌通道，若 ${PANIC_US_GRACE_DAYS} 个交易日内仍站不回 MA21，就撤回 ${Math.round(POS_PANIC_CAP * 100)}% 下限、按防守仓位执行（2026-01-21 触发的那次就是这样，最终扛满 30 天亏 6.1%）。`;
+    }
+  } else if (!usOk) {
+    // 2026-01~03 的教训：只盯「溢价低」会一路加仓、跟不上美股的跌。
+    action = `等美股确认 · 仓位压到 ${posPct}%`; tone = 'warn';
+    headline = `A股这边${up ? '趋势尚可' : '趋势已破坏'}，但美股还没好转：${usInfo.note}。`
+      + `溢价${p == null ? '偏低' : ` ${p.toFixed(1)}%（${zone.label}）`}只说明「有性价比」，`;
+    headline += `不能作为抄底/重仓的理由——先按 ${posPct}% 持有，等纳指自近 20 日低点反弹 ≥${US_TREND_REPAIR_PCT}% 或收复 MA50，再把仓位抬回 ${Math.round(POS_DIP_CAP_BUY * 100)}~${Math.round(POS_DIP_CAP_CHEAP * 100)}%。`;
   } else if (!up) {
     const cheapDip = p != null && p < PREMIUM_BUY;
     action = cheapDip && posPct >= 50 ? `留 ${posPct}% 抄底仓` : `减仓至 ${posPct}%`;
@@ -3420,15 +3585,36 @@ function buildEtfPositionPlan(klines, navMap, live, panic) {
     triggers.push({
       label: `减仓线 · 连续 ${POS_BELOW_N} 日收在 MA21 缓冲带下`,
       price: +(last.ma21 * (1 - POS_MA_BUF)).toFixed(3),
-      note: `MA21 ${last.ma21.toFixed(3)} × ${(1 - POS_MA_BUF).toFixed(2)}；触发即按当时仓位上限执行（溢价 <18% 时上限 65~85%，否则 30%）`,
+      note: `MA21 ${last.ma21.toFixed(3)} × ${(1 - POS_MA_BUF).toFixed(2)}；触发即按当时仓位上限执行（溢价 <18% 且美股确认止跌时上限 65~85%，否则 30%）`,
       tone: 'sell',
     });
     triggers.push({ label: 'MA21（多空分界）', price: last.ma21, note: '站回上方则恢复向上状态', tone: 'ref' });
   }
   if (last.ma60 != null) triggers.push({ label: 'MA60（趋势生命线）', price: last.ma60, note: '跌破则趋势上限降到 60%（再乘溢价系数）', tone: 'warn' });
   if (iopv) {
-    triggers.push({ label: `加仓价 · 溢价 ${PREMIUM_ADD}%`, price: +(iopv * (1 + PREMIUM_ADD / 100)).toFixed(3), note: '低于此价可满仓', tone: 'buy' });
-    triggers.push({ label: `买入价 · 溢价 ${PREMIUM_BUY}%`, price: +(iopv * (1 + PREMIUM_BUY / 100)).toFixed(3), note: '低于此价可加到九成', tone: 'buy' });
+    triggers.push({
+      label: `加仓价 · 溢价 ${PREMIUM_ADD}%`,
+      price: +(iopv * (1 + PREMIUM_ADD / 100)).toFixed(3),
+      note: usOk ? '低于此价可加满（已含美股趋势确认）' : `低于此价也先别满仓：美股未止跌，整体封顶 ${Math.round(POS_US_BAD_CAP * 100)}%`,
+      tone: usOk ? 'buy' : 'warn',
+    });
+    triggers.push({
+      label: `买入价 · 溢价 ${PREMIUM_BUY}%`,
+      price: +(iopv * (1 + PREMIUM_BUY / 100)).toFixed(3),
+      note: usOk ? '低于此价可加到九成（已含美股趋势确认）' : '美股未止跌 → 加到 4 成为限，等止跌确认再补',
+      tone: usOk ? 'buy' : 'warn',
+    });
+  }
+  // 美股趋势线：低溢价能不能抬仓，最终看这里
+  if (usInfo.close != null && usInfo.ma50 != null) {
+    triggers.push({
+      label: '纳斯达克（美股风向 · 非本 ETF 价位）',
+      price: usInfo.close,
+      note: usOk
+        ? `MA50 ${usInfo.ma50.toFixed(0)}；趋势健康/已止跌 → 低溢价抄底仓生效（自近 20 日低点 ${usPct(usInfo.rebound)}）`
+        : `MA50 ${usInfo.ma50.toFixed(0)}；收在下方且 MA50 下行 → 抄底仓不生效，整体封顶 ${Math.round(POS_US_BAD_CAP * 100)}%，需自近 20 日低点反弹 ≥${US_TREND_REPAIR_PCT}%（现 ${usPct(usInfo.rebound)}）`,
+      tone: usOk ? 'ref' : 'warn',
+    });
   }
   if (last.close && last.ma21) {
     triggers.push({ label: '现价', price: last.close, note: `${last.intraday ? '盘中' : last.date}`, tone: 'ref' });
@@ -3451,17 +3637,22 @@ function buildEtfPositionPlan(klines, navMap, live, panic) {
     from: first.date,
   };
 
-  // 趋势上限的构成说明（含低溢价抄底仓的抬高）
+  // 趋势上限的构成说明（含低溢价抄底仓的抬高；抄底仓必须叠加美股趋势确认）
   const baseCap = last.cap;
   const trendCap = up ? (last.ma60 != null && last.close < last.ma60 ? 0.6 : 1.0) : 0.3;
-  const dipLift = p != null && p < PREMIUM_ADD ? POS_DIP_CAP_CHEAP : (p != null && p < PREMIUM_BUY ? POS_DIP_CAP_BUY : null);
+  const dipLiftBase = p != null && p < PREMIUM_ADD ? POS_DIP_CAP_CHEAP : (p != null && p < PREMIUM_BUY ? POS_DIP_CAP_BUY : null);
+  const dipLift = usOk ? dipLiftBase : null;   // 美股走坏且未止跌 → 抄底仓不生效
   const capNote = last.panic
-    ? (last.panicAdded
-        ? `恐慌抄底信号已确认（重新站上 MA21）→ 仓位下限从 ${Math.round(POS_PANIC_CAP * 100)}% 补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%`
-        : `触发恐慌抄底信号 → 仓位下限 ${Math.round(POS_PANIC_CAP * 100)}%（不被溢价系数打折）；重新站上 MA21 补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%`)
-    : (dipLift != null && dipLift > trendCap)
-      ? `趋势基准上限 ${Math.round(trendCap * 100)}%，但溢价 ${p.toFixed(1)}% 属便宜区 → 抬高到 ${Math.round(dipLift * 100)}% 的抄底仓`
-      : `${up ? '趋势向上' : '趋势破坏'} → 基准上限 ${Math.round(trendCap * 100)}%`;
+    ? (last.panicLapsed
+        ? `恐慌抄底已触发超过 ${PANIC_US_GRACE_DAYS} 个交易日但仍站不回 MA21 → 撤回 ${Math.round(POS_PANIC_CAP * 100)}% 下限，按 ${posPct}% 的防守仓位执行`
+        : last.panicAdded
+          ? `恐慌抄底信号已确认（重新站上 MA21）→ 仓位下限从 ${Math.round(POS_PANIC_CAP * 100)}% 补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%`
+          : `触发恐慌抄底信号 → 仓位下限 ${Math.round(POS_PANIC_CAP * 100)}%（不被溢价系数打折）；重新站上 MA21 补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%`)
+    : !usOk
+      ? `美股走坏且未止跌 → 整体封顶 ${Math.round(POS_US_BAD_CAP * 100)}%：溢价${dipLiftBase != null ? ` ${p.toFixed(1)}% 虽属便宜区（抄底仓上限 ${Math.round(dipLiftBase * 100)}%）` : '再低'}，${dipLiftBase != null ? '但' : ''}美股趋势没好转就不抬仓`
+      : (dipLift != null && dipLift > trendCap)
+        ? `趋势基准上限 ${Math.round(trendCap * 100)}%，溢价 ${p.toFixed(1)}% 属便宜区 + 美股趋势正常/已止跌 → 抬高到 ${Math.round(dipLift * 100)}% 的抄底仓`
+        : `${up ? '趋势向上' : '趋势破坏'} → 基准上限 ${Math.round(trendCap * 100)}%`;
 
   return {
     action, tone, headline, entryNote, capNote, panic: last.panic,
@@ -3470,6 +3661,8 @@ function buildEtfPositionPlan(klines, navMap, live, panic) {
     capTrend: baseCap, premiumFactor: last.factor, premium: p, premiumZone: zone,
     ma21: last.ma21, ma60: last.ma60, close: last.close, belowDays: last.belowDays, intraday: last.intraday,
     factorTable: POS_FACTOR_TABLE.map(x => ({ ...x, active: last.factor === x.factor })),
+    // 美股趋势确认（低溢价能否抬仓的前提）：供前端仓位卡直接展示
+    usTrend: usInfo,
     triggers, backtest,
     // 逐日序列：供前端「仓位阶梯图」与历史查看（近 120 个交易日）
     history: series.slice(-120),
@@ -4213,22 +4406,27 @@ async function getEtfMarketData() {
 
   // 恐慌抄底信号：外盘情绪（纳指/费半）+ 极限超卖 + 溢价压缩 多条件共振
   //  先于清单与仓位建议计算，供两者共用同一份「恐慌窗口」判定
+  // 美股指数（纳指/费半）：既作「恐慌抄底」的外盘输入，也作「美股趋势确认」的门控输入
+  // （低溢价能不能抬仓、要不要把整体仓位压到 40% 以下，都看它）
+  let usIdx = null;
+  try { usIdx = await fetchUsIndexHistory(); } catch (e) { console.error('[us-index]', e.message); }
+
   let panicSignal = null;
   try {
-    const usIdx = await fetchUsIndexHistory();
     panicSignal = buildEtfPanicSignal(klines, navMap, usIdx);
   } catch (e) { console.error('[etf-panic]', e.message); }
 
-  // 多指标组合信号（买卖信号清单 v2）：溢价为主 + 威廉%R/MA21/布林/MACD 共振
+  // 多指标组合信号（买卖信号清单 v6）：溢价为主 + 威廉%R/MA21/布林/MACD 共振，
+  // 且美股未确认止跌时不给「重仓买入/买入/试仓」，统一降级为「等美股确认」
   let comboSignals = { signals: [], stats: null, backtest: null };
-  try { comboSignals = buildEtfCompositeSignals(klines, navMap, panicSignal); } catch (e) { console.error('[etf-combo]', e.message); }
+  try { comboSignals = buildEtfCompositeSignals(klines, navMap, panicSignal, usIdx); } catch (e) { console.error('[etf-combo]', e.message); }
 
-  // 仓位建议：趋势定方向、溢价定仓位（盘中用实时价与实时溢价覆盖）
+  // 仓位建议：趋势定方向、溢价定仓位、美股趋势定「低溢价能不能抬仓」（盘中用实时价与实时溢价覆盖）
   let positionPlan = null;
   try {
     positionPlan = buildEtfPositionPlan(klines, navMap, (quote && quote.price > 0) ? {
       price: quote.price, premiumPct: quote.premiumPct, iopv: quote.iopv, date: todayStr,
-    } : null, panicSignal);
+    } : null, panicSignal, usIdx);
   } catch (e) { console.error('[etf-pos]', e.message); }
 
   // 买点确认用指标（威廉%R / RSI / 布林带）；仅作买点过滤与展示，不生成卖出信号
