@@ -4451,22 +4451,6 @@ function buildEtfAdvice(ctx) {
     });
   }
 
-  // 关键价位：把溢价档位翻译成可直接挂单的价格
-  const levels = [];
-  if (ladder) {
-    levels.push({ label: `加仓价 · 溢价 ${PREMIUM_ADD}%`, price: ladder.add.price, note: '低于此价可多买', tone: 'buy' });
-    levels.push({ label: `买入价 · 溢价 ${PREMIUM_BUY}%`, price: ladder.buy.price, note: '低于此价可买入', tone: 'buy' });
-    levels.push({ label: `警戒价 · 溢价 ${PREMIUM_WATCH}%`, price: ladder.watch.price, note: '高于此位只减不加', tone: 'warn' });
-    levels.push({ label: `减仓价 · 溢价 ${PREMIUM_DANGER}%`, price: ladder.cut.price, note: '溢价极高，减仓避险', tone: 'sell' });
-    levels.push({ label: '净值参考价 IOPV', price: +iopv.toFixed(4), note: '溢价 0% 的理论价', tone: 'ref' });
-  }
-  if (ind.ma21 != null) levels.push({ label: 'MA21', price: +ind.ma21.toFixed(3), note: '多空分界，跌破减仓', tone: 'ref' });
-  if (ind.ma5 != null) levels.push({ label: 'MA5', price: +ind.ma5.toFixed(3), note: '短线强弱', tone: 'ref' });
-  const lastBuy = [...(signals || [])].reverse().find(s => s.side === 'buy');
-  const lastSell = [...(signals || [])].reverse().find(s => s.side === 'sell');
-  if (lastBuy) levels.push({ label: '最近买点', price: +lastBuy.close.toFixed(3), note: lastBuy.date, tone: 'buy' });
-  if (lastSell) levels.push({ label: '最近卖点', price: +lastSell.close.toFixed(3), note: lastSell.date, tone: 'sell' });
-
   // ── 买点确认：溢价达标之外，再确认「没有在冲高」──
   // 回测依据（scripts/etf-indicator-study.js，764 个交易日）：
   //   · 溢价 ≤18% 单独用 → 年化 56.1% / Calmar 1.84；
@@ -4582,7 +4566,7 @@ function buildEtfAdvice(ctx) {
     }
   }
 
-  return { level, action, headline, reasons, levels, held, zone: zone.key, confirm };
+  return { level, action, headline, reasons, held, zone: zone.key, confirm };
 }
 
 // 盘中提示：状态型条件（每次请求重算，前端按 key 去重后只提示新增项）

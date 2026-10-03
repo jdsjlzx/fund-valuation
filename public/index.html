@@ -1332,21 +1332,6 @@
     .etf-reason-dot.neutral { background: #8899aa; }
     .etf-reason-label { flex: 0 0 auto; font-weight: 700; color: var(--text-name); }
     .etf-reason-text { color: var(--text-secondary); }
-    .etf-levels {
-      margin-top: 8px;
-      border-top: 1px dashed var(--border-header);
-      padding-top: 7px;
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-      gap: 6px 12px;
-    }
-    .etf-level { display: flex; align-items: baseline; gap: 6px; font-size: 10.5px; }
-    .etf-level-price { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-primary); }
-    .etf-level-price.tone-buy { color: #e84c3d; }
-    .etf-level-price.tone-sell { color: #2ebd85; }
-    .etf-level-price.tone-warn { color: #e8a03d; }
-    .etf-level-name { color: var(--text-secondary); }
-    .etf-level-note { color: var(--text-muted); font-size: 9.5px; margin-left: auto; }
     /* 关键指标：并入今日操作建议卡底部 */
     .etf-advice-metrics {
       border-top: 1px solid var(--border-header);
@@ -2906,12 +2891,6 @@ function etfAdviceHtml() {
     wait:   'linear-gradient(180deg,#8ba4bb,#5f7a94)',
   }[a.level] || 'linear-gradient(180deg,#8ba4bb,#5f7a94)';
   const icon = { danger: '⚠', warn: '⚠', buy: '▲', hold: '●', wait: '○' }[a.level] || '○';
-  const levelsHtml = (a.levels || []).map(l => `
-    <div class="etf-level">
-      <span class="etf-level-price tone-${l.tone}">${l.price}</span>
-      <span class="etf-level-name">${l.label}</span>
-      <span class="etf-level-note">${l.note || ''}</span>
-    </div>`).join('');
   const reasonsHtml = (a.reasons || []).map(r => `
     <div class="etf-reason">
       <span class="etf-reason-dot ${r.tone}"></span>
@@ -2929,10 +2908,7 @@ function etfAdviceHtml() {
         <div class="etf-reasons">${reasonsHtml}</div>
         ${etfPosAdviceHtml()}
         ${etfPanicHtml()}
-        ${etfConfirmHtml()}
-        ${levelsHtml ? `<div class="etf-levels">${levelsHtml}</div>` : ''}
       </div>
-      <div class="etf-advice-metrics" id="etf-metrics">${etfMetricsHtml()}</div>
     </div>`;
 }
 
@@ -3844,7 +3820,7 @@ function updateEtfLive() {
     if (el && el.innerHTML !== html) el.innerHTML = html;
   };
   set('etf-hero', etfHeroHtml());
-  set('etf-advice-wrap', etfAdviceHtml());   // 含底部的「关键指标」（均线/振幅随实时价变化）
+  set('etf-advice-wrap', etfAdviceHtml());   // 含仓位建议 / 恐慌抄底（实时价变化）
   set('etf-zones', etfPremiumZonesHtml());
   set('etf-alerts', etfAlertsHtml());
   set('etf-intraday', etfIntradayHtml());
