@@ -2607,8 +2607,8 @@ const ETF_MKT_TTL_IDLE = 180_000;           // 非盘中：3 分钟
 //   即：进场溢价越低，后续收益与胜率越好，价差约 2~4 个百分点来自溢价回归本身。
 const PREMIUM_ADD = 15;      // 加仓线（多买）
 const PREMIUM_BUY = 18;      // 买入线
-const PREMIUM_WATCH = 22;    // 警戒线（高于此位只减不加）
-const PREMIUM_DANGER = 27;   // 减仓线
+const PREMIUM_WATCH = 22;    // 警戒线（高溢价：仓位压到 3 成以内，只少买不追高）
+const PREMIUM_DANGER = 27;   // 极高溢价线（仓位压到 2 成以内）
 const PREMIUM_ZONES = [
   { key: 'add',   level: 'cheap',   label: '加仓区', lo: -Infinity,      hi: PREMIUM_ADD,    note: `溢价 <${PREMIUM_ADD}%，可多买` },
   { key: 'buy',   level: 'ok',      label: '买入区', lo: PREMIUM_ADD,    hi: PREMIUM_BUY,    note: `溢价 ${PREMIUM_ADD}~${PREMIUM_BUY}%，可买入` },
@@ -2926,13 +2926,16 @@ function buildEtfSignals(klines) {
   };
 }
 
-// ── 多指标组合信号（买卖信号清单 v2）──
+// ── 多指标组合信号（买卖信号清单 v4）──
 //  不再以 MACD 为唯一标准。依据 764 日回测结论（scripts/etf-indicator-study.js）：
-//  · 溢价率是一级变量：<15 重仓区 / 15~18 买入区 / ≥22 减仓区 / ≥27 清仓区
+//  · 溢价率是一级变量——但只决定「仓位上限」与「能不能加仓」，不直接产生清仓：
+//    <15 重仓区 / 15~18 买入区 / 18~22 观望区 / 22~27 高溢价（≤3 成）/ ≥27 极高（≤2 成）
 //  · 「不追高」过滤器（威廉%R≤-60 / 收盘<MA21 / 收盘<布林中轨，任一命中）显著改善买点质量
-//  · MACD 只做确认角色：金叉兜底试仓、死叉确认减仓，不做独立买卖开关
-//  · 布林上轨/威廉超买（≥-10）作为高位过热信号，与溢价≥22 共振时为确认型卖点
-//  输出按「连续同类型合并为段」，每段带证据列表与段首后 20 日表现
+//  · 高溢价区仍保留 MACD 级别的离散买卖点（v4 新增，避免整段被「持有不加仓」吞掉）：
+//      死叉 → 减仓；死叉后首次跌破 MA21 → 确认减仓（一轮空头只确认一次）；
+//      金叉 → 少量买入（溢价偏高，仓位不超过 3 成）
+//  · 布林上轨/威廉超买（≥-10）作为高位过热信号，在「持有不加仓」段里提示别追高
+//  输出按「连续同类型合并为段」，每段带证据列表与信号后 20 日涨跌
 function buildEtfCompositeSignals(klines, navMap) {
   const n = klines.length;
   if (n < 40) return { signals: [], stats: null, backtest: null };
@@ -2962,12 +2965,14 @@ function buildEtfCompositeSignals(klines, navMap) {
     buy_strong: { label: '重仓买入', action: '分批重仓', side: 'buy' },
     buy:        { label: '买入',     action: '分批买入', side: 'buy' },
     buy_weak:   { label: '试仓',     action: '小仓试仓', side: 'buy' },
+    buy_small:  { label: '少量买入', action: '小仓 ≤3成', side: 'buy' },
     sell_weak:  { label: '持有不加仓', action: '持仓不动', side: 'hold' },
     sell:       { label: '减仓',     action: '减仓',     side: 'sell' },
     sell_clear: { label: '清仓/减半', action: '清仓或减半', side: 'sell' },
   };
 
   const sigs = [];
+  let breakArmed = false;   // 死叉后是否还允许一次「跌破 MA21」确认减仓
   for (let i = 35; i < n; i++) {
     const p = premAt(i);
     if (p == null) continue;
@@ -2978,7 +2983,7 @@ function buildEtfCompositeSignals(klines, navMap) {
     const bollUp = boll.mid[i] != null && boll.up[i] != null && C[i] > boll.up[i];
     const willHot = willR[i] != null && willR[i] >= -10;
 
-    let code = null, ev = [];
+    let code = null, ev = [], tag = null;
     if (p < 15 && fHit) {
       code = 'buy_strong';
       ev = [`溢价 ${p.toFixed(1)}%（<15 重仓区）`];
@@ -2995,19 +3000,31 @@ function buildEtfCompositeSignals(klines, navMap) {
       code = 'buy_weak';
       ev = [`溢价 ${p.toFixed(1)}%（≤18）`, 'MACD 零轴下金叉（无回调确认，试仓）'];
     } else if (p >= PREMIUM_WATCH) {
-      // 高溢价本身不是卖出理由：只有趋势先破坏（或零轴下死叉）才真的减仓，
-      // 否则只是「持有但不加仓」——避免 9 月这种「溢价高 + 一路上涨」的行情被震出。
+      // 高溢价本身不是「清仓」理由，但它一定是「仓位上限」：统一压到 3 成以内
+      // （≥27 压到 2 成）。高溢价区里仍然保留 MACD 级别的离散买卖点——
+      //   死叉 → 减仓；死叉后的首次跌破 MA21 → 确认减仓（一次死叉只确认一次，
+      //   避免同一轮空头里反复重复输出）；金叉 → 少量买入。
       const broke = trendBroken[i];
-      const deadLow = deathCross(i) && bars[i] && bars[i].dif < 0;
+      const dead = deathCross(i);
+      const brokeMa21 = ma21[i] != null && C[i] < ma21[i];
+      if (goldenCross(i)) breakArmed = false;
       if (broke && p >= PREMIUM_DANGER) {
         code = 'sell_clear';
         ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_DANGER} 极高区）`, '趋势破坏（连续 3 日破 MA21 缓冲带或跌破 MA60）', '溢价回落 + 趋势转弱双杀，减半至 3 成以内'];
       } else if (broke) {
         code = 'sell';
         ev = [`溢价 ${p.toFixed(1)}%（高溢价区）`, '趋势破坏：连续 3 日收在 MA21 缓冲带下或跌破 MA60', '按仓位建议降到 30% 以内'];
-      } else if (deadLow) {
-        code = 'sell';
-        ev = [`溢价 ${p.toFixed(1)}%（高溢价区）`, 'MACD 零轴下死叉'];
+      } else if (dead) {
+        code = 'sell'; tag = 'dead';
+        breakArmed = true;
+        ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_WATCH} 高溢价区）`, 'MACD 死叉（DIF 下穿 DEA），动能转弱', '高溢价 + 动能转弱 → 减仓，仓位压到 3 成以内'];
+      } else if (brokeMa21 && breakArmed) {
+        code = 'sell'; tag = 'ma';
+        breakArmed = false;
+        ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_WATCH} 高溢价区）`, `收盘 ${C[i].toFixed(3)} 跌破 MA21 ${ma21[i].toFixed(3)}（死叉后首次破位确认）`, '高溢价 + 破位 → 减仓，仓位压到 3 成以内'];
+      } else if (goldenCross(i)) {
+        code = 'buy_small';
+        ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_WATCH} 高溢价区）`, 'MACD 金叉（DIF 上穿 DEA），动能转强', `但溢价偏高，只可少量买入：仓位不超过 3 成，不追高`];
       } else {
         code = 'sell_weak';
         ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_WATCH} 高溢价区）`, '趋势仍在 MA21 上方，仅停止加仓'];
@@ -3017,14 +3034,14 @@ function buildEtfCompositeSignals(klines, navMap) {
         if (tp != null) ev.push(`建议仓位上限 ${Math.round(tp * 100)}%（持有，不减仓）`);
       }
     }
-    if (code) sigs.push({ idx: i, date: klines[i].date, close: C[i], premium: +p.toFixed(2), code, ev });
+    if (code) sigs.push({ idx: i, date: klines[i].date, close: C[i], premium: +p.toFixed(2), code, tag: tag || code, ev });
   }
 
-  // 连续同类型合并为段（隔一天以上视为新段）
+  // 连续同类型合并为段（隔一天以上视为新段；理由不同也拆开，如 8/21 死叉与 8/24 破位）
   const segs = [];
   for (const s of sigs) {
     const last = segs[segs.length - 1];
-    if (last && last.code === s.code && s.idx - last.endIdx <= 1) {
+    if (last && last.code === s.code && last.tag === s.tag && s.idx - last.endIdx <= 1) {
       last.endIdx = s.idx; last.endDate = s.date; last.endClose = s.close;
     } else {
       segs.push({ ...s, endIdx: s.idx, endDate: s.date, endClose: s.close });
@@ -3104,19 +3121,19 @@ const POS_MA_BUF = 0.02;      // MA21 缓冲带：跌破 MA21×0.98 才计为「
 const POS_BELOW_N = 3;        // 连续 3 日线下才判定趋势破坏
 // 溢价 → 仓位系数（趋势向上时仍保留仓位，不做清仓）
 function premiumPositionFactor(pct) {
-  if (pct == null || !isFinite(pct)) return 0.8;
+  if (pct == null || !isFinite(pct)) return 0.3;   // 溢价未知时按「高溢价」防守处理
   if (pct < PREMIUM_ADD) return 1.0;      // <15%
   if (pct < PREMIUM_BUY) return 0.9;      // 15~18%
   if (pct < PREMIUM_WATCH) return 0.8;    // 18~22%
-  if (pct < PREMIUM_DANGER) return 0.7;   // 22~27%
-  return 0.6;                             // ≥27%
+  if (pct < PREMIUM_DANGER) return 0.3;   // 22~27% 高溢价：三成为限
+  return 0.2;                             // ≥27% 极高溢价：两成为限
 }
 const POS_FACTOR_TABLE = [
   { pct: `<${PREMIUM_ADD}%`, factor: 1.0, note: '加仓区，可满仓' },
   { pct: `${PREMIUM_ADD}~${PREMIUM_BUY}%`, factor: 0.9, note: '买入区，接近满仓' },
   { pct: `${PREMIUM_BUY}~${PREMIUM_WATCH}%`, factor: 0.8, note: '观望区，八成为限' },
-  { pct: `${PREMIUM_WATCH}~${PREMIUM_DANGER}%`, factor: 0.7, note: '高溢价，七成为限' },
-  { pct: `>${PREMIUM_DANGER}%`, factor: 0.6, note: '极高溢价，六成为限（不清仓）' },
+  { pct: `${PREMIUM_WATCH}~${PREMIUM_DANGER}%`, factor: 0.3, note: '高溢价，三成为限（只少买，不追高）' },
+  { pct: `>${PREMIUM_DANGER}%`, factor: 0.2, note: '极高溢价，两成为限（只减不加）' },
 ];
 
 // 生成逐日趋势状态（带滞回）与目标仓位；endIdx 为可选的实时覆盖点
@@ -3220,7 +3237,7 @@ function buildEtfPositionPlan(klines, navMap, live) {
     });
     triggers.push({ label: 'MA21（多空分界）', price: last.ma21, note: '站回上方则恢复向上状态', tone: 'ref' });
   }
-  if (last.ma60 != null) triggers.push({ label: 'MA60（趋势生命线）', price: last.ma60, note: '跌破直接降档到 60% 上限', tone: 'warn' });
+  if (last.ma60 != null) triggers.push({ label: 'MA60（趋势生命线）', price: last.ma60, note: '跌破则趋势上限降到 60%（再乘溢价系数）', tone: 'warn' });
   if (iopv) {
     triggers.push({ label: `加仓价 · 溢价 ${PREMIUM_ADD}%`, price: +(iopv * (1 + PREMIUM_ADD / 100)).toFixed(3), note: '低于此价可满仓', tone: 'buy' });
     triggers.push({ label: `买入价 · 溢价 ${PREMIUM_BUY}%`, price: +(iopv * (1 + PREMIUM_BUY / 100)).toFixed(3), note: '低于此价可加到九成', tone: 'buy' });

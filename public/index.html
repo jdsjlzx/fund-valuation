@@ -1545,6 +1545,8 @@
       font-size: 9.5px; font-weight: 700; white-space: nowrap;
     }
     .etf-signal-table .sig-badge.buy  { color: #fff; background: rgba(232,76,61,0.85); }
+    /* 少量买入：高溢价区的金叉——方向是买，但仓位被压到 3 成以内，用半透明红区分 */
+    .etf-signal-table .sig-badge.buy.small { background: rgba(232,76,61,0.5); }
     .etf-signal-table .sig-badge.sell { color: #fff; background: rgba(46,189,133,0.85); }
     /* 持有不加仓：高溢价但趋势未破坏——既不是买也不是卖 */
     .etf-signal-table .sig-badge.hold { color: #fff; background: rgba(136,153,170,0.9); }
@@ -3105,12 +3107,18 @@ function etfIntradayHtml() {
     ${etfQuoteInlineHtml()}`;
 }
 
-// ── 买卖信号清单（v3：溢价定仓位、趋势定方向）──
+// ── 买卖信号清单（v4：溢价定仓位、趋势定方向）──
 //  v2 的问题：溢价 ≥22 直接给「减仓」、≥27 给「清仓」，且买点绑定「溢价 ≤18」——
 //  2026-09 溢价全程 22%~32%，清单整月只有减仓/清仓，而同期场内价 +13.1%，与 MACD
 //  9/18 的金叉强买互相打架；更糟的是一旦在高溢价区被震出，就再也等不到 ≤18% 的买点。
-//  v3：高溢价只输出「持有不加仓 + 仓位上限」，只有趋势先破坏（连续 3 日收在
-//  MA21×0.98 下方或跌破 MA60）才真正减仓，溢价 ≥27 且趋势同破才减半；每段附建议仓位。
+//  v3：高溢价只输出「持有不加仓 + 仓位上限」——矫枉过正，把高溢价区里的 MACD 死叉/
+//  金叉全吞掉了（8/21 死叉、8/24 跌破 MA21、9/18 金叉在清单里全部消失）。
+//  v4：① 高溢价（≥22%）仓位一律压到 3 成以内（≥27% → 2 成），高溢价只提示
+//      「少量买入 / 持有不加仓」，不追高加仓；
+//      ② 高溢价区恢复 MACD 级别的离散买卖点：死叉 → 减仓，死叉后首次跌破 MA21 →
+//      确认减仓（一轮空头只确认一次），金叉 → 少量买入（≤3 成）；
+//      ③ 只有趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）才降到 3 成以内，
+//      溢价 ≥27 且趋势同破才减半。
 //  每段展示：日期段 / 价格 / 溢价 / 信号 / 仓位 / 依据 / 信号后20日涨跌
 function etfSignalsHtml() {
   const t = ETF_TRACK;
@@ -3135,7 +3143,7 @@ function etfSignalsHtml() {
       <td class="num" style="font-size:9.5px;white-space:nowrap">${segLabel(s)}</td>
       <td class="num">${s.close.toFixed(3)}</td>
       <td class="num">${s.premium != null ? s.premium.toFixed(1) + '%' : '—'}</td>
-      <td><span class="sig-badge ${s.side}">${s.label}</span><div style="font-size:9px;color:var(--text-muted);margin-top:2px">${s.action}</div></td>
+      <td><span class="sig-badge ${s.side}${s.code === 'buy_small' ? ' small' : ''}">${s.label}</span><div style="font-size:9px;color:var(--text-muted);margin-top:2px">${s.action}</div></td>
       <td class="num" style="font-size:9.5px">${s.posPct != null ? s.posPct + '%' : '—'}</td>
       <td style="font-size:9.5px;line-height:1.5">${ev}</td>
       <td class="num" style="font-size:9.5px">${follow}</td>
@@ -3146,7 +3154,7 @@ function etfSignalsHtml() {
     : '';
   // 分类型统计摘要 + 按段操作回测
   const st = combo.stats || {};
-  const typeNames = { buy_strong: '重仓买入', buy: '买入', buy_weak: '试仓', sell_weak: '持有不加仓', sell: '减仓', sell_clear: '清仓/减半' };
+  const typeNames = { buy_strong: '重仓买入', buy: '买入', buy_weak: '试仓', buy_small: '少量买入', sell_weak: '持有不加仓', sell: '减仓', sell_clear: '清仓/减半' };
   const statLine = Object.entries(typeNames)
     .filter(([k]) => st[k] && st[k].count)
     .map(([k, name]) => {
@@ -3168,7 +3176,7 @@ function etfSignalsHtml() {
     ${statLine ? `<div class="etf-legend" style="margin-top:6px"><span>${statLine}</span></div>` : ''}
     ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
-      <span>口径（v3）：<b>溢价决定仓位、趋势决定方向</b>。买点仍需「不追高」过滤（溢价&lt;18 且 威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）；高溢价（≥22）<b>不再直接减仓</b>——趋势仍在 MA21 上方时只输出「持有不加仓」并给出仓位上限，只有连续 3 日收在 MA21×0.98 下方或跌破 MA60 才真正减仓；溢价 ≥27 且趋势同时破坏才减半。连续同类型合并为段。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>说明这一买点之后确实涨了（买对了），<b class="down">卖出信号为负</b>说明之后确实跌了（减仓躲过了下跌）。</span>
+      <span>口径（v4）：<b>溢价决定仓位、趋势定方向</b>。<b>高溢价（≥22%）仓位一律压到 3 成以内，≥27% 压到 2 成</b>——所以高溢价时只提示「少量买入」或「持有不加仓」，绝不追高加仓。低溢价买点需命中「不追高」过滤（溢价&lt;18 且 威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）。高溢价区仍保留 MACD 级别的买卖点：<b>死叉 → 减仓</b>、死叉后首次<b>跌破 MA21 → 确认减仓</b>、<b>金叉 → 少量买入（≤3 成）</b>；趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）也降到 3 成以内；溢价 ≥27 且趋势同破才减半。连续同类型合并为段。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>说明这一买点之后确实涨了（买对了），<b class="down">卖出信号为负</b>说明之后确实跌了（减仓躲过了下跌）。</span>
     </div>`;
 }
 
@@ -3446,7 +3454,7 @@ function renderEtfView() {
       <div id="etf-macd">${etfMacdHtml()}</div>
     </div>
     <div class="etf-section">
-      <div class="etf-sec-title"><span>买卖信号清单</span><span class="sub">溢价定仓位 · 趋势定方向 · 全历史 ${t && t.comboSignals && t.comboSignals.signals ? t.comboSignals.signals.length : '—'} 段</span></div>
+      <div class="etf-sec-title"><span>买卖信号清单</span><span class="sub">溢价定仓位（高溢价 ≤3成）· 死叉减仓 / 金叉少量买入 · 全历史 ${t && t.comboSignals && t.comboSignals.signals ? t.comboSignals.signals.length : '—'} 段</span></div>
       <div id="etf-signals">${etfSignalsSectionInner()}</div>
     </div>
     <div class="etf-section">
