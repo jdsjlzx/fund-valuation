@@ -1722,12 +1722,17 @@ function effectiveChange(q, opts = {}) {
     // 24h模式：实时显示当前时段数据
     // 盘中：直接用盘中实时涨跌
     if (s === 'REGULAR') return q.regularMarketChangePercent ?? 0;
-    // 夜盘/收盘后窗口（ET 20:00–次日 04:00）：立即显示盘后数据——
-    // 盘后终价 vs 收盘价（最近一段真实成交），不再用期货估算
-    // （期货 vs 昨结算价会把整个常规盘涨幅重复计入，例：QQQ 收盘 +1.02%、
-    //  盘后终价≈持平，期货口径却显示 +0.99%）。
-    // 盘后无数据的标的才回退到期货夜盘估算 overnightChangePercent。
+    // 夜盘/收盘后窗口（ET 20:00–次日 04:00）：
+    // ① 雪球夜盘真实成交（富途「夜盘」同款数据源，口径同为相对正股收盘价）优先，
+    //    与富途 App 显示完全一致
+    // ② 无雪球数据时显示盘后终价 vs 收盘价（最近一段确认成交），
+    //    不采信 Yahoo fullday/期货/β 估算冒充的"夜盘价"
+    //    （期货 vs 昨结算价会把整个常规盘涨幅重复计入，例：QQQ 收盘 +1.02%、
+    //     盘后终价≈持平，期货口径却显示 +0.99%）
     if (s === 'OVERNIGHT') {
+      if (q.overnightSource === 'xueqiu' && q.overnightChangePercent != null) {
+        return q.overnightChangePercent;
+      }
       const closePrice = q.closePrice || q.regularMarketPrice;
       if (q.afterHoursPrice && closePrice) {
         return ((q.afterHoursPrice - closePrice) / closePrice) * 100;

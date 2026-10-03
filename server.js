@@ -1476,7 +1476,10 @@ function computeOvernightQuote({
     yahooFullday != null &&
     isFinite(yahoo.fulldayChangePercent) &&
     Math.abs(yahooFullday - (closeForOvernight || 0)) > 1e-6 &&
-    (!sina?.afterHoursPrice || Math.abs(yahooFullday - sina.afterHoursPrice) > 1e-4);
+    // 相对容差 0.1%：Yahoo 的 fullday 价经常只是盘后价多保留了几位小数
+    // （实测 MKSI：286.569 vs 盘后 286.5685，差 0.0005 绝对容差拦不住），
+    // 差异小于 0.1% 视为"未覆盖夜盘"，避免拿盘后价冒充夜盘价
+    (!sina?.afterHoursPrice || Math.abs(yahooFullday - sina.afterHoursPrice) / sina.afterHoursPrice > 0.001);
 
   // 雪球夜盘（富途同款 Blue Ocean 通道）是否可用：
   //   个股 = 时间戳落在"本轮夜盘"内；指数 ETF 有连续期货代理，雪球滞后时改用期货。
