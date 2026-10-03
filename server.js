@@ -2936,7 +2936,7 @@ function buildEtfSignals(klines) {
 //      金叉 → 少量买入（溢价偏高，仓位不超过 3 成）
 //  · 布林上轨/威廉超买（≥-10）作为高位过热信号，在「持有不加仓」段里提示别追高
 //  输出按「连续同类型合并为段」，每段带证据列表与信号后 20 日涨跌
-function buildEtfCompositeSignals(klines, navMap) {
+function buildEtfCompositeSignals(klines, navMap, panic) {
   const n = klines.length;
   if (n < 40) return { signals: [], stats: null, backtest: null };
   const C = klines.map(k => k.close);
@@ -2958,7 +2958,7 @@ function buildEtfCompositeSignals(klines, navMap) {
   const trendBroken = new Array(n).fill(false);
   { let below = 0; for (let i = 0; i < n; i++) { if (ma21[i] == null) continue; if (C[i] < ma21[i] * (1 - POS_MA_BUF)) below++; else below = 0; trendBroken[i] = below >= POS_BELOW_N || (ma60[i] != null && C[i] < ma60[i]); } }
   // 段内建议仓位（复用仓位建议的逐日目标仓位）
-  const posSeries = buildEtfPositionSeries(klines, navMap) || [];
+  const posSeries = buildEtfPositionSeries(klines, navMap, null, panic && panic.active) || [];
   const posAt = i => (posSeries[i] && posSeries[i].target != null) ? posSeries[i].target : null;
 
   const META = {
@@ -3145,8 +3145,144 @@ const POS_FACTOR_TABLE = [
   { pct: `>${PREMIUM_DANGER}%`, factor: 0.2, note: '极高溢价，两成为限（只减不加）' },
 ];
 
+// ── 外围情绪源：纳指综合 / 费城半导体 日K（新浪美股）──
+// 「恐慌抄底」信号的外盘输入。抓取失败时静默降级（信号自动退化为 6 项技术评分）。
+const US_IDX_CACHE = { data: null, ts: 0 };
+const US_IDX_TTL = 6 * 3600e3;
+async function fetchUsIndexHistory() {
+  if (US_IDX_CACHE.data && Date.now() - US_IDX_CACHE.ts < US_IDX_TTL) return US_IDX_CACHE.data;
+  const out = {};
+  await Promise.all([['ixic', '.IXIC'], ['sox', '.SOX']].map(async ([key, sym]) => {
+    try {
+      const txt = await httpGet(
+        `https://stock.finance.sina.com.cn/usstock/api/jsonp.php/x/US_MinKService.getDailyK?symbol=${encodeURIComponent(sym)}&___qn=3`,
+        { Referer: 'https://finance.sina.com.cn/' }
+      );
+      const m = txt.match(/x\((\[[\s\S]*\])\)/);
+      if (!m) return;
+      const arr = JSON.parse(m[1]).map(r => ({ d: r.d, c: +r.c })).filter(r => r.d && isFinite(r.c));
+      const dates = arr.map(r => r.d), ret = {}, ret5 = {};
+      for (let i = 1; i < arr.length; i++) ret[dates[i]] = +((arr[i].c / arr[i - 1].c - 1) * 100).toFixed(2);
+      for (let i = 5; i < arr.length; i++) ret5[dates[i]] = +((arr[i].c / arr[i - 5].c - 1) * 100).toFixed(2);
+      out[key] = { dates, ret, ret5 };
+    } catch (e) { console.error('[us-index]', key, e.message); }
+  }));
+  if (out.ixic) { US_IDX_CACHE.data = out; US_IDX_CACHE.ts = Date.now(); }
+  return US_IDX_CACHE.data;
+}
+
+// ── 「恐慌抄底」信号 ──
+// 为什么不能只看技术超卖：764 日回测里，单纯用 %R/布林/RSI 超卖抄底会在趋势下跌中反复接飞刀
+// （2025-01、2026-01 各一次，20 日后 -5% ~ -6%）。真正区分「恐慌底」与「半山腰」的是
+// **外围情绪**：隔夜外盘重挫说明利空在集中兑现，而不是基本面在恶化。
+// 2026-07-30 实测：隔夜纳指 -1.74% / 费半 -5.33% + %R -98 + 布林 2% + 溢价 15.6% → 触发，
+// 4 个交易日 +8.8%（同期价格 +9.4%），而基准仓位只给 59%。
+// 触发条件：7 项共振 ≥5 项；触发后仓位下限抬到 65%，维持至站上 MA21(+2%)、或 +12%、或 30 日。
+const POS_PANIC_CAP = 0.65;
+const PANIC_TRIGGER = 5;
+const PANIC_HOLD_DAYS = 30;
+const PANIC_TAKE_PROFIT = 0.12;
+const PANIC_MA21_BAND = 1.02;
+const PANIC_LEVELS = [
+  { min: 6, label: '极度恐慌', note: '利空集中兑现，可分批重仓抄底' },
+  { min: 5, label: '恐慌抄底窗口', note: '外盘重挫 + 极限超卖，分批建仓' },
+  { min: 4, label: '接近抄底', note: '已具备多数条件，等外盘配合' },
+  { min: 3, label: '偏超卖', note: '仅止跌特征，暂不加仓' },
+  { min: 0, label: '正常', note: '无恐慌特征' },
+];
+
+function buildEtfPanicSignal(klines, navMap, usIdx) {
+  const n = klines.length;
+  if (n < 40) return null;
+  const C = klines.map(k => k.close);
+  const H = klines.map(k => (isFinite(k.high) ? k.high : k.close));
+  const L = klines.map(k => (isFinite(k.low) ? k.low : k.close));
+  const ma21 = movingAvgSeries(C, 21);
+  const R = rsiSeries(C, 14);
+  const W = williamsRSeries(H, L, C, 14);
+  const B = bollingerSeries(C, 20, 2);
+  const navKeys = Object.keys(navMap || {}).sort();
+  let kp = 0;
+  const prem = [];
+  for (let i = 0; i < n; i++) {
+    while (kp + 1 < navKeys.length && navKeys[kp + 1] <= klines[i].date) kp++;
+    const v = navKeys.length && navKeys[kp] <= klines[i].date ? navMap[navKeys[kp]] : null;
+    prem.push(v > 0 ? C[i] / v * 100 - 100 : null);
+  }
+  // 隔夜外盘：美股日期 < ETF 交易日 的最后一根（北京时间当日凌晨收盘）
+  const ovAt = d => {
+    if (!usIdx || !usIdx.ixic) return null;
+    const ds = usIdx.ixic.dates;
+    let lo = 0, hi = ds.length - 1, r = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (ds[mid] < d) { r = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (r < 0) return null;
+    const dd = ds[r];
+    return { date: dd, ixic: usIdx.ixic.ret[dd] ?? null, ixic5: usIdx.ixic.ret5[dd] ?? null, sox: usIdx.sox ? (usIdx.sox.ret[dd] ?? null) : null };
+  };
+  const rows = [];
+  for (let i = 21; i < n; i++) {
+    const hits = []; let s = 0;
+    const bp = B.up[i] != null ? (C[i] - B.dn[i]) / (B.up[i] - B.dn[i]) : null;
+    if (W[i] != null && W[i] <= -95) { s++; hits.push({ key: '威廉%R', value: W[i].toFixed(0), why: '≤ -95 极限超卖' }); }
+    if (bp != null && bp <= 0.10) { s++; hits.push({ key: '布林位置', value: (bp * 100).toFixed(0) + '%', why: '贴近下轨' }); }
+    if (R[i] != null && R[i] <= 40) { s++; hits.push({ key: 'RSI14', value: R[i].toFixed(0), why: '≤ 40 弱势区' }); }
+    if (prem[i] != null && prem[i] <= PREMIUM_BUY) { s++; hits.push({ key: '溢价', value: prem[i].toFixed(1) + '%', why: '≤ 18% 便宜区' }); }
+    const r5 = i >= 5 ? (C[i] / C[i - 5] - 1) * 100 : null;
+    if (r5 != null && r5 <= -4) { s++; hits.push({ key: '5日跌幅', value: r5.toFixed(1) + '%', why: '≤ -4% 急跌' }); }
+    const hi20 = Math.max(...C.slice(Math.max(0, i - 19), i + 1));
+    const dd20 = (C[i] / hi20 - 1) * 100;
+    if (dd20 <= -6) { s++; hits.push({ key: '距20日高', value: dd20.toFixed(1) + '%', why: '≤ -6% 回撤' }); }
+    const ov = ovAt(klines[i].date);
+    if (ov) {
+      if ((ov.ixic != null && ov.ixic <= -1.5) || (ov.sox != null && ov.sox <= -3)) {
+        s++;
+        hits.push({ key: '隔夜外围', value: `纳指 ${ov.ixic == null ? '—' : ov.ixic.toFixed(2) + '%'} · 费半 ${ov.sox == null ? '—' : ov.sox.toFixed(2) + '%'}`, why: `外盘重挫（美股 ${ov.date}）` });
+      } else if (ov.ixic5 != null && ov.ixic5 <= -5) {
+        s++;
+        hits.push({ key: '纳指5日', value: ov.ixic5.toFixed(1) + '%', why: '≤ -5% 外盘连跌' });
+      }
+    }
+    const lv = PANIC_LEVELS.find(x => s >= x.min);
+    rows.push({
+      date: klines[i].date, close: +C[i].toFixed(3), premium: prem[i] == null ? null : +prem[i].toFixed(2),
+      score: s, hits, level: lv.label, levelNote: lv.note, overnight: ov,
+      ma21: ma21[i] == null ? null : +ma21[i].toFixed(3),
+    });
+  }
+  // 触发 → 维持 → 退出
+  const active = new Set(); const events = [];
+  let on = false, cost = 0, cnt = 0, cur = null;
+  for (const r of rows) {
+    if (!on && r.score >= PANIC_TRIGGER) { on = true; cost = r.close; cnt = 0; cur = { date: r.date, score: r.score, px: r.close, hits: r.hits, level: r.level }; }
+    if (on) {
+      cnt++; active.add(r.date);
+      const exit = (r.ma21 != null && r.close > r.ma21 * PANIC_MA21_BAND) || cnt >= PANIC_HOLD_DAYS || (cost > 0 && r.close / cost - 1 >= PANIC_TAKE_PROFIT);
+      if (exit) { on = false; Object.assign(cur, { exitDate: r.date, exitPx: r.close, days: cnt, ret: +((r.close / cost - 1) * 100).toFixed(1) }); events.push(cur); cur = null; }
+    }
+  }
+  if (on && cur) { const lr = rows[rows.length - 1]; Object.assign(cur, { open: true, days: cnt, ret: +((lr.close / cost - 1) * 100).toFixed(1) }); events.push(cur); }
+  const closed = events.filter(e => !e.open);
+  const wins = closed.filter(e => e.ret > 0).length;
+  const last = rows[rows.length - 1];
+  const recent = events.slice(-8).reverse();
+  return {
+    active, events, recent, current: last,
+    levels: PANIC_LEVELS,
+    config: { trigger: PANIC_TRIGGER, cap: POS_PANIC_CAP, holdDays: PANIC_HOLD_DAYS, takeProfit: PANIC_TAKE_PROFIT },
+    stats: {
+      total: closed.length, wins,
+      winRate: closed.length ? Math.round(wins / closed.length * 100) : null,
+      avgRet: closed.length ? +(closed.reduce((a, e) => a + e.ret, 0) / closed.length).toFixed(1) : null,
+      bestRet: closed.length ? Math.max(...closed.map(e => e.ret)) : null,
+      worstRet: closed.length ? Math.min(...closed.map(e => e.ret)) : null,
+    },
+    isActive: active.has(last.date),
+    hasOvernightData: !!(usIdx && usIdx.ixic),
+  };
+}
+
 // 生成逐日趋势状态（带滞回）与目标仓位；endIdx 为可选的实时覆盖点
-function buildEtfPositionSeries(klines, navMap, live) {
+function buildEtfPositionSeries(klines, navMap, live, panicActive) {
   const rows = klines.map(k => ({ date: k.date, close: k.close }));
   if (live && live.price > 0) {
     const last = rows[rows.length - 1];
@@ -3187,18 +3323,21 @@ function buildEtfPositionSeries(klines, navMap, live) {
     // 零轴下死叉：趋势转弱再压一档
     if (state === 'UP' && i > 0 && bars[i - 1] && bars[i - 1].dif >= bars[i - 1].dea && bar.dif != null && bar.dif <= bar.dea && bar.dif < 0) cap *= 0.7;
     const pf = premiumPositionFactor(p);
-    const target = Math.max(0, Math.min(1, cap * pf));
+    let target = Math.max(0, Math.min(1, cap * pf));
+    // 恐慌抄底：隔夜外盘重挫 + 极限超卖共振时，仓位下限抬到 65%（不再被溢价系数打折）
+    const panic = !!(panicActive && panicActive.has(rows[i].date));
+    if (panic) target = Math.max(target, POS_PANIC_CAP);
     out.push({
       date: rows[i].date, close: +C[i].toFixed(3), premium: p == null ? null : +p.toFixed(2),
       state, bull, ma21: ma21[i] == null ? null : +ma21[i].toFixed(3), ma60: ma60[i] == null ? null : +ma60[i].toFixed(3),
-      cap: +cap.toFixed(2), factor: pf, target: +target.toFixed(2), belowDays: below, intraday: !!rows[i].intraday,
+      cap: +cap.toFixed(2), factor: pf, target: +target.toFixed(2), belowDays: below, intraday: !!rows[i].intraday, panic,
     });
   }
   return out;
 }
 
-function buildEtfPositionPlan(klines, navMap, live) {
-  const series = buildEtfPositionSeries(klines, navMap, live);
+function buildEtfPositionPlan(klines, navMap, live, panic) {
+  const series = buildEtfPositionSeries(klines, navMap, live, panic && panic.active);
   if (!series) return null;
   const last = series[series.length - 1];
   if (!last) return null;
@@ -3212,7 +3351,10 @@ function buildEtfPositionPlan(klines, navMap, live) {
   let action, tone, headline;
   const prev = series[series.length - 2];
   const changed = prev && Math.abs(last.target - prev.target) >= 0.049;
-  if (!up) {
+  if (last.panic) {
+    action = `恐慌抄底 · 仓位下限 ${posPct}%`; tone = 'buy';
+    headline = `触发「恐慌抄底」信号${panic && panic.current ? '（' + panic.current.level + '）' : ''}：隔夜外盘重挫 + 极限超卖共振，属利空集中兑现、而非基本面转坏。仓位下限抬到 ${posPct}%，建议分 2~3 批建仓，别一次打满。`;
+  } else if (!up) {
     const cheapDip = p != null && p < PREMIUM_BUY;
     action = cheapDip && posPct >= 50 ? `留 ${posPct}% 抄底仓` : `减仓至 ${posPct}%`;
     tone = cheapDip && posPct >= 50 ? 'buy' : 'danger';
@@ -3286,12 +3428,15 @@ function buildEtfPositionPlan(klines, navMap, live) {
   const baseCap = last.cap;
   const trendCap = up ? (last.ma60 != null && last.close < last.ma60 ? 0.6 : 1.0) : 0.3;
   const dipLift = p != null && p < PREMIUM_ADD ? POS_DIP_CAP_CHEAP : (p != null && p < PREMIUM_BUY ? POS_DIP_CAP_BUY : null);
-  const capNote = (dipLift != null && dipLift > trendCap)
-    ? `趋势基准上限 ${Math.round(trendCap * 100)}%，但溢价 ${p.toFixed(1)}% 属便宜区 → 抬高到 ${Math.round(dipLift * 100)}% 的抄底仓`
-    : `${up ? '趋势向上' : '趋势破坏'} → 基准上限 ${Math.round(trendCap * 100)}%`;
+  const capNote = last.panic
+    ? `触发恐慌抄底信号 → 仓位下限抬到 ${Math.round(POS_PANIC_CAP * 100)}%（不再被溢价系数打折）`
+    : (dipLift != null && dipLift > trendCap)
+      ? `趋势基准上限 ${Math.round(trendCap * 100)}%，但溢价 ${p.toFixed(1)}% 属便宜区 → 抬高到 ${Math.round(dipLift * 100)}% 的抄底仓`
+      : `${up ? '趋势向上' : '趋势破坏'} → 基准上限 ${Math.round(trendCap * 100)}%`;
 
   return {
-    action, tone, headline, entryNote, capNote, state: last.state, stateLabel: up ? '趋势向上' : '趋势破坏',
+    action, tone, headline, entryNote, capNote, panic: last.panic,
+    state: last.state, stateLabel: up ? '趋势向上' : '趋势破坏',
     bull: last.bull, posPct, target: last.target,
     capTrend: baseCap, premiumFactor: last.factor, premium: p, premiumZone: zone,
     ma21: last.ma21, ma60: last.ma60, close: last.close, belowDays: last.belowDays, intraday: last.intraday,
@@ -4036,16 +4181,24 @@ async function getEtfMarketData() {
   };
   const { signals, bars, stats } = buildEtfSignals(klines);
 
+  // 恐慌抄底信号：外盘情绪（纳指/费半）+ 极限超卖 + 溢价压缩 多条件共振
+  //  先于清单与仓位建议计算，供两者共用同一份「恐慌窗口」判定
+  let panicSignal = null;
+  try {
+    const usIdx = await fetchUsIndexHistory();
+    panicSignal = buildEtfPanicSignal(klines, navMap, usIdx);
+  } catch (e) { console.error('[etf-panic]', e.message); }
+
   // 多指标组合信号（买卖信号清单 v2）：溢价为主 + 威廉%R/MA21/布林/MACD 共振
   let comboSignals = { signals: [], stats: null, backtest: null };
-  try { comboSignals = buildEtfCompositeSignals(klines, navMap); } catch (e) { console.error('[etf-combo]', e.message); }
+  try { comboSignals = buildEtfCompositeSignals(klines, navMap, panicSignal); } catch (e) { console.error('[etf-combo]', e.message); }
 
   // 仓位建议：趋势定方向、溢价定仓位（盘中用实时价与实时溢价覆盖）
   let positionPlan = null;
   try {
     positionPlan = buildEtfPositionPlan(klines, navMap, (quote && quote.price > 0) ? {
       price: quote.price, premiumPct: quote.premiumPct, iopv: quote.iopv, date: todayStr,
-    } : null);
+    } : null, panicSignal);
   } catch (e) { console.error('[etf-pos]', e.message); }
 
   // 买点确认用指标（威廉%R / RSI / 布林带）；仅作买点过滤与展示，不生成卖出信号
@@ -4135,6 +4288,8 @@ async function getEtfMarketData() {
     comboSignals,
     // 仓位建议：趋势（MA21/MA60/MACD）定方向，溢价档位定仓位上限
     positionPlan,
+    // 恐慌抄底：外盘重挫 + 极限超卖 + 溢价压缩 共振时的加仓窗口（含历史触发胜率）
+    panicSignal,
     stats,
     premium: {
       current: quote ? quote.premiumPct : null,

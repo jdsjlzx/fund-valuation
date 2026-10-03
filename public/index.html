@@ -1405,6 +1405,44 @@
     .etf-pos-bt { margin-top: 5px; font-size: 10px; line-height: 1.6; color: var(--text-muted); }
     .etf-pos-bt b { color: var(--text-secondary); }
 
+    /* ── 恐慌抄底信号 ── */
+    .etf-panic {
+      margin-top: 8px; padding: 8px 10px 9px; border-radius: 9px;
+      background: var(--bg-entry); border: 1px solid transparent;
+    }
+    .etf-panic.warm { border-color: rgba(232,160,61,0.42); }
+    .etf-panic.hot { border-color: rgba(232,76,61,0.5); }
+    .etf-panic-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+    .etf-panic-title { font-size: 11.5px; font-weight: 700; color: var(--text-name); }
+    .etf-panic-score {
+      font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums;
+      color: var(--text-secondary); margin-left: auto;
+    }
+    .etf-panic-score small { font-size: 9.5px; font-weight: 700; color: var(--text-muted); margin-left: 1px; }
+    .etf-panic-score.warm { color: #cf8420; }
+    .etf-panic-score.hot { color: #e84c3d; }
+    .etf-panic-bar {
+      height: 5px; border-radius: 3px; overflow: hidden; margin: 5px 0 6px;
+      background: rgba(127,127,127,0.16);
+    }
+    .etf-panic-bar i {
+      display: block; height: 100%; border-radius: 3px;
+      background: linear-gradient(90deg, #5aa8e8, #f0ac4d, #e84c3d);
+      transition: width .3s ease;
+    }
+    .etf-panic-hits { margin-bottom: 4px; }
+    .etf-panic-hit {
+      display: inline-block; font-size: 9.5px; padding: 2px 7px; border-radius: 5px;
+      background: rgba(127,127,127,0.10); color: var(--text-secondary);
+      margin: 0 4px 4px 0; font-variant-numeric: tabular-nums; cursor: help;
+    }
+    .etf-panic-hit b { color: var(--text-primary); font-weight: 700; }
+    .etf-panic-note { font-size: 10.5px; line-height: 1.6; color: var(--text-secondary); }
+    .etf-panic-note b { color: var(--text-primary); }
+    .etf-panic-hist { margin-top: 4px; font-size: 9.5px; line-height: 1.6; color: var(--text-muted); }
+    .etf-panic-hist b { color: var(--text-secondary); }
+    .etf-panic-ev { display: inline-block; margin-right: 8px; white-space: nowrap; }
+
     /* ── 溢价档位条 ── */
     .etf-zones { padding: 2px 0 0; }
     .etf-zone-bar {
@@ -2692,7 +2730,9 @@ function etfConfirmHtml() {
 //  回测（159509，2023-09-06~2026-09-30）：本方案 年化 43.7% / 最大回撤 -20.8%，
 //  对比买入持有 46.2% / -30.5%；2026-09 溢价 22%~32% 期间建议仓位 70%→60%，
 //  吃到约 7.4%，而旧的「溢价≥27 清仓」口径在 9 月全程空仓、收益 0。
-function etfPositionHtml() {
+// ⚠ 函数名不要改回 etfPositionHtml —— 底部「持仓管理」区块同名定义在文件更靠后，
+//   会把它覆盖掉（JS 函数声明提升），导致本卡永远渲染不出来。
+function etfPosAdviceHtml() {
   const t = ETF_TRACK;
   const p = t && t.positionPlan;
   if (!p) return '';
@@ -2732,6 +2772,51 @@ function etfPositionHtml() {
       </div>`;
 }
 
+// ── 恐慌抄底信号卡 ──
+//  仓位建议给的是「常规档位」；而大跌时的机会是事件驱动的，需要单独一条判断。
+//  764 日回测：只看技术超卖（%R / 布林 / RSI）会在趋势下跌中反复接飞刀
+//  （2025-01、2026-01 各一次，20 日后 -5%~-6%）；叠加「隔夜外盘重挫」后胜率明显改善。
+//  2026-07-30 实测：纳指 -1.74% / 费半 -5.33% + 威廉%R -98 + 布林 2% + 溢价 15.6%
+//  → 触发后 4 个交易日 +8.8%（同期基准仓位只给 59%）。
+function etfPanicHtml() {
+  const t = ETF_TRACK;
+  const s = t && t.panicSignal;
+  if (!s || !s.current) return '';
+  const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const cur = s.current, st = s.stats || {}, cfg = s.config || {};
+  const score = cur.score || 0, max = 7;
+  const tone = score >= 5 ? 'hot' : score >= 4 ? 'warm' : '';
+  const pct = v => (v == null || !isFinite(v)) ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+  const col = v => (v == null ? 'var(--text-muted)' : v >= 0 ? '#e84c3d' : '#2ea043');
+  const hits = (cur.hits || []).map(h => `<span class="etf-panic-hit" title="${esc(h.why)}"><b>${esc(h.key)}</b> ${esc(h.value)}</span>`).join('');
+  const ov = cur.overnight;
+  const ovTxt = ov
+    ? `隔夜外盘（美股 ${esc(ov.date)}）：纳指 <b style="color:${col(ov.ixic)}">${pct(ov.ixic)}</b> · 费半 <b style="color:${col(ov.sox)}">${pct(ov.sox)}</b>`
+    : `隔夜外盘数据暂不可用，评分仅用 ${max - 1} 项技术条件`;
+  const recent = (s.recent || []).slice(0, 4).map(e => {
+    const r = e.ret == null ? '' : (e.ret >= 0 ? '+' : '') + e.ret + '%';
+    return `<span class="etf-panic-ev">${esc(String(e.date).slice(5))} <b>${e.score}分</b> → ${e.exitDate ? e.days + '日' : '持有中'} <b style="color:${col(e.ret)}">${r}</b></span>`;
+  }).join('');
+  const hist = st.total
+    ? `历史 <b>${st.total}</b> 次触发 · 胜率 <b>${st.winRate}%</b> · 平均 <b style="color:${col(st.avgRet)}">${st.avgRet >= 0 ? '+' : ''}${st.avgRet}%</b>（最好 +${st.bestRet}% / 最差 ${st.worstRet}%）`
+    : '';
+  const capPct = Math.round((cfg.cap || 0.65) * 100);
+  return `
+    <div class="etf-panic ${tone}">
+      <div class="etf-panic-head">
+        <span class="etf-panic-title">恐慌抄底信号</span>
+        <span class="etf-confirm-badge">${esc(cur.level)}</span>
+        <span class="etf-panic-score ${tone}">${score}<small>/${max}</small></span>
+      </div>
+      <div class="etf-panic-bar"><i style="width:${Math.round(score / max * 100)}%"></i></div>
+      ${hits ? `<div class="etf-panic-hits">${hits}</div>` : `<div class="etf-panic-note" style="color:var(--text-muted)">当前无恐慌特征（7 项条件均未命中）</div>`}
+      <div class="etf-panic-note">${ovTxt}</div>
+      <div class="etf-panic-note" style="margin-top:3px">${esc(cur.levelNote)}${score >= 5 ? `——触发后仓位下限抬到 <b>${capPct}%</b>，建议分 2~3 批建仓，站上 MA21 或 +${Math.round((cfg.takeProfit || 0.12) * 100)}% 止盈后解除。` : ''}</div>
+      ${hist ? `<div class="etf-panic-hist">${hist}</div>` : ''}
+      ${recent ? `<div class="etf-panic-hist">最近触发：${recent}</div>` : ''}
+    </div>`;
+}
+
 function etfAdviceHtml() {
   const t = ETF_TRACK;
   if (!t || !t.advice) return `<div class="etf-advice"><div class="etf-empty">建议生成中…</div></div>`;
@@ -2767,7 +2852,8 @@ function etfAdviceHtml() {
       <div class="etf-advice-body">
         <div class="etf-advice-headline">${a.headline}</div>
         <div class="etf-reasons">${reasonsHtml}</div>
-        ${etfPositionHtml()}
+        ${etfPosAdviceHtml()}
+        ${etfPanicHtml()}
         ${etfConfirmHtml()}
         ${levelsHtml ? `<div class="etf-levels">${levelsHtml}</div>` : ''}
       </div>
