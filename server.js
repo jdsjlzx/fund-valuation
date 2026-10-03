@@ -3285,7 +3285,9 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
     history: trades.slice(-8).reverse(),
   } : null;
 
-  return { signals: segs, stats, backtest };
+  // lastDate 给前端判断「最后一段是否仍在进行中」——进行中的段显示「X 起 · 至今」，
+  // 不再用「起 ~ 止」区间（区间是事后统计口径，指导当下操作要看的是从哪天开始）。
+  return { signals: segs, stats, backtest, lastDate: klines[n - 1].date };
 }
 
 // ── 仓位建议：把「方向」与「估值」两个维度解耦 ──────────────────────────────

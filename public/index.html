@@ -3380,7 +3380,7 @@ function etfSignalPosChartHtml() {
     const base = isBuy ? H - PB - 3 : PT + 3;
     const tip = isBuy ? base - 6 : base + 6;
     const pts = `${x.toFixed(1)},${tip.toFixed(1)} ${(x - 3.6).toFixed(1)},${base.toFixed(1)} ${(x + 3.6).toFixed(1)},${base.toFixed(1)}`;
-    pins += `<polygon points="${pts}" fill="${col}" opacity="0.95"><title>${s.dateLabel} · ${s.label}（建议仓位 ${s.posPct != null ? s.posPct + '%' : '—'}）</title></polygon>`;
+    pins += `<polygon points="${pts}" fill="${col}" opacity="0.95"><title>${s.date} 起 · ${s.label}（建议仓位 ${s.posPct != null ? s.posPct + '%' : '—'}）</title></polygon>`;
     if (!isHold) pinnedOps.push({ x, date: rows[i].date, isBuy });
   }
 
@@ -3447,9 +3447,17 @@ function etfSignalsHtml() {
     if (s.length < 10) return s.replace(/\(至今\)/, '');
     return `${s.slice(0, 4)}-${s.slice(5, 7)}-${s.slice(8, 10)}`;
   };
+  // 日期列以「从哪天开始」为主（可执行口径）：2026-06-05 起。
+  // 已结束的段把结束日降为小字备注（事后统计用）；仍在进行中的段标「至今」。
   const segLabel = s => {
     const a = fmtDate(s.date), b = fmtDate(s.endDate);
-    return a === b ? a : `${a}<br>~ ${b}`;
+    if (a === b) return a;
+    const days = (s.endIdx != null && s.idx != null) ? (s.endIdx - s.idx + 1) : null;
+    const ongoing = combo.lastDate && s.endDate === combo.lastDate;
+    const sub = ongoing
+      ? `至今${days ? ' · ' + days + ' 个交易日' : ''}`
+      : `至 ${b.slice(5)}${days ? ' · ' + days + ' 日' : ''}`;
+    return `<b>${a}</b> 起<br><span style="color:var(--text-muted);font-size:8.5px">${sub}</span>`;
   };
   const rows = show.map(s => {
     const f = s.fwd20Pct;
@@ -3491,7 +3499,7 @@ function etfSignalsHtml() {
   return `
     ${etfSignalPosChartHtml()}
     <table class="etf-signal-table">
-      <thead><tr><th>日期段</th><th>价格</th><th>溢价</th><th>信号</th><th title="该段对应的建议仓位上限">仓位</th><th>依据</th><th title="在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：买入信号为正=买对了，卖出信号为负=躲过了下跌">信号后20日涨跌</th></tr></thead>
+      <thead><tr><th title="从这一天开始按提示操作；已结束的段以小字标注结束日">起始日</th><th>价格</th><th>溢价</th><th>信号</th><th title="该段对应的建议仓位上限">仓位</th><th>依据</th><th title="在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：买入信号为正=买对了，卖出信号为负=躲过了下跌">信号后20日涨跌</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     ${more}
