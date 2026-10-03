@@ -1729,7 +1729,9 @@ function effectiveChange(q, opts = {}) {
     //    （期货 vs 昨结算价会把整个常规盘涨幅重复计入，例：QQQ 收盘 +1.02%、
     //     盘后终价≈持平，期货口径却显示 +0.99%）
     if (s === 'OVERNIGHT') {
-      if (q.overnightSource === 'xueqiu' && q.overnightChangePercent != null) {
+      // 雪球夜盘 tick（富途「夜盘」同款）或雪球扩展行情最新成交（盘后+夜盘连续），
+      // 两者均为真实成交、基准同为正股收盘价
+      if ((q.overnightSource === 'xueqiu' || q.overnightSource === 'xueqiu-ext') && q.overnightChangePercent != null) {
         return q.overnightChangePercent;
       }
       const closePrice = q.closePrice || q.regularMarketPrice;

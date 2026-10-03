@@ -1059,12 +1059,15 @@ async function fetchXueqiuViaProxy(symbol) {
     { Accept: 'application/json' }
   );
   const j = JSON.parse(text);
-  if (!j || j.currentNight == null) return null;
+  if (!j || (j.currentNight == null && j.currentExt == null)) return null;
   return {
     currentNight: j.currentNight,
     percentNight: j.percentNight,
     chgNight: j.chgNight,
     timestampNight: j.timestampNight,
+    currentExt: j.currentExt,
+    percentExt: j.percentExt,
+    current: j.current,
   };
 }
 
@@ -1556,6 +1559,14 @@ function computeOvernightQuote({
       : ((xqPrice - closeForOvernight) / closeForOvernight) * 100;
     price = xqPrice;
     source = 'xueqiu';
+  } else if (xq && xq.currentExt != null && isFinite(xq.percentExt)) {
+    // 夜盘 tick 尚未刷新（本轮夜盘还没成交推送）时，退而用雪球扩展行情
+    // current_ext/percent_ext——盘后+夜盘连续的最新成交价，同样以正股收盘为基准
+    // （实测 MKSI：ext 282.48/+1.19% vs 收盘 279.15；盘后 tape 的 286.57/+2.66%
+    //  是坏 print，富途夜盘 279.96/+0.29% —— ext 介于两者之间且随成交滚动）
+    chg = xq.percentExt;
+    price = xq.currentExt;
+    source = 'xueqiu-ext';
   } else if (yahooCoversOvernight) {
     // Yahoo fullday（含盘前/盘后/隔夜），海外网络可达时为实时值
     chg = yahoo.fulldayChangePercent;
@@ -1584,7 +1595,7 @@ function computeOvernightQuote({
     overnightChangePercent: chg,
     overnightPrice: price,
     overnightSource: source,
-    overnightEstimated: source !== 'xueqiu' && source !== 'yahoo',
+    overnightEstimated: source !== 'xueqiu' && source !== 'xueqiu-ext' && source !== 'yahoo',
     overnightAsOf: source === 'xueqiu' ? (xqTs ?? null) : null,
     overnightLagMin: source === 'xueqiu' && xqTs ? Math.max(0, Math.round((Date.now() - xqTs) / 60000)) : null,
   };
