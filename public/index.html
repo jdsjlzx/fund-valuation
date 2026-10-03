@@ -1606,6 +1606,22 @@
     .etf-macd .macd-bar-col { max-width: none; }
     .etf-macd .macd-signal-date { font-size: 8px; }
 
+    /* ETF 日K MACD 柱（60 根，列距仅约 6px）：买卖日期斜排，避免连续信号日期叠成一团。
+       与 macd买卖 tab 同一套规则——买点在柱上方：以左下角为轴向右上斜展；
+       卖点在柱下方：以右上角为轴向左下斜展。translateX(±6px) 把斜排后的视觉中心拉回柱中线。
+       --sd-y = 同侧相邻信号过近时的错行偏移（由 etfMacdBarsHtml 逐柱计算后写在 pin 上）。 */
+    .etf-macd .macd-signal-date {
+      transform-origin: left bottom;
+      transform: translateX(6px) translateY(var(--sd-y, 0px)) rotate(-45deg);
+    }
+    .etf-macd .macd-signal-pin.sell      .macd-signal-date,
+    .etf-macd .macd-signal-pin.sell_weak .macd-signal-date,
+    .etf-macd .macd-signal-pin.sell_ma   .macd-signal-date,
+    .etf-macd .macd-signal-pin.sell_pre  .macd-signal-date {
+      transform-origin: right top;
+      transform: translateX(-6px) translateY(var(--sd-y, 0px)) rotate(-45deg);
+    }
+
     /* ── 信号清单 ── */
     .etf-signal-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
     .etf-signal-table th {
@@ -1625,6 +1641,8 @@
     /* 少量买入：高溢价区的金叉——方向是买，但仓位被压到 3 成以内，用半透明红区分 */
     .etf-signal-table .sig-badge.buy.small { background: rgba(232,76,61,0.5); }
     .etf-signal-table .sig-badge.sell { color: #fff; background: rgba(46,189,133,0.85); }
+    /* 跑路清仓：三条均线全破，比「清仓/减半」更重——用深绿区分 */
+    .etf-signal-table .sig-badge.sell.run { background: rgba(22,130,88,0.95); }
     /* 持有不加仓：高溢价但趋势未破坏——既不是买也不是卖 */
     .etf-signal-table .sig-badge.hold { color: #fff; background: rgba(136,153,170,0.9); }
     .etf-signal-table .sig-badge.hold + div { color: var(--text-muted); }
@@ -3441,7 +3459,7 @@ function etfSignalsHtml() {
       <td class="num" style="font-size:9.5px;white-space:nowrap">${segLabel(s)}</td>
       <td class="num">${s.close.toFixed(3)}</td>
       <td class="num">${s.premium != null ? s.premium.toFixed(1) + '%' : '—'}</td>
-      <td><span class="sig-badge ${s.side}${s.code === 'buy_small' ? ' small' : ''}${s.code === 'weak_warn' ? ' warn' : ''}">${s.label}</span><div style="font-size:9px;color:var(--text-muted);margin-top:2px">${s.action}</div></td>
+      <td><span class="sig-badge ${s.side}${s.code === 'buy_small' ? ' small' : ''}${s.code === 'weak_warn' ? ' warn' : ''}${s.code === 'sell_run' ? ' run' : ''}">${s.label}</span><div style="font-size:9px;color:var(--text-muted);margin-top:2px">${s.action}</div></td>
       <td class="num" style="font-size:9.5px">${s.posPct != null ? s.posPct + '%' : '—'}</td>
       <td style="font-size:9.5px;line-height:1.5">${ev}</td>
       <td class="num" style="font-size:9.5px">${follow}</td>
@@ -3456,7 +3474,7 @@ function etfSignalsHtml() {
     buy_strong: '重仓买入', buy: '买入', buy_weak: '试仓', buy_small: '少量买入',
     wait_us: '等重仓确认', panic_wait: '抄底未确认', panic_try: '恐慌试仓',
     weak_warn: '走弱预警',
-    sell_weak: '持有不加仓', sell: '减仓', sell_clear: '清仓/减半',
+    sell_weak: '持有不加仓', sell: '减仓', sell_clear: '清仓/减半', sell_run: '跑路清仓',
   };
   const statLine = Object.entries(typeNames)
     .filter(([k]) => st[k] && st[k].count)
@@ -3481,7 +3499,8 @@ function etfSignalsHtml() {
     ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
       <span><b>v8 新增：走弱预警 / 减仓层（与溢价彻底解耦）</b>。起因是 2025-12 那波走弱在清单里<b>完全没有减仓提示</b>——卖出侧原本整个长在「高溢价（≥22%）」分支里，而 2025-12-16 的溢价只有 20.6%、2026-01-12 只有 19.0%，落在中低溢价区，走弱信号被整个吞掉。现在「翻绿 / 跌破 MA21」独立计分，<b>溢价多低都不豁免</b>（低溢价只代表便宜，不代表不会继续跌）：四条各 1 分 = 纳指科技跌破 MA21、纳指科技 MACD 翻绿、纳指100 跌破 MA21、纳指100 MACD 翻绿。
-      <b>三级输出</b>：<b class="down">清仓/减半</b> = 纳指科技与纳指100 <b>同时</b>转坏（趋势级，立即执行）；<b class="down">减仓</b> = 只有本 ETF 自己转弱但已连续 3 个交易日没修复（只闪一天的回调不减仓——实测那样会把回测从 +254% 打到 +74%）；<b style="color:#e6912d">走弱预警</b> = 刚出现的单日征兆，另含 <b>MACD 红柱连续 2 日缩短且 DIF 拐头</b> 这个比死叉更早的动能衰竭前兆（2025-12-12 就触发了，比 12-16 死叉早 2 个交易日）。实测（764 日，119 段）：减仓段后 20 日平均 <b class="down">-0.5%</b>（方向对）；按段回测 +243%（v7.2 为 +254%、买入持有 +224%）。
+      <b>三级输出</b>：<b class="down">清仓/减半</b> = 纳指科技与纳指100 <b>同时</b>转坏（趋势级，立即执行）；<b class="down">减仓</b> = 只有本 ETF 自己转弱但已连续 3 个交易日没修复（只闪一天的回调不减仓——实测那样会把回测从 +254% 打到 +74%）；<b style="color:#e6912d">走弱预警</b> = 刚出现的单日征兆，另含 <b>MACD 红柱连续 2 日缩短且 DIF 拐头</b> 这个比死叉更早的动能衰竭前兆（2025-12-12 就触发了，比 12-16 死叉早 2 个交易日）。
+      <b>v8.1 清仓铁律</b>（用户原话）：<b>收盘价有一天同时低于 MA21 + MA30 → 马上清仓</b>；<b>同时低于 MA21 + MA30 + MA60 → 跑路清仓</b>；<b>纳指100 出现同样情况 → 也清仓</b>。不等持续、不看溢价。实测（764 日）：清仓段后 20 日命中率 37% → <b>50%</b>（更准了）；按段回测 +217%（v8 为 +243%、买入持有 +224%）。<b>注意</b>：「三条均线全破」在强牛里常出现在<b>阶段底部</b>而非顶部（2025-04-16、2026-07-17 都是底部），所以「跑路清仓」段的信号后 20 日正确率天然偏低（约 21%）——这是铁律本身的代价，看统计时别误读。
       <br>口径（v7.2）：<b>重仓的唯一条件 = MACD 翻红 且 收盘站上 21 日均线</b>，纳指科技 ETF 与纳斯达克 100 都要满足；溢价只决定在这三档里多买/少买一点，<b>永远不能把「便宜」升级成「重仓」</b>。
       <b>三档门控</b>：<b class="up">重仓档</b>（四条全满足）→ 按溢价正常加仓，&lt;15% 可到 85%；<b>试仓档</b>（两条都翻红，但 ETF 自己还没站回 MA21）→ <b>溢价 ≥15% 只 20%、&lt;15% 才 35%</b>；<b class="down">跑路档</b>（ETF MACD 翻绿，或纳指100「MACD 翻绿」/「跌破 MA21」）→ 减到 20%（&lt;15% 留 35%）。<b>入场认翻红、跑路认跌破 MA21</b>（外加 ETF 自己翻绿）——这是 8 种组合里实测最好的一组。
       <b>v7 的起因</b>：2026-01~03 只按「溢价低 → 抄底仓 85%」一路加仓，跟着美股跌了 3 个月（跟随者口径均仓 82%、亏损 14.4%）——
@@ -3522,14 +3541,26 @@ function etfMacdBarsHtml(bars) {
     const s = String(d || '');
     return s.length >= 10 ? `${+s.slice(5, 7)}/${+s.slice(8, 10)}` : s.length === 8 ? `${+s.slice(4, 6)}/${+s.slice(6, 8)}` : s;
   };
+  // 同侧（柱上方 buy / 柱下方 sell）相邻信号相隔 ≤1 根柱时，斜排后仍会叠字 → 逐行下错。
+  // ROW_H=7px ≈ 一个字高，最多错 2 行；买入在柱子上方所以向上错（负），卖出向下错（正）。
+  const ROW_H = 7, MAX_ROW = 2;
+  const lastAt = { up: { idx: -99, row: -1 }, down: { idx: -99, row: -1 } };
   return bars.map((b, i) => {
     const isLatest = i === bars.length - 1;
     const h = Math.max(1, Math.round(Math.abs(b.bar) / maxAbs * MAX_HALF));
     const posCls = b.bar >= 0 ? 'pos' : 'neg';
     const intradayCls = b.intraday ? ' intraday' : '';
     const latestCls = (isLatest && !b.intraday) ? ' latest' : '';
+    let sdStyle = '';
+    if (b.signal) {
+      const key = String(b.signal).startsWith('buy') ? 'up' : 'down';
+      const st = lastAt[key];
+      const row = (i - st.idx <= 1) ? Math.min(MAX_ROW, st.row + 1) : 0;
+      st.idx = i; st.row = row;
+      if (row) sdStyle = ` style="--sd-y:${key === 'up' ? -ROW_H * row : ROW_H * row}px"`;
+    }
     const pin = b.signal
-      ? `<span class="macd-signal-pin ${b.signal}"><span class="macd-inline-signal ${b.signal}">${String(b.signal).startsWith('buy') ? 'B' : 'S'}</span><span class="macd-signal-date">${fmtDate(b.date)}</span></span>`
+      ? `<span class="macd-signal-pin ${b.signal}"${sdStyle}><span class="macd-inline-signal ${b.signal}">${String(b.signal).startsWith('buy') ? 'B' : 'S'}</span><span class="macd-signal-date">${fmtDate(b.date)}</span></span>`
       : '';
     const bar = `<div class="macd-bar ${posCls}${latestCls}${intradayCls}" style="height:${h}px"></div>`;
     return b.bar >= 0
@@ -3545,7 +3576,8 @@ function etfMacdHtml() {
   const last = bars[bars.length - 1] || {};
   const difCls = last.dif >= 0 ? 'pos' : 'neg';
   return `
-    <div class="etf-macd macd-chart-wrap" style="height:52px;margin:22px 0 22px">
+    <!-- 上下 margin 要容纳斜排日期（-45° 时日期框斜跨约 13px + badge 11px + 最多 2 行错行 14px ≈ 40px） -->
+    <div class="etf-macd macd-chart-wrap" style="height:52px;margin:42px 0 42px">
       <div class="macd-zero-line"></div>
       <div class="macd-bars">${etfMacdBarsHtml(bars)}</div>
     </div>

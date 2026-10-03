@@ -2946,6 +2946,7 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
   const willR = williamsRSeries(highs, lows, C, 14);
   const boll = bollingerSeries(C, 20, 2);
   const ma21 = movingAvgSeries(C, 21);
+  const ma30 = movingAvgSeries(C, 30);   // v8.1 清仓铁律：跌破 MA21+MA30 清仓、跌破 MA21+MA30+MA60 跑路
   const ma60 = movingAvgSeries(C, 60);
   const bars = calcMACD(klines, klines.length);
   const goldenCross = i => i > 0 && bars[i - 1] && bars[i - 1].dif < bars[i - 1].dea && bars[i].dif >= bars[i].dea;
@@ -2973,6 +2974,7 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
     weak_warn:  { label: '走弱预警',  action: '停止加仓·准备减仓', side: 'hold' },
     sell:       { label: '减仓',     action: '减仓',     side: 'sell' },
     sell_clear: { label: '清仓/减半', action: '清仓或减半', side: 'sell' },
+    sell_run:   { label: '跑路清仓',  action: '立刻清仓·三条均线全破', side: 'sell' },
   };
   // ── v8「走弱就减仓」：卖出侧彻底与溢价解耦 ────────────────────────────────
   // 起因（用户 2026-10-03 复盘）：2025-12-09 起纳指科技开始走弱、2026-01-12 收盘跌破
@@ -3006,6 +3008,18 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
   // 本方案下减仓段后 20 日平均 -0.5%（9 组里唯一为负的，方向判对了）。
   // 关键区间落地：2025-12-12~15 走弱预警 → 12-16~24 清仓/减半 → 12-25~31 减仓
   //   → 2026-01-05~06 清仓/减半 → 01-07~16 减仓（用户点名的 1/12 在段内）→ 01-19~20 清仓/减半。
+  //
+  // ── v8.1 清仓铁律（用户 2026-10-03）：跌破组合均线 → 立即清仓，不等持续、不看溢价 ──
+  // 用户原话：「纳指科技收盘价有一天低于 21、30 均线，马上提示清仓；同时低于 21、30、60，
+  //   提示跑路清仓；纳斯达克100 出现这个情况，也提示清仓。」
+  // 落地（与 v8 四项计分正交，看「价格相对均线的位置结构」）：
+  //   lv4 跑路清仓 sell_run = 任一标的「MA21+MA30+MA60 三条全破」（中期趋势彻底转空）
+  //   lv3 清仓   sell_clear = 任一标的「跌破 MA21+MA30」（立即），或 v8 双杀
+  //   lv2 减仓   sell       = 只有本 ETF 转弱但已持续 3 日（v8 原样）
+  // 实测（764 日）：清仓段后 20 日命中率 37%→**50%**（更准了），但按段回测 +243%→+217%。
+  // **必须知道的代价**：「三条全破」在强牛 ETF 上常常出现在**阶段底部**而非顶部
+  //   （14 段只有 21% 后 20 日下跌，2025-04-16~22、2026-07-17~29 都是底部，各反弹 +13%/+12%），
+  //   所以 sell_run 的信号后 20 日正确率天然偏低——这是用户定的铁律，照执行，但看统计时别误读。
   const WEAK_REPEAT_DAYS = 5;   // 「走弱预警」小字追加到买入行上的最小间隔（交易日）
   const WEAK_RUN_DAYS = 3;      // 单侧转弱持续这么多交易日才升到「减仓」
   let weakLevel = 0, weakCd = 0, etfWeakRun = 0;
@@ -3130,25 +3144,51 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
           && d0 != null && d1 != null && d0 < d1 && ma21[i] != null && C[i] >= ma21[i]) {
         wHit.push('MACD 红柱连续 2 日缩短且 DIF 拐头（动能衰竭，尚未破位）');
       }
+      // ── v8.1 清仓铁律（用户 2026-10-03）：跌破组合均线 → 立即清仓，不等持续、不看溢价 ──
+      // 「有一天收盘价低于 21、30 均线 → 马上清仓；同时低于 21、30、60 → 跑路清仓；
+      //   纳指100 出现同样情况 → 也清仓」。
+      // 与 v8 的四项计分正交：这里看的是「价格在几条均线下方」的位置结构，不是动能。
+      // 破 MA30 说明已不只是 3 周级别的回调（MA21），而是跌穿近 1.5 个月持仓成本区；
+      // 三条全破说明中期趋势彻底转空（2026-03 那种），必须立刻跑路。
+      const etfBelow30 = ma30[i] != null && C[i] < ma30[i];
+      const etfBelow60 = ma60[i] != null && C[i] < ma60[i];
+      const etfDbl = etfBelow && etfBelow30;              // ETF 跌破 MA21+MA30
+      const etfTpl = etfDbl && etfBelow60;                // ETF 三条全破
+      const usDbl = gt.usAbove === false && gt.usBelow30 === true;    // 纳指100 跌破 MA21+MA30
+      const usTpl = usDbl && gt.usBelow60 === true;                   // 纳指100 三条全破
+      const clearHit = [];
+      if (etfBelow30) clearHit.push(`纳指科技跌破 MA30（收 ${C[i].toFixed(3)} < ${ma30[i].toFixed(3)}）`);
+      if (etfBelow60) clearHit.push(`纳指科技跌破 MA60（收 ${C[i].toFixed(3)} < ${ma60[i].toFixed(3)}）`);
+      if (gt.usBelow30 === true) clearHit.push(`纳指100 跌破 MA30（${gt.usClose}）`);
+      if (gt.usBelow60 === true) clearHit.push(`纳指100 跌破 MA60（${gt.usClose}）`);
       // 分级：
-      //   3 清仓/减半 = 纳指科技与纳指100 **同时**转坏（趋势级，立即执行，不等持续）
+      //   4 跑路清仓 = 任一标的「MA21+MA30+MA60 三条全破」（中期趋势彻底转空）
+      //   3 清仓     = 任一标的「跌破 MA21+MA30」（立即，不等持续），或两条同时转坏（v8 双杀）
       //   2 减仓     = 只有本 ETF 自己转弱，但已连续 WEAK_RUN_DAYS 日没修复
       //   1 走弱预警 = 刚出现的单日征兆，或只有纳指100 单方面走弱
-      const lv = (nEtf > 0 && nUs > 0) ? 3
+      const lv = (etfTpl || usTpl) ? 4
+        : (etfDbl || usDbl || (nEtf > 0 && nUs > 0)) ? 3
         : (nEtf > 0 && etfWeakRun >= WEAK_RUN_DAYS) ? 2
         : (wHit.length > 0 ? 1 : 0);
       if (lv === 0) { weakLevel = 0; weakCd = 0; }
       else if (lv >= 2) {
         // 逐日输出：合并后就是一条完整的「减仓/清仓区间」，比只在触发日闪一下更好读
         // （2026-01-09 ~ 01-16 会连成一整段，中间 1/12 的破位加速也在段内）。
-        code = lv === 3 ? 'sell_clear' : 'sell';
+        code = lv === 4 ? 'sell_run' : (lv === 3 ? 'sell_clear' : 'sell');
         tag = 'weak';
+        const hitLine = clearHit.length && lv >= 3
+          ? `破位命中 —— ${clearHit.join('、')}${wHit.length ? '；另 ' + wHit.join('、') : ''}`
+          : `走弱命中 —— ${wHit.join('、')}`;
         ev = [
           `溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）：低溢价只代表便宜，不代表不会继续跌`,
-          `走弱命中 —— ${wHit.join('、')}`,
-          lv === 3
-            ? '两条（纳指科技 + 纳指100）同时转坏 → 按铁律清仓或减半，先跑再说'
-            : `本 ETF 已连续 ${etfWeakRun} 个交易日处于「翻绿 / MA21 下方」→ 按铁律减仓，别再补仓；回到「翻红 + 站上 MA21」再谈重仓`,
+          hitLine,
+          lv === 4
+            ? 'MA21 / MA30 / MA60 三条均线全部跌破 → 中期趋势彻底转空，立刻清仓跑路，不再等确认'
+            : (lv === 3
+              ? (etfDbl || usDbl
+                ? '收盘价已同时跌破 MA21 与 MA30 → 按铁律马上清仓，不等持续、不看溢价'
+                : '两条（纳指科技 + 纳指100）同时转坏 → 按铁律清仓或减半，先跑再说')
+              : `本 ETF 已连续 ${etfWeakRun} 个交易日处于「翻绿 / MA21 下方」→ 按铁律减仓，别再补仓；回到「翻红 + 站上 MA21」再谈重仓`),
         ];
       } else {
         const wSelf = wHit.some(x => x.indexOf('纳指科技') === 0 || x.indexOf('动能衰竭') >= 0);
@@ -3430,9 +3470,12 @@ function buildHeavyGate(rows, usIdx) {
   const bars = calcMACD(rows.map(r => ({ date: r.date, close: r.close })), n);
   // 优先用纳指 100（本 ETF 的跟踪标的），没有就退回纳指综合
   const ix = (usIdx && (usIdx.ndx || usIdx.ixic)) || null;
-  let usMa21 = null, usDif = null, usDea = null, usAt = null;
+  let usMa21 = null, usMa30 = null, usMa60 = null, usDif = null, usDea = null, usAt = null;
   if (ix && ix.dates && ix.closes && ix.dates.length > 60) {
     usMa21 = movingAvgSeries(ix.closes, 21);
+    // MA30 / MA60 不参与重仓门控，只供「清仓铁律」判断（跌破 21+30 清仓、跌破 21+30+60 跑路）
+    usMa30 = movingAvgSeries(ix.closes, 30);
+    usMa60 = movingAvgSeries(ix.closes, 60);
     const ub = calcMACD(ix.closes.map((c, i) => ({ date: ix.dates[i], close: c })), ix.closes.length);
     usDif = ub.map(b => (b && b.dif != null ? b.dif : null));
     usDea = ub.map(b => (b && b.dea != null ? b.dea : null));
@@ -3446,6 +3489,7 @@ function buildHeavyGate(rows, usIdx) {
     const etfAbove = C[i] > ma21[i];
     const etfRed = bar.dif != null && bar.dea != null && bar.dif > bar.dea;
     let usAbove = null, usRed = null, usZero = null, usClose = null, usMa = null, dv = null, dvDea = null;
+    let usBelow30 = null, usBelow60 = null;
     const ui = usAt ? usAt[i] : -1;
     if (ui >= 21 && usMa21 && usMa21[ui] != null) {
       usClose = ix.closes[ui]; usMa = usMa21[ui];
@@ -3455,6 +3499,8 @@ function buildHeavyGate(rows, usIdx) {
       usRed = (dv != null && dvDea != null) ? (dv > dvDea) : null;   // 美股 MACD 是否翻红
       // 放行「入场」的动能条件取二者之一：已翻红（动能在转正），或 DIF 已在零轴上方（本就强势）
       usZero = usRed != null ? (usRed || dv > 0) : null;
+      usBelow30 = usMa30 && usMa30[ui] != null ? usClose < usMa30[ui] : null;
+      usBelow60 = usMa60 && usMa60[ui] != null ? usClose < usMa60[ui] : null;
     }
     const hasUs = usAbove != null && usZero != null;
     // 重仓（heavy）：ETF 站上 MA21 且 MACD 翻红；纳指100 也要站上 MA21 且动能不能是负的
@@ -3468,6 +3514,7 @@ function buildHeavyGate(rows, usIdx) {
     if (hasUs && !usRed) miss.push('纳指100 MACD 翻绿');
     out[i] = {
       tier: heavy ? 'heavy' : (run ? 'run' : 'try'), etfAbove, etfRed, usAbove, usRed, usZero, hasUs, miss,
+      usBelow30, usBelow60,
       close: +C[i].toFixed(3), ma21: +ma21[i].toFixed(3),
       dif: bar.dif == null ? null : +bar.dif.toFixed(4), dea: bar.dea == null ? null : +bar.dea.toFixed(4),
       usClose: usClose == null ? null : +usClose.toFixed(2), usMa21: usMa == null ? null : +usMa.toFixed(2),
