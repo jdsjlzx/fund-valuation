@@ -2470,6 +2470,7 @@ let ETF_BT_OPEN = new Set();    // 策略对比：已展开交易日期明细的
 let ETF_RENDERED_DATE = null;   // 已整页渲染对应的交易日（跨日时整页重绘）
 let etfLastLoadTs = 0;
 let ETF_PREMIUM_RANGE = (localStorage.getItem('etf-premium-range') === 'all') ? 'all' : 'recent';   // 溢价率走势：recent=近120日 / all=全历史
+let ETF_SIGCHART_RANGE = (localStorage.getItem('etf-sigchart-range') === 'all') ? 'all' : 'recent'; // 仓位阶梯图：recent=近60日 / all=近120日
 let ETF_TRADES = (() => {
   try {
     const v = JSON.parse(localStorage.getItem(ETF_TRADES_KEY) || '[]');
@@ -3214,6 +3215,134 @@ function etfIntradayHtml() {
 //      现在恐慌窗口内（溢价 ≤22%）直接给「重仓买入 / 分批重仓」：触发日先建 65%，
 //      重新站上 MA21 补到 85%。回测 764 日：+310% → +313%（年化 59.0% → 59.3%）。
 //  每段展示：日期段 / 价格 / 溢价 / 信号 / 仓位 / 依据 / 信号后20日涨跌
+
+// ── 仓位阶梯图（买卖信号清单顶部）──
+//  把「建议仓位是怎么走的」一眼看清：蓝色=场内价（左轴），红色阶梯=建议仓位（右轴，0~100%），
+//  灰色虚线=MA21；底部红色 ▲ = 逢低买入点，顶部绿色 ▼ = 减仓点；竖直虚线标注恐慌抄底
+//  触发日与「站上 MA21 补仓」确认日。数据取自 positionPlan.history（近 120 个交易日），
+//  随服务端每日更新，不用手工维护。
+function etfSignalPosChartHtml() {
+  const t = ETF_TRACK;
+  const hist = t && t.positionPlan && t.positionPlan.history;
+  if (!hist || !hist.length) return '';
+  const valid = hist.filter(r => r.close != null && r.target != null);
+  const rows = ETF_SIGCHART_RANGE === 'all' ? valid : valid.slice(-60);
+  const n = rows.length;
+  if (n < 5) return '';
+  const W = etfChartWidth(), H = 158, PL = 34, PR = 34, PT = 28, PB = 16;
+  const ph = H - PT - PB;                                  // 绘图区高度
+  const closes = rows.map(r => r.close);
+  let lo = Math.min(...closes), hi = Math.max(...closes);
+  const pad = (hi - lo) * 0.12 || 0.05;
+  lo -= pad; hi += pad;
+  const X = i => PL + (i / (n - 1)) * (W - PL - PR);
+  const Yp = v => PT + ((hi - v) / (hi - lo)) * ph;        // 价格轴
+  const Yt = v => PT + (1 - Math.max(0, Math.min(1, v))) * ph;  // 仓位轴（0~100%）
+
+  // 横向网格：左侧价格刻度，右侧建议仓位刻度
+  let grid = '';
+  for (let k = 0; k <= 4; k++) {
+    const f = k / 4;
+    const y = PT + f * ph;
+    grid += `<line x1="${PL}" y1="${y.toFixed(1)}" x2="${(W - PR).toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--etf-grid)" stroke-width="1"/>`
+          + `<text x="${PL - 5}" y="${(y + 3.2).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${(hi - (hi - lo) * f).toFixed(2)}</text>`
+          + `<text x="${(W - PR + 5).toFixed(1)}" y="${(y + 3.2).toFixed(1)}" font-size="9" fill="var(--text-muted)">${Math.round((1 - f) * 100)}%</text>`;
+  }
+
+  // 建议仓位：阶梯面积 + 阶梯描边
+  const y0 = Yt(rows[0].target);
+  let area = `M${X(0).toFixed(1)} ${(H - PB).toFixed(1)} L${X(0).toFixed(1)} ${y0.toFixed(1)}`;
+  let step = `M${X(0).toFixed(1)} ${y0.toFixed(1)}`;
+  for (let i = 1; i < n; i++) {
+    const x = X(i).toFixed(1);
+    area += ` L${x} ${Yt(rows[i - 1].target).toFixed(1)} L${x} ${Yt(rows[i].target).toFixed(1)}`;
+    step += ` L${x} ${Yt(rows[i - 1].target).toFixed(1)} L${x} ${Yt(rows[i].target).toFixed(1)}`;
+  }
+  area += ` L${X(n - 1).toFixed(1)} ${(H - PB).toFixed(1)} Z`;
+
+  // 价格曲线 + MA21
+  const pricePath = rows.map((r, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Yp(r.close).toFixed(1)}`).join(' ');
+  let maPath = '', maOn = false;
+  rows.forEach((r, i) => {
+    if (r.ma21 == null) { maOn = false; return; }
+    maPath += `${maOn ? 'L' : 'M'}${X(i).toFixed(1)} ${Yp(r.ma21).toFixed(1)} `;
+    maOn = true;
+  });
+
+  // 恐慌抄底：触发日 / 补仓确认日的竖虚线
+  const PANIC_COLOR = '#e84c3d';
+  let marks = '';
+  const panicIdx = rows.findIndex(r => r.panic);
+  const addIdx = rows.findIndex(r => r.panicAdded);
+  const addVline = (i, label, ty) => {
+    if (i < 0) return '';
+    const x = X(i).toFixed(1);
+    return `<line x1="${x}" y1="${PT}" x2="${x}" y2="${(H - PB).toFixed(1)}" stroke="${PANIC_COLOR}" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>`
+         + `<text x="${x}" y="${ty}" text-anchor="middle" font-size="8.5" fill="${PANIC_COLOR}" font-weight="600">${label}</text>`;
+  };
+  marks += addVline(panicIdx, '恐慌触发', PT - 16);
+  marks += addVline(addIdx, `补仓 ${Math.round((t.panicSignal && t.panicSignal.config ? t.panicSignal.config.capAdd : 0.85) * 100)}%`, PT - 3);
+
+  // 买卖点图钉：买入=底部红色▲，卖出=顶部绿色▼，其余=顶部灰色▼
+  //  同一侧（顶/底）相邻 1 个交易日内的重复图钉只保留第一个，避免挤成一团。
+  let pins = '';
+  const d2i = {};
+  rows.forEach((r, i) => { d2i[r.date] = i; });
+  const sigs = (t.comboSignals && t.comboSignals.signals) ? t.comboSignals.signals : [];
+  const lastSlot = { top: -9, bot: -9 };
+  for (const s of sigs) {
+    const i = d2i[String(s.date).slice(0, 10)];
+    if (i == null) continue;
+    const slot = s.side === 'buy' ? 'bot' : 'top';
+    if (i - lastSlot[slot] <= 1) continue;
+    lastSlot[slot] = i;
+    const x = X(i);
+    const isBuy = s.side === 'buy';
+    const isHold = s.side === 'hold';
+    const col = isBuy ? '#e84c3d' : (isHold ? '#7d8fa8' : '#2ebd85');
+    const base = isBuy ? H - PB - 3 : PT + 3;
+    const tip = isBuy ? base - 6 : base + 6;
+    const pts = `${x.toFixed(1)},${tip.toFixed(1)} ${(x - 3.6).toFixed(1)},${base.toFixed(1)} ${(x + 3.6).toFixed(1)},${base.toFixed(1)}`;
+    pins += `<polygon points="${pts}" fill="${col}" opacity="0.95"><title>${s.dateLabel} · ${s.label}（建议仓位 ${s.posPct != null ? s.posPct + '%' : '—'}）</title></polygon>`;
+  }
+
+  const fmtD = d => `${+String(d).slice(5, 7)}/${+String(d).slice(8, 10)}`;
+  const lastR = rows[n - 1];
+  const lastChg = n > 1 ? (lastR.close / rows[n - 2].close - 1) * 100 : 0;
+  return `
+    <div class="etf-sec-title" style="margin:0 0 4px"><span>仓位阶梯 · 买卖点</span><span class="sub">近 ${n} 个交易日 · 蓝线=场内价（左轴）· 红色阶梯=建议仓位（右轴）
+      <a href="javascript:void(0)" onclick="etfSetSigChartRange('recent')" class="${ETF_SIGCHART_RANGE === 'recent' ? 'on' : ''}">近60日</a>
+      <a href="javascript:void(0)" onclick="etfSetSigChartRange('all')" class="${ETF_SIGCHART_RANGE === 'all' ? 'on' : ''}">近120日</a>
+    </span></div>
+    <div class="etf-chart-wrap">
+      <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="height:${H}px">
+        <defs>
+          <linearGradient id="etf-spa" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${PANIC_COLOR}" stop-opacity="0.18"/>
+            <stop offset="100%" stop-color="${PANIC_COLOR}" stop-opacity="0.02"/>
+          </linearGradient>
+        </defs>
+        ${grid}
+        <path d="${area}" fill="url(#etf-spa)"/>
+        <path d="${step}" fill="none" stroke="${PANIC_COLOR}" stroke-width="1.3"/>
+        ${maPath ? `<path d="${maPath}" fill="none" stroke="#8899aa" stroke-width="1" stroke-dasharray="3 3" opacity="0.85"/>` : ''}
+        <path d="${pricePath}" fill="none" stroke="#4a9fe0" stroke-width="1.5"/>
+        <circle cx="${X(n - 1).toFixed(1)}" cy="${Yp(lastR.close).toFixed(1)}" r="2.4" fill="#4a9fe0"/>
+        ${marks}${pins}
+        <text x="${PL + 1}" y="${H - 4}" font-size="9" fill="var(--text-muted)">${fmtD(rows[0].date)}</text>
+        <text x="${W - PR}" y="${H - 4}" text-anchor="end" font-size="9" fill="var(--text-muted)">${fmtD(lastR.date)}</text>
+      </svg>
+    </div>
+    <div class="etf-legend">
+      <span><i style="background:#4a9fe0"></i>场内价 <b>${lastR.close.toFixed(3)}</b>（${lastChg >= 0 ? '+' : ''}${lastChg.toFixed(2)}%）</span>
+      <span><i style="background:${PANIC_COLOR}"></i>建议仓位 <b>${Math.round(lastR.target * 100)}%</b></span>
+      <span><i style="background:#8899aa"></i>MA21</span>
+      <span><i style="background:#e84c3d"></i>逢低买入 ▲</span>
+      <span><i style="background:#2ebd85"></i>减仓 ▼</span>
+      <span>竖直虚线 = 恐慌触发 / 补仓确认</span>
+    </div>`;
+}
+
 function etfSignalsHtml() {
   const t = ETF_TRACK;
   const combo = t && t.comboSignals;
@@ -3262,6 +3391,7 @@ function etfSignalsHtml() {
     ? `按段操作回测（全历史）：${bt.trades} 笔完整买卖 · 胜率 ${bt.winRate}% · 累计 <span class="${bt.totalPct >= 0 ? 'up' : 'down'}">${bt.totalPct >= 0 ? '+' : ''}${bt.totalPct}%</span>`
     : '';
   return `
+    ${etfSignalPosChartHtml()}
     <table class="etf-signal-table">
       <thead><tr><th>日期段</th><th>价格</th><th>溢价</th><th>信号</th><th title="该段对应的建议仓位上限">仓位</th><th>依据</th><th title="在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：买入信号为正=买对了，卖出信号为负=躲过了下跌">信号后20日涨跌</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -3276,6 +3406,14 @@ function etfSignalsHtml() {
 
 function etfToggleSignals() {
   ETF_SHOW_ALL_SIGNALS = !ETF_SHOW_ALL_SIGNALS;
+  const el = document.getElementById('etf-signals');
+  if (el) el.innerHTML = etfSignalsSectionInner();
+}
+
+// 仓位阶梯图的时间范围切换（只重绘清单区块，避免整页重绘导致滚动位置跳动）
+function etfSetSigChartRange(mode) {
+  ETF_SIGCHART_RANGE = mode === 'all' ? 'all' : 'recent';
+  try { localStorage.setItem('etf-sigchart-range', ETF_SIGCHART_RANGE); } catch (e) { /* ignore */ }
   const el = document.getElementById('etf-signals');
   if (el) el.innerHTML = etfSignalsSectionInner();
 }

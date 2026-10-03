@@ -3471,7 +3471,8 @@ function buildEtfPositionPlan(klines, navMap, live, panic) {
     ma21: last.ma21, ma60: last.ma60, close: last.close, belowDays: last.belowDays, intraday: last.intraday,
     factorTable: POS_FACTOR_TABLE.map(x => ({ ...x, active: last.factor === x.factor })),
     triggers, backtest,
-    history: series.slice(-60),
+    // 逐日序列：供前端「仓位阶梯图」与历史查看（近 120 个交易日）
+    history: series.slice(-120),
   };
 }
 
