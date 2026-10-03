@@ -1407,17 +1407,25 @@
     .etf-pos.down .etf-pos-bar i { background: linear-gradient(90deg,#4cae66,#2ea043); }
     .etf-pos-note { font-size: 10.5px; line-height: 1.6; color: var(--text-secondary); }
     .etf-pos-capnote { margin-top: 2px; font-size: 9.5px; line-height: 1.5; color: var(--text-muted); }
-    /* 美股趋势确认行：低溢价能不能抬仓，最终看这一行 */
-    .etf-pos-us {
+    /* 重仓铁律行：MACD 翻红 + 站上 MA21 四条缺一不可，否则只能试仓 */
+    .etf-pos-gate {
       margin-top: 5px; padding: 4px 8px; border-radius: 6px; font-size: 10px; line-height: 1.6;
       background: var(--bg-entry); border-left: 2px solid var(--border-header);
       display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
     }
-    .etf-pos-us b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
-    .etf-pos-us-tag { font-weight: 700; padding: 1px 6px; border-radius: 5px; font-size: 9.5px; }
-    .etf-pos-us.ok .etf-pos-us-tag { color: #c93526; background: rgba(232,76,61,0.12); }
-    .etf-pos-us.bad .etf-pos-us-tag { color: #d29922; background: rgba(232,160,61,0.14); }
-    .etf-pos-us.bad { border-left-color: #d29922; }
+    .etf-pos-gate b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+    .etf-pos-gate i { font-style: normal; color: var(--text-muted); font-size: 9.5px; }
+    .etf-pos-gate-tag { font-weight: 700; padding: 1px 6px; border-radius: 5px; font-size: 9.5px; }
+    .etf-pos-gate.heavy { border-left-color: #c93526; }
+    .etf-pos-gate.heavy .etf-pos-gate-tag { color: #c93526; background: rgba(232,76,61,0.12); }
+    .etf-pos-gate.try { border-left-color: #d29922; }
+    .etf-pos-gate.try .etf-pos-gate-tag { color: #d29922; background: rgba(232,160,61,0.14); }
+    .etf-pos-gate.run { border-left-color: #2ea043; }
+    .etf-pos-gate.run .etf-pos-gate-tag { color: #2ea043; background: rgba(46,160,67,0.14); }
+    .etf-gate-item { white-space: nowrap; }
+    .etf-gate-item.on b { color: #c93526; }
+    .etf-gate-item.off { color: var(--text-muted); }
+    .etf-gate-item.off b { color: var(--text-muted); opacity: 0.75; }
     .etf-pos-us-note { flex: 1 1 100%; font-size: 9.5px; color: var(--text-muted); }
     .etf-pos-entry {
       margin-top: 4px; font-size: 10px; line-height: 1.6; color: var(--text-muted);
@@ -2779,14 +2787,18 @@ function etfPosAdviceHtml() {
   const btLine = bt ? `按此仓位执行（${esc(bt.from)} 起）：累计 <b>${bt.totalPct >= 0 ? '+' : ''}${esc(bt.totalPct)}%</b>`
     + (bt.annualPct != null ? ` · 年化 <b>${esc(bt.annualPct)}%</b>` : '')
     + ` · 最大回撤 <b>${esc(bt.maxDrawdownPct)}%</b>（买入持有同期 47.1% / -30.5%）` : '';
-  // 美股趋势确认（v6）：溢价低只说明「有性价比」，能不能抬仓看这一行
-  const u = p.usTrend;
-  const usLine = u && u.close != null ? `
-        <div class="etf-pos-us ${u.ok ? 'ok' : 'bad'}">
-          <span class="etf-pos-us-tag">${u.ok ? '美股确认 ✓' : '美股未确认 ⚠'}</span>
-          <span>纳斯达克 <b>${esc(u.close.toFixed(0))}</b> · MA50 <b>${u.ma50 != null ? esc(u.ma50.toFixed(0)) : '—'}</b></span>
-          <span>距近20日低点 <b>${u.rebound != null ? (u.rebound >= 0 ? '+' : '') + esc(u.rebound.toFixed(1)) + '%' : '—'}</b>（止跌线 +${esc(u.repairPct)}%）</span>
-          <span class="etf-pos-us-note">${esc(u.note)}</span>
+  // 重仓铁律（v7）：能不能重仓只看 MACD 翻红 + 站上 MA21，四条缺一不可
+  const g = p.gate;
+  const mark = v => (v === true ? '✓' : (v === false ? '✗' : '—'));
+  const item = (label, v, extra) => `<span class="etf-gate-item ${v === true ? 'on' : 'off'}">${esc(label)} <b>${mark(v)}</b>${extra ? ` <i>${esc(extra)}</i>` : ''}</span>`;
+  const gateLine = g ? `
+        <div class="etf-pos-gate ${esc(g.tier)}">
+          <span class="etf-pos-gate-tag">${g.tier === 'heavy' ? '重仓条件已满足 ✓' : (g.tier === 'try' ? '未确认 · 只能试仓 ⚠' : '转弱 · 减仓跑路 ⚠')}</span>
+          ${item('ETF 站上 MA21', g.etfAbove, g.ma21 != null ? g.ma21.toFixed(3) : '')}
+          ${item('ETF MACD 翻红', g.etfRed)}
+          ${item('纳指100 站上 MA21', g.usAbove, g.usClose != null ? g.usClose.toFixed(0) : '')}
+          ${item('纳指100 DIF>0', g.usZero, g.usDif != null ? g.usDif.toFixed(0) : '')}
+          <span class="etf-pos-us-note">${esc(g.note)}</span>
         </div>` : '';
   return `
       <div class="etf-pos ${p.state === 'UP' ? 'up' : 'down'}">
@@ -2806,7 +2818,7 @@ function etfPosAdviceHtml() {
         </div>
         <div class="etf-pos-bar"><i style="width:${posPct}%"></i></div>
         <div class="etf-pos-note">${esc(p.headline)}</div>
-        ${usLine}
+        ${gateLine}
         ${p.entryNote ? `<div class="etf-pos-entry">${esc(p.entryNote)}</div>` : ''}
         ${trigs ? `<div class="etf-pos-triggers">${trigs}</div>` : ''}
         ${btLine ? `<div class="etf-pos-bt">${btLine}</div>` : ''}
@@ -3439,7 +3451,7 @@ function etfSignalsHtml() {
   const st = combo.stats || {};
   const typeNames = {
     buy_strong: '重仓买入', buy: '买入', buy_weak: '试仓', buy_small: '少量买入',
-    wait_us: '等美股确认', panic_wait: '抄底未确认',
+    wait_us: '等重仓确认', panic_wait: '抄底未确认', panic_try: '恐慌试仓',
     sell_weak: '持有不加仓', sell: '减仓', sell_clear: '清仓/减半',
   };
   const statLine = Object.entries(typeNames)
@@ -3464,12 +3476,13 @@ function etfSignalsHtml() {
     ${statLine ? `<div class="etf-legend" style="margin-top:6px"><span>${statLine}</span></div>` : ''}
     ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
-      <span>口径（v6）：<b>溢价决定仓位、趋势定方向、美股趋势决定「低溢价能不能抬仓」</b>。
-      <b>v6 新增</b>：2026-01~03 只按「溢价低 → 抄底仓 85%」一路加仓，会跟着美股跌 3 个月（跟随者口径均仓 82%、亏损 14.4%）——
-      <b>溢价低只代表「有性价比」，不是抄底/重仓的理由</b>。所以美股（纳指）确认走坏（收在 MA50 下方且 MA50 下行）且未止跌时，
-      低溢价抄底仓一律不生效、整体仓位封顶 40%，清单输出<b>「等美股确认」</b>；等纳指自近 20 日低点反弹 ≥3% 才恢复抬仓。
-      另外<b>恐慌抄底下限有 10 个交易日有效期</b>：触发后若迟迟站不回 MA21，说明是下跌中继（2026-01-21、2025-03-04 两次各亏 6.1% / 5.4%），
-      撤回 65% 下限、清单转为<b>「抄底未确认」</b>。<b>溢价系数按本 ETF 自身分布校准：&lt;15% 满仓、15~18% 九成、18~22% 半仓、22~27% 两成半、≥27% 一成半</b>（18~22% 由八成下调到半仓——2026-01 那波跌就是溢价从 23% 压缩到 15%，当时八成仓位明显过高）——所以高溢价时只提示「少量买入」或「持有不加仓」，绝不追高加仓。低溢价买点需命中「不追高」过滤（溢价&lt;18 且 威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）。<b>恐慌抄底窗口</b>（隔夜外盘重挫 + 极限超卖共振 ≥5 项）优先级最高，即使溢价在 15~22% 也直接给<b>重仓买入</b>：分批建仓，触发日先建 65%，重新站上 MA21 补到 85%。高溢价区仍保留 MACD 级别的买卖点：<b>死叉 → 减仓</b>、死叉后首次<b>跌破 MA21 → 确认减仓</b>、<b>金叉 → 少量买入（≤3 成）</b>；趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）也降到 3 成以内；溢价 ≥27 且趋势同破才减半。连续同类型合并为段。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>说明这一买点之后确实涨了（买对了），<b class="down">卖出信号为负</b>说明之后确实跌了（减仓躲过了下跌）。</span>
+      <span>口径（v7）：<b>重仓的唯一条件 = MACD 翻红 且 收盘站上 21 日均线</b>，纳指科技 ETF 与纳斯达克 100 都要满足；溢价只决定在这三档里多买/少买一点，<b>永远不能把「便宜」升级成「重仓」</b>。
+      <b>三档门控</b>：<b class="up">重仓档</b>（四条全满足）→ 按溢价正常加仓，&lt;15% 可到 85%；<b>试仓档</b>（已翻红但价格或美股还没站回 MA21）→ 最多 35%，溢价 &lt;15% 也只多到 45%；<b class="down">跑路档</b>（ETF MACD 翻绿，或纳指100 DIF 跌破零轴）→ 减到 25%（&lt;15% 留 35%）。
+      <b>v7 的起因</b>：2026-01~03 只按「溢价低 → 抄底仓 85%」一路加仓，跟着美股跌了 3 个月（跟随者口径均仓 82%、亏损 14.4%）——
+      <b>溢价低只代表「有性价比」，不是抄底/重仓的理由</b>。v7 之后同一段全程压在 6~35%，<b>仓位 &gt;50% 的天数为 0</b>，跟随者亏损收窄到 5.1%。
+      为什么美股 MACD 看<b>「DIF 零轴」</b>而不是死叉：764 日实测纳指100 绿柱的 373 天、后 20 日平均 +3.67%（胜率 64%），反而高于红柱的 +3.10%——隔夜时差 + A 股溢价已把美股短线摆动消化掉了；若按死叉卡，「允许重仓」的天数从 39% 掉到 33%，全期 +206% → +99%，而那段亏损只从 -5.1% 再降到 -4.4%。但 DIF 跌破零轴（2026-02~03 正是）代表中期趋势真转坏，保留为跑路条件。
+      <b>恐慌抄底也守这条铁律</b>：未满足重仓条件时只给<b>「恐慌试仓」</b>（≤35%），不再喊重仓买入；已站上 MA21 但未翻红 → 65%，翻红才补到 85%。触发后 10 个交易日仍站不回 MA21 则撤回、转<b>「抄底未确认」</b>（2026-01-21、2025-03-04 两次各亏 6.1% / 5.4%）。
+      <b>溢价系数</b>：&lt;15% 满仓、15~18% 九成、18~22% 半仓、22~27% 两成半、≥27% 一成半（18~22% 由八成下调到半仓——2026-01 那波跌就是溢价从 23% 压缩到 15%）。低溢价买点仍需命中「不追高」过滤（威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）。高溢价区保留 MACD 级买卖点：<b>死叉 → 减仓</b>、死叉后首次<b>跌破 MA21 → 确认减仓</b>、<b>金叉 → 少量买入（≤3 成）</b>；趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）降到 3 成以内。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>=买对了，<b class="down">卖出信号为负</b>=减仓躲过了下跌。</span>
     </div>`;
 }
 
