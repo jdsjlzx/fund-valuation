@@ -1042,6 +1042,7 @@ async function fetchXueqiuDirect(symbol) {
     lastClose: q.last_close,
     currentExt: q.current_ext,
     percentExt: q.percent_ext,
+    timestampExt: q.timestamp_ext,
     currentNight: q.current_night_session,
     percentNight: q.percent_night_session,
     chgNight: q.chg_night_session,
@@ -2009,6 +2010,7 @@ app.get('/api/night', async (req, res) => {
     // 扩展行情（盘后+夜盘连续报价）与市场状态，供排查口径用
     currentExt: d.currentExt,
     percentExt: d.percentExt,
+    timestampExt: d.timestampExt,
     current: d.current,
     status: d.status,
   });
