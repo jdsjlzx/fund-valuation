@@ -2442,7 +2442,6 @@ function calcMACD(klines, barCount = 26) {
           const b = bars[minIdx - start];
           if (!b.signal) {
             b.signal = 'buy_pre';
-            console.log('[buy_pre]', b.date, 'waveMax='+waveMax.toFixed(3), 'minAbs='+minAbs.toFixed(3), 'barVal='+barVals[minIdx].toFixed(4));
           }
         }
         negStart = -1;
