@@ -2969,7 +2969,7 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
     sell_weak:  { label: '持有不加仓', action: '持仓不动', side: 'hold' },
     wait_us:    { label: '等重仓确认', action: '暂缓加仓/减仓', side: 'hold' },
     panic_wait: { label: '抄底未确认', action: '撤回防守仓', side: 'hold' },
-    panic_try:  { label: '恐慌试仓',  action: '小仓试仓 ≤35%', side: 'buy' },
+    panic_try:  { label: '恐慌试仓',  action: '小仓试仓 20~35%', side: 'buy' },
     sell:       { label: '减仓',     action: '减仓',     side: 'sell' },
     sell_clear: { label: '清仓/减半', action: '清仓或减半', side: 'sell' },
   };
@@ -3019,7 +3019,7 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
       if (fBoll) ev.push('收盘 < 布林中轨');
       ev.push(heavyOk
         ? '重仓条件已满足 → 分批重仓到 85%'
-        : `尚未满足重仓条件（${gtRow && gtRow.miss && gtRow.miss.length ? gtRow.miss.join('、') : '未确认'}）→ 先按试仓档小仓分批，站上 MA21 且 MACD 翻红后再补到 65~85%`);
+        : `尚未满足重仓条件（${gtRow && gtRow.miss && gtRow.miss.length ? gtRow.miss.join('、') : '未确认'}）→ 先按试仓档小仓分批（溢价 <15% 给 ${Math.round(POS_TRY_CAP_CHEAP * 100)}%、≥15% 只给 ${Math.round(POS_TRY_CAP * 100)}%），站上 MA21 且 MACD 翻红后再补到 65~85%`);
     } else if (p < 15 && fHit) {
       code = 'buy_strong';
       ev = [`溢价 ${p.toFixed(1)}%（<15 重仓区）`];
@@ -3293,16 +3293,23 @@ function buildUsTrendState(klines, usIdx) {
 //     etf，macd翻绿或者收盘价格跌破21天均线，都要减仓清仓跑路。」
 // 落地为三档（tier），溢价只在这三档内部做微调，永远不能把「便宜」升级成「重仓」：
 //   heavy 重仓档：ETF 站上 MA21 且 MACD 翻红，且纳指100 站上 MA21 且 DIF 在零轴上方
-//   run   跑路档：ETF MACD 翻绿，或纳指100 DIF 跌破零轴            → 减仓
-//   try   试仓档：已翻红但价格（或美股）还没站回 MA21              → 只可小仓试错
+//   run   跑路档：ETF MACD 翻绿，或纳指100 DIF 跌破零轴 → 减到 20%（溢价<15% 留 35%）
+//   try   试仓档：已翻红但价格（或美股）还没站回 MA21   → 20%（溢价<15% → 35%）
+//         恐慌「试仓」同样按这一档：溢价 ≥15% 只 20%、<15% 才 35%（用户 2026-01-21~02-03
+//         复盘后定的——那段溢价 15~18% 却给到 35%，跟着一路跌到 3 月，试错仓必须更小）。
 // 为什么美股 MACD 看「DIF 零轴」而不是「dif>dea」：764 日实测，纳指100 的死叉对这只
 // A 股 ETF 几乎没有预测力——NDX MACD 绿柱的 373 天，后 20 日平均 +3.67%（胜率 64%），
 // 反而高于红柱的 +3.10%（胜率 61%）：隔夜时差 + A 股溢价已经把美股短线摆动消化掉了。
 // 若坚持用 dif>dea，「允许重仓」的天数从 39% 掉到 33%，全期 +191% → +99%，而 2026-01~03
 // 的亏损只从 -5.1% 再降到 -4.4%——花掉 92pp 收益换 0.7pp 的抗跌，不划算。
 // 但 DIF 跌破零轴代表美股中期趋势真的转坏（2026-02~03 正是如此），保留它作为「跑路」条件。
-const POS_TRY_CAP = 0.35;         // 试仓档：翻红但没站回 MA21 → 只可小仓试错
-const POS_TRY_CAP_CHEAP = 0.45;   // 溢价 <15% 时试探性多买一点（仍不是重仓）
+// 试仓档的档位（v7.1 用户复盘后收紧）：
+//   溢价 ≥15% → 20% 以内；溢价 <15% → 35%。
+//   依据 2026-01-21~02-03 那一段：清单标「恐慌试仓」但溢价在 15~18%，当时给到 35%，
+//   结果一路跌到 3 月——「试错」的仓位不该接近半仓，否则试错失败就是重伤。
+//   原为 35% / 45%，用户明确要求下调为 20% / 35%。
+const POS_TRY_CAP = 0.20;         // 试仓档 · 溢价 ≥15%（恐慌试仓同样适用）
+const POS_TRY_CAP_CHEAP = 0.35;   // 试仓档 · 溢价 <15%：便宜才多给一点，仍远不到重仓
 const POS_RUN_CAP = 0.25;         // 跑路档：MACD 翻绿 / 美股 DIF 破零轴 → 减仓
 const POS_RUN_CAP_CHEAP = 0.35;   // 溢价 <15% 时留一点底仓
 const POS_MAX_NOT_HEAVY = 0.5;    // 「非重仓档一律 ≤50%」的硬红线
@@ -3531,8 +3538,11 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
     } else {
       // 非重仓档：溢价只决定在这一档里多买一点 / 少买一点，**永远不能升级成重仓**。
       // 这就是 2026-01~03「溢价降到 15 就一路加仓、一路亏」的根治点。
+      // 跑路档再取一次 min（跑路档必须 ≤ 试仓档），否则会出现「情况更坏了反而加仓」。
       const cheap = p != null && p < PREMIUM_ADD;
-      cap = tier === 'try' ? (cheap ? POS_TRY_CAP_CHEAP : POS_TRY_CAP) : (cheap ? POS_RUN_CAP_CHEAP : POS_RUN_CAP);
+      const tryCap = cheap ? POS_TRY_CAP_CHEAP : POS_TRY_CAP;
+      const runCap = cheap ? POS_RUN_CAP_CHEAP : POS_RUN_CAP;
+      cap = tier === 'try' ? tryCap : Math.min(runCap, tryCap);
     }
     // 零轴下死叉：趋势转弱再压一档
     if (state === 'UP' && i > 0 && bars[i - 1] && bars[i - 1].dif >= bars[i - 1].dea && bar.dif != null && bar.dif <= bar.dea && bar.dif < 0) cap *= 0.7;
@@ -3554,11 +3564,16 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
     // 恐慌下限只在高溢价（≥22%）以内生效——溢价极高时仍让「高溢价压仓」规则优先，避免自相矛盾。
     // 恐慌层同样遵守重仓铁律：站上 MA21 只确认「止跌」，要 MACD 翻红（重仓档）才补到 85%。
     if (panicOn && !panicLapsed && (p == null || p <= PREMIUM_WATCH)) {
-      // run 档（MACD 翻绿 / 美股 DIF 破零轴）时，恐慌信号也不能凌驾铁律：只给试仓档
-      const floor = (panicAdded && tier !== 'run')
-        ? (tier === 'heavy' ? POS_PANIC_CAP_ADD : POS_PANIC_CAP)
-        : Math.max(POS_TRY_CAP, cap);
-      target = Math.max(target, floor);
+      if (panicAdded && tier !== 'run') {
+        // 站上 MA21 = 止跌确认：要 MACD 也翻红（重仓档）才补到 85%，否则 65% 为限
+        target = Math.max(target, tier === 'heavy' ? POS_PANIC_CAP_ADD : POS_PANIC_CAP);
+      } else {
+        // 恐慌「试仓」档（未站回 MA21，或虽站回但 MACD 已翻绿）：
+        //   溢价 ≥15% → 20% 以内；溢价 <15% → 35%。
+        // 2026-01-21~02-03 就是这一段：溢价 15~18%、当时给到 35%，跟着一路跌到 3 月，
+        // 所以试错的仓位必须比「便宜」更小——下限即上限，直接按档定仓（不再乘溢价系数）。
+        target = (p != null && p < PREMIUM_ADD) ? POS_TRY_CAP_CHEAP : POS_TRY_CAP;
+      }
     }
     out.push({
       date: rows[i].date, close: +C[i].toFixed(3), premium: p == null ? null : +p.toFixed(2),
@@ -3596,7 +3611,11 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
   // ── 重仓铁律（v7）：能不能重仓，只看 MACD 翻红 + 站上 MA21，溢价说了不算 ──
   // 三档的仓位口径（未乘溢价系数）：非重仓档一律 ≤50%
   const tryPct = Math.round((p != null && p < PREMIUM_ADD ? POS_TRY_CAP_CHEAP : POS_TRY_CAP) * 100);
-  const runPct = Math.round((p != null && p < PREMIUM_ADD ? POS_RUN_CAP_CHEAP : POS_RUN_CAP) * 100);
+  // 跑路档再取一次 min（必须 ≤ 试仓档），否则会出现「情况更坏了反而加仓」
+  const runPct = Math.round(Math.min(
+    p != null && p < PREMIUM_ADD ? POS_RUN_CAP_CHEAP : POS_RUN_CAP,
+    p != null && p < PREMIUM_ADD ? POS_TRY_CAP_CHEAP : POS_TRY_CAP,
+  ) * 100);
   const gt = last.gate || {};
   const tier = last.tier || 'heavy';
   const ma21Txt0 = last.ma21 != null ? last.ma21.toFixed(3) : '—';
@@ -3613,7 +3632,8 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
     miss: gt.miss || [],
     ma21: last.ma21,
     caps: {
-      try: POS_TRY_CAP, tryCheap: POS_TRY_CAP_CHEAP, run: POS_RUN_CAP, runCheap: POS_RUN_CAP_CHEAP,
+      try: POS_TRY_CAP, tryCheap: POS_TRY_CAP_CHEAP,
+      run: Math.min(POS_RUN_CAP, POS_TRY_CAP), runCheap: Math.min(POS_RUN_CAP_CHEAP, POS_TRY_CAP_CHEAP),
       maxNotHeavy: POS_MAX_NOT_HEAVY,
     },
     label: tier === 'heavy' ? '重仓条件已满足' : (tier === 'try' ? '未确认 · 只能试仓' : '转弱 · 减仓跑路'),
@@ -3665,7 +3685,10 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
         ? `恐慌抄底已双重确认（站上 MA21 ${ma21Txt} + MACD 翻红）→ 按「分批重仓」补到 ${posPct}%。`
         : `恐慌抄底已获价格确认（站上 MA21 ${ma21Txt}），但 MACD 还没翻红 → 按 ${posPct}% 执行，翻红后再补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%。`)
       : `触发「恐慌抄底」信号${lv}：隔夜外盘重挫 + 极限超卖共振，属利空集中兑现、而非基本面转坏。`
-        + ` 但当前未满足重仓条件（${gateInfo.miss.join('、') || '—'}），按铁律只给 ${posPct}% 试仓档——溢价${p == null ? ' 再低' : ` ${p.toFixed(1)}%`}，也不因此重仓；`
+        + ` 但当前未满足重仓条件（${gateInfo.miss.join('、') || '—'}），按铁律只给 ${posPct}% 试仓档——`
+        + (p != null && p < PREMIUM_ADD
+          ? `溢价 ${p.toFixed(1)}% 低于 15，试仓档放宽到 ${Math.round(POS_TRY_CAP_CHEAP * 100)}%；`
+          : `溢价${p == null ? '偏高' : ` ${p.toFixed(1)}%`} 不低于 15，试仓档压到 ${Math.round(POS_TRY_CAP * 100)}% 以内；`)
         + `等 MACD 翻红且收盘站上 MA21（${ma21Txt}）再抬仓。`;
     // 仍在非重仓档时，把「有效期」讲清楚——这正是 2026-01~03 一路扛仓的教训
     if (!last.panicAdded && tier !== 'heavy') {
@@ -3744,7 +3767,7 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
     triggers.push({
       label: `买入价 · 溢价 ${PREMIUM_BUY}%`,
       price: +(iopv * (1 + PREMIUM_BUY / 100)).toFixed(3),
-      note: tier === 'heavy' ? '低于此价可加到九成' : `重仓条件未满足 → 溢价再低也只加到 ${Math.round(POS_TRY_CAP * 100)}%`,
+      note: tier === 'heavy' ? '低于此价可加到九成' : `重仓条件未满足 → 溢价 ≥15% 只加到 ${Math.round(POS_TRY_CAP * 100)}%、<15% 也只到 ${Math.round(POS_TRY_CAP_CHEAP * 100)}%`,
       tone: tier === 'heavy' ? 'buy' : 'warn',
     });
   }
@@ -3804,7 +3827,7 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
     : tier === 'run'
       ? `${gateInfo.miss.join('、')} → 减仓档 ${runPct}%（乘溢价系数后 ${posPct}%）：${cheapTxt}，但不满足「MACD 翻红 + 站上 MA21」就不能重仓`
       : tier === 'try'
-        ? `${gateInfo.miss.join('、')} → 试仓档 ${tryPct}%（乘溢价系数后 ${posPct}%）：${cheapTxt}，也只多买一点；收盘站回 MA21（${ma21Txt0}）才抬到 ${Math.round(POS_DIP_CAP_BUY * 100)}~${Math.round(POS_DIP_CAP_CHEAP * 100)}%`
+        ? `${gateInfo.miss.join('、')} → 试仓档 ${tryPct}%（乘溢价系数后 ${posPct}%）：${cheapTxt}也只是从 ${Math.round(POS_TRY_CAP * 100)}% 放宽到 ${Math.round(POS_TRY_CAP_CHEAP * 100)}%，远不到重仓；收盘站回 MA21（${ma21Txt0}）且 MACD 翻红才抬到 ${Math.round(POS_DIP_CAP_BUY * 100)}~${Math.round(POS_DIP_CAP_CHEAP * 100)}%`
         : (dipLiftBase != null && dipLiftBase > trendCap)
           ? `重仓条件已满足（MACD 翻红 + 站上 MA21）→ 趋势基准上限 ${Math.round(trendCap * 100)}%，溢价 ${p.toFixed(1)}% 属便宜区 → 抬高到 ${Math.round(dipLiftBase * 100)}% 的抄底仓`
           : `重仓条件已满足 → ${up ? '趋势向上' : '趋势破坏'}，基准上限 ${Math.round(trendCap * 100)}%（再乘溢价系数）`;
