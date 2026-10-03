@@ -1995,6 +1995,11 @@ app.get('/api/night', async (req, res) => {
     percentNight: d.percentNight,
     chgNight: d.chgNight,
     timestampNight: d.timestampNight,
+    // 扩展行情（盘后+夜盘连续报价）与市场状态，供排查口径用
+    currentExt: d.currentExt,
+    percentExt: d.percentExt,
+    current: d.current,
+    status: d.status,
   });
 });
 
