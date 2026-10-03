@@ -1429,6 +1429,27 @@
     .etf-signal-table tr.hl td { background: var(--bg-entry); font-weight: 600; }
     .etf-bt-table td:first-child { font-size: 10.5px; line-height: 1.35; }
     .etf-bt-sub { font-size: 9px; color: var(--text-muted); font-weight: 400; margin-top: 1px; }
+    /* 策略对比：行可点击展开交易日期 */
+    .etf-bt-row { cursor: pointer; }
+    .etf-bt-row:active { opacity: .65; }
+    .etf-bt-caret { display: inline-block; width: 11px; color: var(--text-muted); font-size: 9px; }
+    .etf-bt-detail td { background: var(--etf-panel); padding: 6px 9px 9px; }
+    .etf-bt-log { display: flex; flex-direction: column; gap: 4px; }
+    .etf-bt-trade {
+      display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+      font-size: 10px; font-variant-numeric: tabular-nums; color: var(--text-holding);
+    }
+    .etf-bt-trade .etf-bt-d { color: var(--text-secondary); }
+    .etf-bt-tag {
+      display: inline-block; padding: 0 5px; border-radius: 3px;
+      font-size: 9px; font-weight: 700; color: #fff; white-space: nowrap;
+    }
+    .etf-bt-tag.buy  { background: rgba(232,76,61,0.85); }
+    .etf-bt-tag.sell { background: rgba(46,189,133,0.85); }
+    .etf-bt-pos, .etf-bt-hold { color: var(--text-muted); font-size: 9.5px; }
+    .etf-bt-ret { margin-left: auto; font-weight: 700; }
+    .etf-bt-logsum { margin-top: 6px; font-size: 9.5px; color: var(--text-muted); }
+    .etf-bt-ctrl { display: flex; justify-content: flex-end; gap: 12px; }
     .etf-review-notes {
       margin-top: 10px; padding: 8px 10px; border-radius: 6px;
       background: var(--etf-panel); border: 1px dashed var(--border-header);
@@ -2357,6 +2378,7 @@ let ETF_ALERT_SEEN = null;      // null = 尚未首次加载（首次只弹「�
 let ETF_ALERT_LOG = [];         // 本次会话触发的提示（倒序）
 let ETF_ALERT_EXPAND = false;   // 盘中提示：是否展开全部（默认只列 Top3）
 let ETF_ALERT_LOG_OPEN = false; // 「本次会话已触发」是否展开
+let ETF_BT_OPEN = new Set();    // 策略对比：已展开交易日期明细的策略（按下标）
 let ETF_RENDERED_DATE = null;   // 已整页渲染对应的交易日（跨日时整页重绘）
 let etfLastLoadTs = 0;
 let ETF_PREMIUM_RANGE = (localStorage.getItem('etf-premium-range') === 'all') ? 'all' : 'recent';   // 溢价率走势：recent=近120日 / all=全历史
@@ -2749,22 +2771,45 @@ function etfReviewHtml() {
       <td class="num">${b.premium == null ? '—' : f(b.premium, 1) + '%'}</td>
       <td class="num">${sg(b.r20)}</td>
     </tr>`).join('');
-  const btRows = (r.backtest || []).map(b => {
+  const btList = r.backtest || [];
+  const anyOpen = btList.some((_, i) => ETF_BT_OPEN.has(String(i)));
+  const btRows = btList.map((b, i) => {
     const best = b.name === '买入持有（基准）';
-    return `<tr class="${best ? 'hl' : ''}">
-      <td>${b.name}<div class="etf-bt-sub">${b.trades} 次交易${b.winPct != null ? ` · 胜率 ${b.winPct}%` : ''} · 持仓时间 ${b.exposurePct}%</div></td>
+    const open = ETF_BT_OPEN.has(String(i));
+    const log = b.tradeLog || [];
+    // 逐笔明细：日期 / 价格 / 动作（含仓位）/ 单笔收益 / 持有天数
+    const detail = open ? `<tr class="etf-bt-detail"><td colspan="5">
+        ${log.length ? `<div class="etf-bt-log">${log.map(x => `
+          <div class="etf-bt-trade ${x.side}">
+            <span class="etf-bt-d">${fmtD(x.date)}</span>
+            <span class="etf-bt-p">${f(x.price, 3)}</span>
+            <span class="etf-bt-tag ${x.side}">${x.label || (x.side === 'buy' ? '买入' : '卖出')}</span>
+            ${x.pos != null ? `<span class="etf-bt-pos">仓位 ${Math.round(x.pos * 100)}%</span>` : ''}
+            ${x.holdDays != null ? `<span class="etf-bt-hold">持 ${x.holdDays} 日</span>` : ''}
+            ${x.retPct != null ? `<span class="etf-bt-ret ${cls(x.retPct)}">${x.retPct >= 0 ? '+' : ''}${f(x.retPct, 2)}%</span>` : ''}
+          </div>`).join('')}</div>
+          <div class="etf-bt-logsum">符合条件交易的日期共 ${log.length} 个：买入 ${b.buyCount || 0} 个 · 卖出 ${b.sellCount || 0} 个 · 持仓时间 ${b.exposurePct}%</div>`
+        : '<div class="etf-empty" style="padding:2px 0">该区间内未触发交易</div>'}
+      </td></tr>` : '';
+    return `<tr class="etf-bt-row${best ? ' hl' : ''}" onclick="etfToggleBt(${i})">
+      <td><span class="etf-bt-caret">${open ? '▾' : '▸'}</span>${b.name}<div class="etf-bt-sub">${b.group ? `【${b.group}】` : ''}${b.trades} 次${b.kind === 'graded' ? '调仓' : '交易'}${log.length ? ` · 点击看 ${log.length} 个日期` : ''}</div></td>
       <td class="num ${b.totalPct >= 0 ? 'up' : 'down'}">${b.totalPct >= 0 ? '+' : ''}${f(b.totalPct, 1)}%</td>
       <td class="num ${b.annualPct >= 0 ? 'up' : 'down'}">${b.annualPct >= 0 ? '+' : ''}${f(b.annualPct, 1)}%</td>
+      <td class="num ${b.winPct != null && b.winPct >= 60 ? 'up' : ''}">${b.winPct != null ? b.winPct + '%' : '—'}</td>
       <td class="num down">${f(b.mddPct, 1)}%</td>
-    </tr>`;
+    </tr>${detail}`;
   }).join('');
 
   // 由数据自动生成的结论
-  const hold = (r.backtest || []).find(b => b.name === '买入持有（基准）') || {};
-  const macd = (r.backtest || []).find(b => /^MACD 信号/.test(b.name)) || {};
+  const hold = btList.find(b => b.name === '买入持有（基准）') || {};
+  const macd = btList.find(b => /^MACD 金叉买/.test(b.name)) || {};
+  const ts = r.tradeDateStats || {};
   const notes = [];
   if (pd.median != null) notes.push(`全历史溢价中位数 ${pd.median}%，≤${18}% 的交易日占 ${pd.belowBuy}%、＜15% 占 ${pd.belowAdd}%；≥22% 仅 ${pd.aboveWatchDays} 天（${pd.aboveWatch}%）、≥27% 仅 ${pd.aboveDangerDays} 天。`);
-  if (macd.totalPct != null && hold.totalPct != null) notes.push(`MACD 信号择时累计 ${macd.totalPct}% vs 买入持有 ${hold.totalPct}%：这类长期上行标的择时反而拖累收益。`);
+  if (macd.totalPct != null && hold.totalPct != null) notes.push(`MACD 金叉/死叉择时累计 ${macd.totalPct}% vs 买入持有 ${hold.totalPct}%：这类长期上行标的单纯靠 MACD 择时反而拖累收益。`);
+  if (r.topByCalmar) notes.push(`性价比最高（年化/回撤）：${r.topByCalmar.name} —— 年化 ${r.topByCalmar.annualPct}%、回撤 ${r.topByCalmar.mddPct}%、胜率 ${r.topByCalmar.winPct != null ? r.topByCalmar.winPct + '%' : '—'}。`);
+  if (r.topByWin) notes.push(`胜率最高：${r.topByWin.name} —— 胜率 ${r.topByWin.winPct}%（${r.topByWin.trades} 次交易）、累计 ${r.topByWin.totalPct}%。`);
+  if (ts.events) notes.push(`全部 ${ts.strategies} 套规则共产生 ${ts.events} 个交易日期（买入 ${ts.buyEvents} · 卖出 ${ts.sellEvents}）；点击任意策略行可展开其全部交易日期。`);
   if (hold.mddPct != null) notes.push(`区间最大回撤 ${hold.mddPct}%（${(r.bestSells || []).map(x => fmtD(x.date)).slice(0, 3).join(' / ')} 附近是几处典型顶部）。`);
 
   return `
@@ -2794,11 +2839,12 @@ function etfReviewHtml() {
       <tbody>${sigRows || '<tr><td colspan="5">—</td></tr>'}</tbody>
     </table>
 
-    <div class="etf-sec-title" style="margin-top:12px"><span>策略对比（全历史回测）</span><span class="sub">收盘价成交，未计手续费</span></div>
+    <div class="etf-sec-title" style="margin-top:12px"><span>策略对比（全历史回测）</span><span class="sub">覆盖溢价 / MACD / RSI / KDJ / 威廉%R / 布林带 / 均线 / ATR / 仓位分级 · 点击行看交易日期</span></div>
     <table class="etf-signal-table etf-bt-table">
-      <thead><tr><th>策略</th><th>总收益</th><th>年化</th><th>最大回撤</th></tr></thead>
+      <thead><tr><th>策略</th><th>总收益</th><th>年化</th><th>胜率</th><th>最大回撤</th></tr></thead>
       <tbody>${btRows}</tbody>
     </table>
+    <div class="etf-more" onclick="etfToggleAllBt()">${anyOpen ? '收起全部策略的交易日期 ▴' : `展开全部策略的交易日期（${btList.length} 套）▾`}</div>
 
     <div class="etf-review-notes">
       ${notes.map(n => `<div class="etf-review-note">· ${n}</div>`).join('')}
@@ -2847,6 +2893,22 @@ function etfToggleAlertLog() {
   ETF_ALERT_LOG_OPEN = !ETF_ALERT_LOG_OPEN;
   const el = document.getElementById('etf-alerts');
   if (el) el.innerHTML = etfAlertsHtml();
+}
+
+// 策略对比：点击某一行 → 展开/收起该策略符合条件交易的全部日期
+function etfToggleBt(i) {
+  const k = String(i);
+  if (ETF_BT_OPEN.has(k)) ETF_BT_OPEN.delete(k); else ETF_BT_OPEN.add(k);
+  const el = document.getElementById('etf-review');
+  if (el) el.innerHTML = etfReviewHtml();
+}
+function etfToggleAllBt() {
+  const list = (ETF_TRACK && ETF_TRACK.review && ETF_TRACK.review.backtest) || [];
+  const anyOpen = list.some((_, i) => ETF_BT_OPEN.has(String(i)));
+  if (anyOpen) ETF_BT_OPEN.clear();
+  else list.forEach((_, i) => ETF_BT_OPEN.add(String(i)));
+  const el = document.getElementById('etf-review');
+  if (el) el.innerHTML = etfReviewHtml();
 }
 
 // ── 分时图 ──
@@ -2951,50 +3013,65 @@ function etfIntradayHtml() {
     ${etfQuoteInlineHtml()}`;
 }
 
-// ── 买卖信号清单 ──
+// ── 买卖信号清单（v2：多指标组合）──
+//  溢价为主 + 威廉%R/MA21/布林「不追高」过滤器 + MACD 确认；连续同类型合并为段。
+//  每段展示：日期段 / 价格 / 溢价 / 信号 / 依据 / 段首后20日表现
 function etfSignalsHtml() {
   const t = ETF_TRACK;
-  if (!t || !t.signals || !t.signals.length) return `<div class="etf-empty">暂无信号</div>`;
-  const all = [...t.signals].reverse();
-  const show = ETF_SHOW_ALL_SIGNALS ? all : all.slice(0, 12);
-  // 日期带年份（YYYY-MM-DD），并单独标出年份便于快速定位
+  const combo = t && t.comboSignals;
+  if (!combo || !combo.signals || !combo.signals.length) return `<div class="etf-empty">暂无信号</div>`;
+  const all = [...combo.signals].reverse();
+  const show = ETF_SHOW_ALL_SIGNALS ? all : all.slice(0, 14);
   const fmtDate = d => {
     const s = String(d || '');
     if (s.length < 10) return s.replace(/\(至今\)/, '');
     return `${s.slice(0, 4)}-${s.slice(5, 7)}-${s.slice(8, 10)}`;
   };
+  const segLabel = s => {
+    const a = fmtDate(s.date), b = fmtDate(s.endDate);
+    return a === b ? a : `${a}<br>~ ${b}`;
+  };
   const rows = show.map(s => {
-    let follow = '';
-    if (s.side === 'buy') {
-      const r = s.holdRetPct ?? 0;
-      follow = `持有至 ${fmtDate(s.holdUntil)}<br><span class="${cls(r)}">${etfPct(r)}</span>`;
-    } else {
-      const r = s.avoidPct ?? 0;
-      follow = `空仓至 ${fmtDate(s.holdUntil)}<br><span class="${cls(r)}">${etfPct(r)}</span>`;
-    }
+    const f = s.fwd20Pct;
+    const follow = f == null ? '待验证' : `<span class="${cls(f)}">${etfPct(f)}</span>`;
+    const ev = (s.evidence || []).join('<br>');
     return `<tr>
-      <td class="num">${fmtDate(s.date)}</td>
+      <td class="num" style="font-size:9.5px;white-space:nowrap">${segLabel(s)}</td>
       <td class="num">${s.close.toFixed(3)}</td>
-      <td><span class="sig-badge ${s.side}">${s.label}</span></td>
-      <td>${s.action}</td>
+      <td class="num">${s.premium != null ? s.premium.toFixed(1) + '%' : '—'}</td>
+      <td><span class="sig-badge ${s.side}">${s.label}</span><div style="font-size:9px;color:var(--text-muted);margin-top:2px">${s.action}</div></td>
+      <td style="font-size:9.5px;line-height:1.5">${ev}</td>
       <td class="num" style="font-size:9.5px">${follow}</td>
     </tr>`;
   }).join('');
-  const more = all.length > 12
-    ? `<div class="etf-signal-more" onclick="etfToggleSignals()">${ETF_SHOW_ALL_SIGNALS ? '收起' : `展开全部 ${all.length} 条`}</div>`
+  const more = all.length > 14
+    ? `<div class="etf-signal-more" onclick="etfToggleSignals()">${ETF_SHOW_ALL_SIGNALS ? '收起' : `展开全部 ${all.length} 段`}</div>`
     : '';
-  const st = t.stats || {};
+  // 分类型统计摘要 + 按段操作回测
+  const st = combo.stats || {};
+  const typeNames = { buy_strong: '重仓买入', buy: '买入', buy_weak: '试仓', sell_weak: '警惕', sell: '减仓', sell_clear: '清仓' };
+  const statLine = Object.entries(typeNames)
+    .filter(([k]) => st[k] && st[k].count)
+    .map(([k, name]) => {
+      const v = st[k];
+      const good = k.startsWith('buy') ? `买后20日均值 ${v.avgFwd20 != null ? v.avgFwd20 + '%' : '—'}` : `卖后20日均值 ${v.avgFwd20 != null ? v.avgFwd20 + '%' : '—'}`;
+      return `${name} ${v.count}段 · ${good} · 正确率 ${v.hitRate != null ? v.hitRate + '%' : '—'}`;
+    })
+    .join('<br>');
+  const bt = combo.backtest;
+  const btLine = bt
+    ? `按段操作回测（全历史）：${bt.trades} 笔完整买卖 · 胜率 ${bt.winRate}% · 累计 <span class="${bt.totalPct >= 0 ? 'up' : 'down'}">${bt.totalPct >= 0 ? '+' : ''}${bt.totalPct}%</span>`
+    : '';
   return `
     <table class="etf-signal-table">
-      <thead><tr><th>日期</th><th>价格</th><th>信号</th><th>操作</th><th>后续表现</th></tr></thead>
+      <thead><tr><th>日期段</th><th>价格</th><th>溢价</th><th>信号</th><th>依据</th><th>段首后20日</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     ${more}
-    <div class="etf-legend" style="margin-top:6px">
-      <span>共 ${st.sellCount != null ? st.sellCount + st.buyCount : all.length} 条（买入 ${st.buyCount ?? '—'} / 卖出 ${st.sellCount ?? '—'}），买入信号胜率 ${st.winRate != null ? st.winRate.toFixed(1) + '%' : '—'}</span>
-    </div>
+    ${statLine ? `<div class="etf-legend" style="margin-top:6px"><span>${statLine}</span></div>` : ''}
+    ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
-      <span>「后续表现」：买入信号=持有至下一次卖出信号；卖出信号=空仓期间标的涨跌（绿=躲过下跌）</span>
+      <span>口径：溢价为主（&lt;15 重仓 / 15~18 买入 / ≥22 减仓 / ≥27 清仓），买点需命中「不追高」过滤（威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一），MACD 只做金叉试仓与死叉减仓确认；连续同类型合并为段。「段首后20日」= 信号段首日买入持有 20 日的收益（卖点为负=躲过下跌）</span>
     </div>`;
 }
 
@@ -3272,7 +3349,7 @@ function renderEtfView() {
       <div id="etf-macd">${etfMacdHtml()}</div>
     </div>
     <div class="etf-section">
-      <div class="etf-sec-title"><span>买卖信号清单</span><span class="sub">哪天买、哪天卖 · 全历史 ${t && t.signals ? t.signals.length : '—'} 条</span></div>
+      <div class="etf-sec-title"><span>买卖信号清单</span><span class="sub">溢价为主 · 威廉%R / MA21 / 布林 / MACD 共振 · 全历史 ${t && t.comboSignals && t.comboSignals.signals ? t.comboSignals.signals.length : '—'} 段</span></div>
       <div id="etf-signals">${etfSignalsSectionInner()}</div>
     </div>
     <div class="etf-section">

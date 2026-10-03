@@ -2838,6 +2838,35 @@ function bollingerSeries(closes, period = 20, mult = 2) {
   return { mid, up, dn };
 }
 
+// KDJ（9,3,3）：RSV → K/D 用 2/3 平滑，J = 3K − 2D；与 etf-indicator-study.js 口径一致
+function kdjSeries(highs, lows, closes, period = 9) {
+  const K = new Array(closes.length).fill(null);
+  const D = new Array(closes.length).fill(null);
+  const J = new Array(closes.length).fill(null);
+  let k = 50, d = 50;
+  for (let i = 0; i < closes.length; i++) {
+    if (i + 1 < period) continue;
+    let hh = -Infinity, ll = Infinity;
+    for (let j = i + 1 - period; j <= i; j++) {
+      if (highs[j] > hh) hh = highs[j];
+      if (lows[j] < ll) ll = lows[j];
+    }
+    const rsv = hh === ll ? 50 : ((closes[i] - ll) / (hh - ll)) * 100;
+    k = (2 / 3) * k + (1 / 3) * rsv;
+    d = (2 / 3) * d + (1 / 3) * k;
+    K[i] = +k.toFixed(2); D[i] = +d.toFixed(2); J[i] = +(3 * k - 2 * d).toFixed(2);
+  }
+  return { K, D, J };
+}
+
+// ATR：真实波幅（TR）的 EMA 平滑，用于「波动率止损」
+function atrSeries(highs, lows, closes, period = 14) {
+  const tr = closes.map((c, i) => i === 0
+    ? highs[0] - lows[0]
+    : Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+  return calcEMA(tr, period);
+}
+
 const ETF_SIGNAL_META = {
   buy:       { label: '强买',   action: '买入',     side: 'buy'  },
   buy_weak:  { label: '弱买',   action: '小仓试仓', side: 'buy'  },
@@ -2897,17 +2926,190 @@ function buildEtfSignals(klines) {
   };
 }
 
-// 历史回溯：全区间最佳买卖点 + 策略对比
+// ── 多指标组合信号（买卖信号清单 v2）──
+//  不再以 MACD 为唯一标准。依据 764 日回测结论（scripts/etf-indicator-study.js）：
+//  · 溢价率是一级变量：<15 重仓区 / 15~18 买入区 / ≥22 减仓区 / ≥27 清仓区
+//  · 「不追高」过滤器（威廉%R≤-60 / 收盘<MA21 / 收盘<布林中轨，任一命中）显著改善买点质量
+//  · MACD 只做确认角色：金叉兜底试仓、死叉确认减仓，不做独立买卖开关
+//  · 布林上轨/威廉超买（≥-10）作为高位过热信号，与溢价≥22 共振时为确认型卖点
+//  输出按「连续同类型合并为段」，每段带证据列表与段首后 20 日表现
+function buildEtfCompositeSignals(klines, navMap) {
+  const n = klines.length;
+  if (n < 40) return { signals: [], stats: null, backtest: null };
+  const C = klines.map(k => k.close);
+  const highs = klines.map(k => k.high ?? k.close);
+  const lows = klines.map(k => k.low ?? k.close);
+
+  const willR = williamsRSeries(highs, lows, C, 14);
+  const boll = bollingerSeries(C, 20, 2);
+  const ma21 = movingAvgSeries(C, 21);
+  const bars = calcMACD(klines, klines.length);
+  const goldenCross = i => i > 0 && bars[i - 1] && bars[i - 1].dif < bars[i - 1].dea && bars[i].dif >= bars[i].dea;
+  const deathCross = i => i > 0 && bars[i - 1] && bars[i - 1].dif > bars[i - 1].dea && bars[i].dif <= bars[i].dea;
+  const premAt = i => {
+    const v = navMap[klines[i].date];
+    return v > 0 ? C[i] / v * 100 - 100 : null;
+  };
+
+  const META = {
+    buy_strong: { label: '重仓买入', action: '分批重仓', side: 'buy' },
+    buy:        { label: '买入',     action: '分批买入', side: 'buy' },
+    buy_weak:   { label: '试仓',     action: '小仓试仓', side: 'buy' },
+    sell_weak:  { label: '警惕',     action: '停止加仓', side: 'sell' },
+    sell:       { label: '减仓',     action: '减仓',     side: 'sell' },
+    sell_clear: { label: '清仓',     action: '清仓/减半', side: 'sell' },
+  };
+
+  const sigs = [];
+  for (let i = 35; i < n; i++) {
+    const p = premAt(i);
+    if (p == null) continue;
+    const fWill = willR[i] != null && willR[i] <= -60;
+    const fMa = ma21[i] != null && C[i] < ma21[i];
+    const fBoll = boll.mid[i] != null && C[i] < boll.mid[i];
+    const fHit = fWill || fMa || fBoll;
+    const bollUp = boll.mid[i] != null && boll.up[i] != null && C[i] > boll.up[i];
+    const willHot = willR[i] != null && willR[i] >= -10;
+
+    let code = null, ev = [];
+    if (p < 15 && fHit) {
+      code = 'buy_strong';
+      ev = [`溢价 ${p.toFixed(1)}%（<15 重仓区）`];
+      if (fWill) ev.push(`威廉%R ${willR[i].toFixed(0)} 超卖（≤-60）`);
+      if (fMa) ev.push('收盘 < MA21（回调中）');
+      if (fBoll) ev.push('收盘 < 布林中轨');
+    } else if (p >= 15 && p <= 18 && fHit) {
+      code = 'buy';
+      ev = [`溢价 ${p.toFixed(1)}%（15~18 买入区）`];
+      if (fWill) ev.push(`威廉%R ${willR[i].toFixed(0)} 超卖（≤-60）`);
+      if (fMa) ev.push('收盘 < MA21（回调中）');
+      if (fBoll) ev.push('收盘 < 布林中轨');
+    } else if (p <= 18 && goldenCross(i)) {
+      code = 'buy_weak';
+      ev = [`溢价 ${p.toFixed(1)}%（≤18）`, 'MACD 零轴下金叉（无回调确认，试仓）'];
+    } else if (p >= 27) {
+      code = 'sell_clear';
+      ev = [`溢价 ${p.toFixed(1)}%（≥27 极限区）`];
+    } else if (p >= 22 && (deathCross(i) || willHot || bollUp)) {
+      code = 'sell';
+      ev = [`溢价 ${p.toFixed(1)}%（≥22 高溢价区）`];
+      if (deathCross(i)) ev.push('MACD 死叉确认');
+      if (willHot) ev.push(`威廉%R ${willR[i].toFixed(0)} 超买（≥-10）`);
+      if (bollUp) ev.push('触及布林上轨');
+    } else if (p >= 22) {
+      code = 'sell_weak';
+      ev = [`溢价 ${p.toFixed(1)}%（≥22 高溢价区，暂无过热确认）`];
+    }
+    if (code) sigs.push({ idx: i, date: klines[i].date, close: C[i], premium: +p.toFixed(2), code, ev });
+  }
+
+  // 连续同类型合并为段（隔一天以上视为新段）
+  const segs = [];
+  for (const s of sigs) {
+    const last = segs[segs.length - 1];
+    if (last && last.code === s.code && s.idx - last.endIdx <= 1) {
+      last.endIdx = s.idx; last.endDate = s.date; last.endClose = s.close;
+    } else {
+      segs.push({ ...s, endIdx: s.idx, endDate: s.date, endClose: s.close });
+    }
+  }
+
+  // 段后表现：段首后 20 日收益（买点看涨、卖点看跌）
+  const fwd20 = i => (i + 20 < n) ? +(((C[i + 20] / C[i]) - 1) * 100).toFixed(1) : null;
+  for (const s of segs) {
+    const m = META[s.code];
+    s.label = m.label; s.action = m.action; s.side = m.side;
+    s.dateLabel = s.endDate !== s.date ? `${s.date} ~ ${s.endDate}` : s.date;
+    s.fwd20Pct = fwd20(s.idx);
+    s.evidence = s.ev; delete s.ev;
+  }
+
+  // 分类型统计：买点看段首后 20 日为正的比例；卖点看为负的比例
+  const typeStats = {};
+  for (const s of segs) {
+    (typeStats[s.code] = typeStats[s.code] || []).push(s.fwd20Pct);
+  }
+  const stats = Object.fromEntries(Object.entries(typeStats).map(([code, arr]) => {
+    const ok = arr.filter(v => v != null);
+    const good = code.startsWith('buy') ? ok.filter(v => v > 0) : ok.filter(v => v < 0);
+    return [code, {
+      count: arr.length,
+      avgFwd20: ok.length ? +(ok.reduce((a, v) => a + v, 0) / ok.length).toFixed(1) : null,
+      hitRate: ok.length ? +(good.length / ok.length * 100).toFixed(0) : null,
+    }];
+  }));
+
+  // 按段操作回测：买入段建仓、卖出段清仓
+  let equity = 1, inPos = false, entry = null;
+  const trades = [];
+  for (const s of segs) {
+    if (s.side === 'buy' && !inPos) { inPos = true; entry = s.close; trades.push({ buyDate: s.date, buy: s.close }); }
+    else if (s.side === 'sell' && inPos) {
+      inPos = false;
+      const r = s.endClose / entry - 1;
+      equity *= (1 + r);
+      Object.assign(trades[trades.length - 1], { sellDate: s.date, sell: s.endClose, retPct: +(r * 100).toFixed(1) });
+    }
+  }
+  if (inPos && trades.length) {
+    const r = C[n - 1] / entry - 1;
+    equity *= (1 + r);
+    Object.assign(trades[trades.length - 1], { sellDate: `${klines[n - 1].date}(至今)`, retPct: +(r * 100).toFixed(1) });
+  }
+  const wins = trades.filter(t => (t.retPct ?? 0) > 0).length;
+  const backtest = trades.length ? {
+    trades: trades.length,
+    winRate: +(wins / trades.length * 100).toFixed(0),
+    totalPct: +((equity - 1) * 100).toFixed(1),
+    history: trades.slice(-8).reverse(),
+  } : null;
+
+  return { signals: segs, stats, backtest };
+}
+
+// 历史回溯：全区间最佳买卖点 + 多指标策略对比（含每套策略的实际交易日期）
 //  · bestBuys/bestSells：事后最优（后视镜视角，用于看清「什么样的位置才是好位置」）
-//  · signalBuys：策略可捕捉的买点（MACD 买入信号 ∩ 溢价 ≤18%，即用户策略真正会出手的日子）
-//  · backtest：买入持有 / MACD 信号 / MACD×溢价 / 纯溢价 四套规则的收益、胜率、回撤对比
+//  · signalBuys：策略可捕捉的买点（MACD 买入信号 ∩ 溢价 ≤18%）
+//  · backtest：覆盖 溢价 / MACD / RSI / KDJ / 威廉%R / 布林带 / 均线 / ATR 止损 / 仓位分级
+//    共 20+ 套规则；每套附 tradeLog —— 真正出手的日期、价格、单笔收益、持有天数，
+//    前端可点击策略行展开「符合条件交易的所有日期」。
+//  · 指标口径与 scripts/etf-indicator-study.js 完全一致（同一套 RSI/WR/KDJ/BOLL/ATR/MACD 算法）。
 function buildEtfHistoryReview(klines, navMap, signals) {
   const n = klines.length;
   if (n < 30) return null;
+  const C = klines.map(k => k.close);
+  const H = klines.map(k => (isFinite(k.high) ? k.high : k.close));
+  const L = klines.map(k => (isFinite(k.low) ? k.low : k.close));
   const premAt = i => {
     const nav = navMap[klines[i].date];
     return nav > 0 ? +((klines[i].close / nav - 1) * 100).toFixed(2) : null;
   };
+  const prem = klines.map((_, i) => premAt(i));
+
+  // ── 指标序列（全历史，各规则共用）──
+  const ma5 = movingAvgSeries(C, 5), ma10 = movingAvgSeries(C, 10), ma20 = movingAvgSeries(C, 20);
+  const ma21 = movingAvgSeries(C, 21), ma60 = movingAvgSeries(C, 60);
+  const rsi = rsiSeries(C, 14);
+  const willR = williamsRSeries(H, L, C, 14);
+  const kdj = kdjSeries(H, L, C, 9);
+  const K = kdj.K, D = kdj.D;
+  const boll = bollingerSeries(C, 20, 2);
+  const atr = atrSeries(H, L, C, 14);
+  const vol = klines.map(k => (isFinite(k.volume) ? k.volume : 0));
+  const volMa5 = movingAvgSeries(vol, 5);
+  const ema12 = calcEMA(C, 12), ema26 = calcEMA(C, 26);
+  const dif = ema12.map((v, i) => v - ema26[i]);
+  const dea = calcEMA(dif, 9);
+
+  const crossUp = (a, b, i) => i > 0 && a[i - 1] != null && b[i - 1] != null && a[i - 1] <= b[i - 1] && a[i] > b[i];
+  const crossDn = (a, b, i) => i > 0 && a[i - 1] != null && b[i - 1] != null && a[i - 1] >= b[i - 1] && a[i] < b[i];
+
+  // MACD 视图信号（强买/弱买/强卖/破MA21…）→ 按日索引，保证与「买卖信号清单」口径一致
+  const sigAt = new Map();
+  (signals || []).forEach(s => sigAt.set(s.idx, s));
+  const isBuySigAt = i => { const s = sigAt.get(i); return !!s && s.side === 'buy'; };
+  const isSellSigAt = i => { const s = sigAt.get(i); return !!s && s.side === 'sell'; };
+
   const fwdRet = (i, d) => (i + d < n) ? +((klines[i + d].close / klines[i].close - 1) * 100).toFixed(2) : null;
   const fwdExt = (i, d, mode) => {
     let v = mode === 'low' ? Infinity : -Infinity;
@@ -2950,93 +3152,236 @@ function buildEtfHistoryReview(klines, navMap, signals) {
     .map(s => ({ date: s.date, close: s.close, label: s.label, premium: premAt(s.idx), r20: fwdRet(s.idx, 20), r60: fwdRet(s.idx, 60) }))
     .slice(-8);
 
-  // ── 策略回测（收盘价成交，不含手续费/溢价滑点）──
-  const backtest = (name, buyOk, sellOk) => {
-    let cash = 1, shares = 0, trades = 0, wins = 0, entryPrice = 0, exposure = 0;
-    const curve = [];
+  // ── 回测引擎（收盘价成交，不含手续费/溢价滑点）──
+  // binary：全仓进 / 全仓出，记录每一笔买卖日期
+  const runBinary = (name, group, buyFn, sellFn, opt = {}) => {
+    let cash = 1, shares = 0, entry = 0, entryIdx = -1, peak = 0, wins = 0, exposure = 0;
+    const curve = [], tradeLog = [];
     for (let i = 0; i < n; i++) {
-      const k = klines[i];
-      const s = (signals || []).find(x => x.idx === i);
-      if (shares === 0 && s && buyOk(s, i, premAt(i))) { shares = cash / k.close; cash = 0; trades++; entryPrice = k.close; }
-      else if (shares > 0 && s && sellOk(s, i, premAt(i))) {
-        const v = shares * k.close;
-        if (k.close > entryPrice) wins++;
-        cash = v; shares = 0;
+      const k = klines[i], p = prem[i];
+      if (shares === 0) {
+        if (buyFn(i, p)) {
+          shares = cash / k.close; cash = 0; entry = k.close; entryIdx = i; peak = k.close;
+          tradeLog.push({ date: k.date, side: 'buy', price: +k.close.toFixed(3), pos: 1, retPct: null, holdDays: null, label: '买入' });
+        }
+      } else {
+        if (isFinite(k.high)) peak = Math.max(peak, k.high);
+        const trail = opt.trailAtr && atr[i] != null && k.close <= peak - opt.trailAtr * atr[i];
+        const hard = opt.hardStopPct && k.close <= entry * (1 - opt.hardStopPct);
+        if (trail || hard || sellFn(i, p)) {
+          const ret = (k.close / entry - 1) * 100;
+          if (k.close > entry) wins++;
+          tradeLog.push({
+            date: k.date, side: 'sell', price: +k.close.toFixed(3), pos: 0,
+            retPct: +ret.toFixed(2), holdDays: i - entryIdx,
+            label: trail ? 'ATR 止损' : hard ? '硬止损' : '卖出',
+          });
+          cash = shares * k.close; shares = 0;
+        }
       }
       if (shares > 0) exposure++;
       curve.push(shares > 0 ? shares * k.close : cash);
     }
-    const equity = shares > 0 ? shares * klines[n - 1].close : cash;
-    // 最大回撤
-    let peak = curve[0], mdd = 0;
-    for (const v of curve) { peak = Math.max(peak, v); mdd = Math.min(mdd, (v / peak - 1) * 100); }
-    const yrs = n / 252;
-    return {
-      name,
-      totalPct: +((equity - 1) * 100).toFixed(1),
-      annualPct: +((Math.pow(equity, 1 / yrs) - 1) * 100).toFixed(1),
-      trades, winPct: trades ? +(wins / trades * 100).toFixed(0) : null,
-      mddPct: +mdd.toFixed(1),
-      exposurePct: +(exposure / n * 100).toFixed(0),
-      holding: shares > 0,
-    };
-  };
-  const isBuySig = s => s.side === 'buy';
-  const isSellSig = s => s.side === 'sell';
-  // 状态机回测：按日推进，买入/卖出条件各自判断（用于非信号类规则）
-  const sma = (arr, p) => arr.map((_, i) => i + 1 < p ? null : +(arr.slice(i + 1 - p, i + 1).reduce((s, v) => s + v, 0) / p).toFixed(4));
-  const ma21 = sma(klines.map(k => k.close), 21);
-  const willR14 = williamsRSeries(
-    klines.map(k => (isFinite(k.high) ? k.high : k.close)),
-    klines.map(k => (isFinite(k.low) ? k.low : k.close)),
-    klines.map(k => k.close), 14);
-  const stateMachine = (name, buyFn, sellFn) => {
-    let cash = 1, shares = 0, trades = 0, wins = 0, entry = 0, exposure = 0;
-    const curve = [];
-    for (let i = 0; i < n; i++) {
-      const k = klines[i], p = premAt(i);
-      if (shares === 0 && buyFn(i, p)) { shares = cash / k.close; cash = 0; trades++; entry = k.close; }
-      else if (shares > 0 && sellFn(i, p)) { if (k.close > entry) wins++; cash = shares * k.close; shares = 0; }
-      if (shares > 0) exposure++;
-      curve.push(shares > 0 ? shares * k.close : cash);
-    }
-    let peak = curve[0], mdd = 0;
-    for (const v of curve) { peak = Math.max(peak, v); mdd = Math.min(mdd, (v / peak - 1) * 100); }
+    let peakV = curve[0], mdd = 0;
+    for (const v of curve) { peakV = Math.max(peakV, v); mdd = Math.min(mdd, (v / peakV - 1) * 100); }
     const equity = shares > 0 ? shares * klines[n - 1].close : cash;
     const yrs = n / 252;
+    const buyCount = tradeLog.filter(t => t.side === 'buy').length;
+    const sellCount = tradeLog.filter(t => t.side === 'sell').length;
     return {
-      name,
+      name, group, kind: 'binary',
       totalPct: +((equity - 1) * 100).toFixed(1),
       annualPct: +((Math.pow(equity, 1 / yrs) - 1) * 100).toFixed(1),
-      trades, winPct: trades ? +(wins / trades * 100).toFixed(0) : null,
+      // 交易次数 = 已了结的完整买卖对（卖出次数）；胜率 = 盈利卖出 / 已了结交易
+      trades: sellCount, winPct: sellCount ? +(wins / sellCount * 100).toFixed(0) : null,
       mddPct: +mdd.toFixed(1), exposurePct: +(exposure / n * 100).toFixed(0), holding: shares > 0,
+      buyCount, sellCount, entryCount: buyCount,
+      tradeLog,
     };
   };
-  const bt = [
-    { name: '买入持有（基准）', ...(() => {
-      const g = klines[n - 1].close / klines[0].close;
-      const yrs = n / 252;
-      let peak = klines[0].close, mdd = 0;
-      for (const k of klines) { peak = Math.max(peak, k.close); mdd = Math.min(mdd, (k.close / peak - 1) * 100); }
-      return { totalPct: +((g - 1) * 100).toFixed(1), annualPct: +((Math.pow(g, 1 / yrs) - 1) * 100).toFixed(1), trades: 1, winPct: null, mddPct: +mdd.toFixed(1), exposurePct: 100, holding: true };
-    })() },
-    backtest('MACD 信号（不看溢价）', isBuySig, isSellSig),
-    backtest(`MACD 买点 ∩ 溢价 ≤${PREMIUM_BUY}%`, (s, i, p) => isBuySig(s) && p != null && p <= PREMIUM_BUY, isSellSig),
-    backtest(`MACD 买点 ∩ 溢价 <${PREMIUM_ADD}%`, (s, i, p) => isBuySig(s) && p != null && p < PREMIUM_ADD, isSellSig),
-    stateMachine(`纯溢价：<${PREMIUM_BUY}% 买 / ≥${PREMIUM_DANGER}% 卖`,
-      (i, p) => p != null && p < PREMIUM_BUY,
-      (i, p) => p != null && p >= PREMIUM_DANGER),
-    // 溢价 + 「不追高」过滤器（实测优于纯溢价与 MACD 择时，见 scripts/etf-indicator-study.js）
-    stateMachine(`溢价 ≤${PREMIUM_BUY}% ∩ 威廉%R ≤ -60 买 / 溢价 ≥${PREMIUM_WATCH}% 卖`,
-      (i, p) => p != null && p <= PREMIUM_BUY && willR14[i] != null && willR14[i] <= -60,
-      (i, p) => p != null && p >= PREMIUM_WATCH),
-    stateMachine(`溢价 ≤${PREMIUM_BUY}% ∩ 收盘 < MA21 买 / 溢价 ≥${PREMIUM_WATCH}% 卖`,
-      (i, p) => p != null && p <= PREMIUM_BUY && ma21[i] != null && klines[i].close < ma21[i],
-      (i, p) => p != null && p >= PREMIUM_WATCH),
-    stateMachine(`溢价 ≤${PREMIUM_BUY}% 买入 · 跌破 MA21 减仓（持有为主）`,
-      (i, p) => p != null && p <= PREMIUM_BUY,
-      (i, p) => ma21[i] != null && klines[i].close < ma21[i]),
-  ];
+
+  // graded：按目标仓位（0~100%）在收盘调仓，可表达「重仓 / 加仓 / 减仓 / 清仓」
+  const runGraded = (name, group, targetFn) => {
+    let shares = 0, cash = 1, exposure = 0, rebal = 0;
+    const curve = [], tradeLog = [];
+    for (let i = 0; i < n; i++) {
+      const k = klines[i], p = prem[i];
+      const total = cash + shares * k.close;
+      const cur = total > 0 ? (shares * k.close) / total : 0;
+      let tgt = targetFn(i, p);
+      tgt = tgt == null ? cur : Math.max(0, Math.min(1, tgt));
+      if (Math.abs(tgt - cur) > 0.02) {
+        const up = tgt > cur;
+        const act = tgt >= 0.99 ? '重仓' : tgt <= 0.01 ? '清仓' : up ? '加仓' : '减仓';
+        tradeLog.push({
+          date: k.date, side: up ? 'buy' : 'sell', price: +k.close.toFixed(3),
+          pos: +tgt.toFixed(2), retPct: null, holdDays: null,
+          label: `${act}至 ${Math.round(tgt * 100)}%`,
+        });
+        shares = (total * tgt) / k.close; cash = total * (1 - tgt);
+        rebal++;
+      }
+      if (tgt > 0.01) exposure++;
+      curve.push(cash + shares * k.close);
+    }
+    let peakV = curve[0], mdd = 0;
+    for (const v of curve) { peakV = Math.max(peakV, v); mdd = Math.min(mdd, (v / peakV - 1) * 100); }
+    const equity = curve[curve.length - 1];
+    const yrs = n / 252;
+    return {
+      name, group, kind: 'graded',
+      totalPct: +((equity - 1) * 100).toFixed(1),
+      annualPct: +((Math.pow(equity, 1 / yrs) - 1) * 100).toFixed(1),
+      trades: rebal, winPct: null,
+      mddPct: +mdd.toFixed(1), exposurePct: +(exposure / n * 100).toFixed(0), holding: shares > 0,
+      buyCount: tradeLog.filter(t => t.side === 'buy').length,
+      sellCount: tradeLog.filter(t => t.side === 'sell').length,
+      tradeLog,
+    };
+  };
+
+  const P = PREMIUM_BUY, PA = PREMIUM_ADD, PW = PREMIUM_WATCH, PD = PREMIUM_DANGER;
+  const bt = [];
+
+  // ① 基准
+  bt.push((() => {
+    const g = klines[n - 1].close / klines[0].close;
+    const yrs = n / 252;
+    let pk = klines[0].close, mdd = 0;
+    for (const k of klines) { pk = Math.max(pk, k.close); mdd = Math.min(mdd, (k.close / pk - 1) * 100); }
+    return {
+      name: '买入持有（基准）', group: '基准', kind: 'hold',
+      totalPct: +((g - 1) * 100).toFixed(1),
+      annualPct: +((Math.pow(g, 1 / yrs) - 1) * 100).toFixed(1),
+      trades: 1, winPct: null, mddPct: +mdd.toFixed(1), exposurePct: 100, holding: true,
+      buyCount: 1, sellCount: 0,
+      tradeLog: [
+        { date: klines[0].date, side: 'buy', price: +klines[0].close.toFixed(3), pos: 1, retPct: null, holdDays: null, label: `期初买入 · 持有至今（${n - 1} 个交易日）` },
+      ],
+    };
+  })());
+
+  // ② MACD 系
+  bt.push(runBinary('MACD 金叉买 / 死叉卖（不看溢价）', 'MACD',
+    (i) => isBuySigAt(i), (i) => isSellSigAt(i)));
+  bt.push(runBinary(`MACD 买点 ∩ 溢价 ≤${P}%`, 'MACD',
+    (i, p) => isBuySigAt(i) && p != null && p <= P, (i) => isSellSigAt(i)));
+  bt.push(runBinary(`MACD 买点 ∩ 溢价 <${PA}%（重仓买）`, 'MACD',
+    (i, p) => isBuySigAt(i) && p != null && p < PA, (i) => isSellSigAt(i)));
+  bt.push(runBinary(`MACD 金叉 ∩ RSI<60 ∩ 溢价≤${P}% 买 / MACD 死叉 ∪ 溢价≥${PW}% 卖`, 'MACD',
+    (i, p) => crossUp(dif, dea, i) && rsi[i] != null && rsi[i] < 60 && p != null && p <= P,
+    (i, p) => crossDn(dif, dea, i) || (p != null && p >= PW)));
+
+  // ③ 溢价系
+  bt.push(runBinary(`纯溢价：<${P}% 买 / ≥${PW}% 卖`, '溢价',
+    (i, p) => p != null && p < P, (i, p) => p != null && p >= PW));
+  bt.push(runBinary(`溢价 ≤${P}% 买 / 溢价 ≥${PD}% 才卖（拉长持有）`, '溢价',
+    (i, p) => p != null && p <= P, (i, p) => p != null && p >= PD));
+  bt.push(runBinary(`溢价 ≤${P}% ∩ 收盘<MA21 买 / 溢价 ≥${PW}% 卖`, '溢价',
+    (i, p) => p != null && p <= P && ma21[i] != null && C[i] < ma21[i], (i, p) => p != null && p >= PW));
+  bt.push(runBinary(`溢价 ≤${P}% ∩ 威廉%R≤-60 买 / 溢价 ≥${PW}% 卖`, '溢价',
+    (i, p) => p != null && p <= P && willR[i] != null && willR[i] <= -60, (i, p) => p != null && p >= PW));
+  bt.push(runBinary(`溢价 ≤${P}% ∩ 布林下半区买 / 溢价 ≥${PW}% 卖`, '溢价',
+    (i, p) => p != null && p <= P && boll.mid[i] != null && C[i] < boll.mid[i], (i, p) => p != null && p >= PW));
+  bt.push(runBinary(`溢价 ≤${P}% 买入 · 跌破 MA21 减仓（持有为主）`, '溢价',
+    (i, p) => p != null && p <= P, (i, p) => ma21[i] != null && C[i] < ma21[i]));
+
+  // ④ RSI 系
+  bt.push(runBinary('RSI(14)<30 买 / >70 卖', 'RSI',
+    (i) => rsi[i] != null && rsi[i] < 30, (i) => rsi[i] != null && rsi[i] > 70));
+  bt.push(runBinary(`RSI<35 ∩ 溢价≤${P}% 买 / RSI>70 ∪ 溢价≥${PW}% 卖`, 'RSI',
+    (i, p) => rsi[i] != null && rsi[i] < 35 && p != null && p <= P,
+    (i, p) => (rsi[i] != null && rsi[i] > 70) || (p != null && p >= PW)));
+
+  // ⑤ KDJ 系
+  bt.push(runBinary('KDJ：K<30 金叉买 / K>70 死叉卖', 'KDJ',
+    (i) => crossUp(K, D, i) && K[i] < 30, (i) => crossDn(K, D, i) && K[i] > 70));
+  bt.push(runBinary(`KDJ 金叉 ∩ 溢价≤${P}% 买 / KDJ 死叉 ∪ RSI>75 卖`, 'KDJ',
+    (i, p) => crossUp(K, D, i) && p != null && p <= P,
+    (i) => crossDn(K, D, i) || (rsi[i] != null && rsi[i] > 75)));
+
+  // ⑥ 威廉%R 系
+  bt.push(runBinary('威廉%R(14) ≤-80 买 / ≥-20 卖', '威廉%R',
+    (i) => willR[i] != null && willR[i] <= -80, (i) => willR[i] != null && willR[i] >= -20));
+
+  // ⑦ 布林带系
+  bt.push(runBinary('布林带：触下轨买 / 触上轨卖', '布林带',
+    (i) => boll.dn[i] != null && C[i] <= boll.dn[i], (i) => boll.up[i] != null && C[i] >= boll.up[i]));
+  bt.push(runBinary(`布林下轨 ∩ RSI<35 买 / 上轨 ∪ 溢价≥${PW}% 卖`, '布林带',
+    (i) => boll.dn[i] != null && C[i] <= boll.dn[i] && rsi[i] != null && rsi[i] < 35,
+    (i, p) => (boll.up[i] != null && C[i] >= boll.up[i]) || (p != null && p >= PW)));
+
+  // ⑧ 均线系
+  bt.push(runBinary('MA5/MA21 金叉买 / 死叉卖', '均线',
+    (i) => crossUp(ma5, ma21, i), (i) => crossDn(ma5, ma21, i)));
+  bt.push(runBinary('收盘上穿 MA21 买 / 跌破 MA21 卖', '均线',
+    (i) => i > 0 && ma21[i - 1] != null && C[i - 1] <= ma21[i - 1] && C[i] > ma21[i],
+    (i) => i > 0 && ma21[i - 1] != null && C[i - 1] >= ma21[i - 1] && C[i] < ma21[i]));
+  bt.push(runBinary('多头排列（MA5>MA21>MA60）买 / 跌破 MA21 卖', '均线',
+    (i) => ma5[i] != null && ma21[i] != null && ma60[i] != null && ma5[i] > ma21[i] && ma21[i] > ma60[i],
+    (i) => ma21[i] != null && C[i] < ma21[i]));
+
+  // ⑨ 量能系
+  bt.push(runBinary('放量突破：上穿 MA21 ∩ 量>1.5×5日均量 买 / 跌破 MA21 卖', '量能',
+    (i) => i > 0 && ma21[i - 1] != null && C[i - 1] <= ma21[i - 1] && C[i] > ma21[i]
+      && volMa5[i] > 0 && vol[i] > volMa5[i] * 1.5,
+    (i) => ma21[i] != null && C[i] < ma21[i]));
+  bt.push(runBinary('价涨量增确认：MACD 金叉 ∩ 量>5日均量 买 / MACD 死叉卖', '量能',
+    (i) => crossUp(dif, dea, i) && volMa5[i] > 0 && vol[i] > volMa5[i],
+    (i) => crossDn(dif, dea, i)));
+
+  // ⑩ 多指标共振（高成功率组合：溢价 + RSI + KDJ + MA21 四重确认）
+  bt.push(runBinary(`多指标共振：溢价≤${P}% ∩ RSI<50 ∩ KDJ多头(K>D) ∩ 站上MA21 买 / 溢价≥${PW}% ∪ MACD死叉 卖`, '共振',
+    (i, p) => p != null && p <= P && rsi[i] != null && rsi[i] < 50
+      && K[i] != null && D[i] != null && K[i] > D[i] && ma21[i] != null && C[i] > ma21[i],
+    (i, p) => crossDn(dif, dea, i) || (p != null && p >= PW)));
+
+  // ⑪ 止损 / 仓位管理系
+  bt.push(runBinary(`溢价 ≤${P}% 买 + 3×ATR 跟踪止损`, '止损/仓位',
+    (i, p) => p != null && p <= P, () => false, { trailAtr: 3 }));
+  bt.push(runBinary(`溢价 ≤${P}% 买 + 固定 -7% 硬止损`, '止损/仓位',
+    (i, p) => p != null && p <= P, () => false, { hardStopPct: 0.07 }));
+
+  // ⑫ 多级仓位（重仓 / 减仓 / 清仓）
+  bt.push(runGraded('仓位分级：溢价档位 × RSI（低价重仓 · 高溢价清仓）', '仓位分级',
+    (i, p) => {
+      if (p == null) return null;
+      const r = rsi[i];
+      if (p >= PD || (p >= PW && r != null && r > 75)) return 0;    // 清仓：极高溢价 / 高位超买
+      if (p >= PW) return 0.3;                                      // 减仓：只留三成
+      if (p <= PA && r != null && r < 45) return 1;                 // 重仓：加仓线以下且未超买
+      if (p <= P) return 0.6;                                       // 建仓：买入线以下六成
+      return 0.3;                                                   // 观望：三成底仓
+    }));
+  bt.push(runGraded('仓位分级：溢价档位 × KDJ × MA21（趋势跟随）', '仓位分级',
+    (i, p) => {
+      if (p == null) return null;
+      const bull = ma21[i] != null && C[i] > ma21[i];
+      const kd = K[i] != null && D[i] != null;
+      if (p >= PD) return 0;                                        // 清仓
+      if (p <= PA && bull) return 1;                                // 重仓
+      if (p <= P && (!kd || K[i] > D[i])) return 0.6;               // 建仓（KDJ 多头）
+      if (p >= PW || (kd && K[i] < D[i] && !bull)) return 0.3;      // 减仓
+      return 0.6;
+    }));
+
+  // ── 汇总：交易日期统计 ──
+  const tradeDateStats = (() => {
+    let buys = 0, sells = 0, events = 0;
+    for (const b of bt) { buys += b.buyCount || 0; sells += b.sellCount || 0; events += (b.tradeLog || []).length; }
+    return { strategies: bt.length, buyEvents: buys, sellEvents: sells, events };
+  })();
+
+  // ── 自动结论：性价比最高 / 胜率最高 ──
+  const rankedByCalmar = bt
+    .filter(b => b.kind !== 'hold' && b.mddPct < -0.5 && b.trades >= 2)
+    .map(b => ({ name: b.name, calmar: +(b.annualPct / Math.abs(b.mddPct)).toFixed(2), annualPct: b.annualPct, mddPct: b.mddPct, winPct: b.winPct, trades: b.trades }))
+    .sort((a, b) => b.calmar - a.calmar);
+  const topByCalmar = rankedByCalmar[0] || null;
+  const topByWin = bt
+    .filter(b => b.winPct != null && b.trades >= 2)
+    .map(b => ({ name: b.name, winPct: b.winPct, trades: b.trades, totalPct: b.totalPct }))
+    .sort((a, b) => b.winPct - a.winPct || b.trades - a.trades)[0] || null;
 
   return {
     start: klines[0].date,
@@ -3058,6 +3403,8 @@ function buildEtfHistoryReview(klines, navMap, signals) {
     },
     bestBuys, bestSells, worstBuys, signalBuys,
     backtest: bt,
+    tradeDateStats,
+    topByCalmar, topByWin,
     signalStats: (() => {
       const buys = (signals || []).filter(s => s.side === 'buy');
       const wins = buys.filter(s => (s.holdRetPct ?? 0) > 0).length;
@@ -3455,6 +3802,10 @@ async function getEtfMarketData() {
   };
   const { signals, bars, stats } = buildEtfSignals(klines);
 
+  // 多指标组合信号（买卖信号清单 v2）：溢价为主 + 威廉%R/MA21/布林/MACD 共振
+  let comboSignals = { signals: [], stats: null, backtest: null };
+  try { comboSignals = buildEtfCompositeSignals(klines, navMap); } catch (e) { console.error('[etf-combo]', e.message); }
+
   // 买点确认用指标（威廉%R / RSI / 布林带）；仅作买点过滤与展示，不生成卖出信号
   const highs = klines.map(k => (isFinite(k.high) ? k.high : k.close));
   const lows = klines.map(k => (isFinite(k.low) ? k.low : k.close));
@@ -3538,6 +3889,8 @@ async function getEtfMarketData() {
       side: s.side, holdUntil: s.holdUntil, holdDays: s.holdDays,
       holdRetPct: s.holdRetPct, avoidPct: s.avoidPct, sinceRetPct: s.sinceRetPct,
     })),
+    // 买卖信号清单 v2：多指标组合（溢价主 + 不追高过滤器 + MACD 确认），连续同类型合并为段
+    comboSignals,
     stats,
     premium: {
       current: quote ? quote.premiumPct : null,
