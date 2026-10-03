@@ -2795,7 +2795,7 @@ function etfPanicHtml() {
     : `隔夜外盘数据暂不可用，评分仅用 ${max - 1} 项技术条件`;
   const recent = (s.recent || []).slice(0, 4).map(e => {
     const r = e.ret == null ? '' : (e.ret >= 0 ? '+' : '') + e.ret + '%';
-    return `<span class="etf-panic-ev">${esc(String(e.date).slice(5))} <b>${e.score}分</b> → ${e.exitDate ? e.days + '日' : '持有中'} <b style="color:${col(e.ret)}">${r}</b></span>`;
+    return `<span class="etf-panic-ev">${esc(e.date)} <b>${e.score}分</b> → ${e.exitDate ? e.days + '日' : '持有中'} <b style="color:${col(e.ret)}">${r}</b></span>`;
   }).join('');
   const hist = st.total
     ? `历史 <b>${st.total}</b> 次触发 · 胜率 <b>${st.winRate}%</b> · 平均 <b style="color:${col(st.avgRet)}">${st.avgRet >= 0 ? '+' : ''}${st.avgRet}%</b>（最好 +${st.bestRet}% / 最差 ${st.worstRet}%）`
