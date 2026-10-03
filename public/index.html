@@ -3111,7 +3111,7 @@ function etfIntradayHtml() {
 //  9/18 的金叉强买互相打架；更糟的是一旦在高溢价区被震出，就再也等不到 ≤18% 的买点。
 //  v3：高溢价只输出「持有不加仓 + 仓位上限」，只有趋势先破坏（连续 3 日收在
 //  MA21×0.98 下方或跌破 MA60）才真正减仓，溢价 ≥27 且趋势同破才减半；每段附建议仓位。
-//  每段展示：日期段 / 价格 / 溢价 / 信号 / 仓位 / 依据 / 段首后20日表现
+//  每段展示：日期段 / 价格 / 溢价 / 信号 / 仓位 / 依据 / 信号后20日涨跌
 function etfSignalsHtml() {
   const t = ETF_TRACK;
   const combo = t && t.comboSignals;
@@ -3151,9 +3151,7 @@ function etfSignalsHtml() {
     .filter(([k]) => st[k] && st[k].count)
     .map(([k, name]) => {
       const v = st[k];
-      const good = (k.startsWith('buy') || k === 'sell_weak')
-        ? `之后20日均值 ${v.avgFwd20 != null ? v.avgFwd20 + '%' : '—'}`
-        : `之后20日均值 ${v.avgFwd20 != null ? v.avgFwd20 + '%' : '—'}`;
+      const good = `信号后20日均涨跌 ${v.avgFwd20 != null ? (v.avgFwd20 > 0 ? '+' : '') + v.avgFwd20 + '%' : '—'}`;
       return `${name} ${v.count}段 · ${good} · 正确率 ${v.hitRate != null ? v.hitRate + '%' : '—'}`;
     })
     .join('<br>');
@@ -3163,14 +3161,14 @@ function etfSignalsHtml() {
     : '';
   return `
     <table class="etf-signal-table">
-      <thead><tr><th>日期段</th><th>价格</th><th>溢价</th><th>信号</th><th title="该段对应的建议仓位上限">仓位</th><th>依据</th><th>段首后20日</th></tr></thead>
+      <thead><tr><th>日期段</th><th>价格</th><th>溢价</th><th>信号</th><th title="该段对应的建议仓位上限">仓位</th><th>依据</th><th title="在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：买入信号为正=买对了，卖出信号为负=躲过了下跌">信号后20日涨跌</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     ${more}
     ${statLine ? `<div class="etf-legend" style="margin-top:6px"><span>${statLine}</span></div>` : ''}
     ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
-      <span>口径（v3）：<b>溢价决定仓位、趋势决定方向</b>。买点仍需「不追高」过滤（溢价&lt;18 且 威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）；高溢价（≥22）<b>不再直接减仓</b>——趋势仍在 MA21 上方时只输出「持有不加仓」并给出仓位上限，只有连续 3 日收在 MA21×0.98 下方或跌破 MA60 才真正减仓；溢价 ≥27 且趋势同时破坏才减半。连续同类型合并为段。「段首后20日」= 段首日买入持有 20 日的收益。</span>
+      <span>口径（v3）：<b>溢价决定仓位、趋势决定方向</b>。买点仍需「不追高」过滤（溢价&lt;18 且 威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）；高溢价（≥22）<b>不再直接减仓</b>——趋势仍在 MA21 上方时只输出「持有不加仓」并给出仓位上限，只有连续 3 日收在 MA21×0.98 下方或跌破 MA60 才真正减仓；溢价 ≥27 且趋势同时破坏才减半。连续同类型合并为段。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>说明这一买点之后确实涨了（买对了），<b class="down">卖出信号为负</b>说明之后确实跌了（减仓躲过了下跌）。</span>
     </div>`;
 }
 
