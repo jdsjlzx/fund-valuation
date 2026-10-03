@@ -1007,10 +1007,7 @@ async function ensureXueqiuCookie() {
   }).catch(() => {});
 }
 
-async function fetchXueqiuQuote(symbol) {
-  const key = symbol;
-  const cached = xueqiuQuoteCache.get(key);
-  if (cached && Date.now() - cached.ts < XUEQIU_QUOTE_TTL) return cached.data;
+async function fetchXueqiuDirect(symbol) {
   await ensureXueqiuCookie();
   const url = `https://stock.xueqiu.com/v5/stock/quote.json?symbol=${encodeURIComponent(symbol)}&extend=detail`;
   let text;
@@ -1039,7 +1036,7 @@ async function fetchXueqiuQuote(symbol) {
   }
   const q = j && j.data && j.data.quote;
   if (!q) return null;
-  const data = {
+  return {
     current: q.current,
     percent: q.percent,
     lastClose: q.last_close,
@@ -1051,15 +1048,49 @@ async function fetchXueqiuQuote(symbol) {
     timestampNight: q.timestamp_night_session,
     status: j.data?.market?.status_id,
   };
-  xueqiuQuoteCache.set(key, { data, ts: Date.now() });
+}
+
+// 直连失败（本机/Render 出口 IP 被雪球反爬拉黑，返回防爬 HTML）→
+// 走 HIST_PROXY_URL 实例 /api/night（不同平台 IP 池）代取夜盘数据。
+// percent_night_session 与富途「夜盘」同源同口径（相对正股收盘价）。
+async function fetchXueqiuViaProxy(symbol) {
+  const text = await httpGet(
+    `${HIST_PROXY_URL}/api/night?symbol=${encodeURIComponent(symbol)}`,
+    { Accept: 'application/json' }
+  );
+  const j = JSON.parse(text);
+  if (!j || j.currentNight == null) return null;
+  return {
+    currentNight: j.currentNight,
+    percentNight: j.percentNight,
+    chgNight: j.chgNight,
+    timestampNight: j.timestampNight,
+  };
+}
+
+async function fetchXueqiuQuote(symbol, opts = {}) {
+  const cached = xueqiuQuoteCache.get(symbol);
+  if (cached && Date.now() - cached.ts < XUEQIU_QUOTE_TTL) return cached.data;
+
+  let data = null;
+  // 熔断打开期间跳过直连（避免重撞限流墙），直接走代理
+  if (Date.now() >= xqCircuitOpenUntil) {
+    data = await fetchXueqiuDirect(symbol).catch(() => null);
+  }
+  if (!data && opts.allowProxy !== false) {
+    data = await fetchXueqiuViaProxy(symbol).catch((e) => {
+      console.error('[xueqiu]', symbol, 'proxy fail:', e.message);
+      return null;
+    });
+  }
+  if (data) xueqiuQuoteCache.set(symbol, { data, ts: Date.now() });
   return data;
 }
 
 async function fetchXueqiuQuotes(symbols) {
   if (!symbols.length) return new Map();
-  // 熔断：被限流（整批失败返回防爬 HTML）时暂停 5 分钟，
-  // 否则每轮刷新重撞限流墙，且永远恢复不了
-  if (Date.now() < xqCircuitOpenUntil) return new Map();
+  // 熔断：被限流（整批失败返回防爬 HTML）时直连暂停 5 分钟（fetchXueqiuQuote
+  // 内自动改走代理实例），否则每轮刷新重撞限流墙，且永远恢复不了
   const map = new Map();
   // 雪球每个请求是单标的，并发 5 个够用
   const CONCURRENCY = 5;
@@ -1947,6 +1978,25 @@ app.get('/api/_hist', async (req, res) => {
 // ──────────────────────────────────────────
 const FULLDAY_API_CACHE = new Map();  // sym → { data, ts }
 const FULLDAY_API_TTL = 60_000;
+
+// 雪球美股夜盘代理 — 本机/其他出口 IP 被雪球反爬拉黑时的兜底数据源。
+// 用法: GET /api/night?symbol=MKSI → { symbol, currentNight, percentNight,
+//       chgNight, timestampNight }（percentNight 与富途「夜盘」涨幅同源同口径）
+// 注意：allowProxy=false —— 本路由只做直连取数，绝不递归调用代理
+app.get('/api/night', async (req, res) => {
+  const symbol = String(req.query.symbol || '').trim();
+  if (!/^[A-Za-z0-9_\-]{1,10}$/.test(symbol)) return res.status(400).json({ error: 'bad symbol' });
+  res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
+  const d = await fetchXueqiuQuote(symbol, { allowProxy: false });
+  if (!d || d.currentNight == null) return res.status(404).json({ error: 'no night data' });
+  res.json({
+    symbol,
+    currentNight: d.currentNight,
+    percentNight: d.percentNight,
+    chgNight: d.chgNight,
+    timestampNight: d.timestampNight,
+  });
+});
 
 app.get('/api/fullday', async (req, res) => {
   const symbol = String(req.query.symbol || '').trim();
