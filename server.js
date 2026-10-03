@@ -1176,6 +1176,26 @@ function marketClock(tzOffsetHours) {
   return { day: d.getUTCDay(), min: d.getUTCHours() * 60 + d.getUTCMinutes() };
 }
 
+// 各市场现货交易时段（当地时间分钟数；午休视为交易中——午间报价冻结在
+// 上午收盘值，仍代表"今日涨跌幅"，避免盘中状态来回抖动）
+const MARKET_SESSIONS = {
+  CN: [[570, 900]],   // 9:30–15:00
+  HK: [[570, 960]],   // 9:30–16:00
+  JP: [[540, 900]],   // 9:00–15:00
+  KR: [[540, 930]],   // 9:00–15:30
+  TW: [[540, 810]],   // 9:00–13:30
+};
+
+// 该市场此刻是否在交易中：'REGULAR' / 'CLOSED'；未知市场返回 null（不覆盖原值）
+function marketSessionState(marketKey) {
+  const key = typeof marketKey === 'number' ? 'KR' : marketKey;   // 数字偏移 = 腾讯韩股通道
+  const sessions = MARKET_SESSIONS[key];
+  if (!sessions) return null;
+  const { day, min } = marketClock(MARKET_TZ_OFFSET[key]);
+  if (day === 0 || day === 6) return 'CLOSED';
+  return sessions.some(([a, b]) => min >= a && min < b) ? 'REGULAR' : 'CLOSED';
+}
+
 function krMarketState() {
   const { day, min } = marketClock(MARKET_TZ_OFFSET.KR);
   return day >= 1 && day <= 5 && min >= 540 && min < 930 ? 'REGULAR' : 'CLOSED';
@@ -1199,10 +1219,14 @@ function withTradingDay(quote, marketKey, rawDate) {
   if (!key) return quote;
   // marketKey 可传市场标识（'KR'）或直接的 UTC 偏移小时数（腾讯源的时间戳统一为北京时间）
   const tz = typeof marketKey === 'number' ? marketKey : (MARKET_TZ_OFFSET[marketKey] ?? 8);
+  // 统一按当地时间标注实时交易状态（原先 JP/TW/HK/CN 硬编码 'REGULAR'，
+  // 导致 24h 视图无法区分"开盘中实时价"与"收盘冻结价"）
+  const ms = marketSessionState(marketKey);
   return {
     ...quote,
     sessionDate: key,
     tradingToday: key === marketToday(tz),
+    ...(ms ? { marketState: ms } : {}),
   };
 }
 
