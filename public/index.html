@@ -1360,6 +1360,50 @@
     .etf-confirm-item.no .mk { color: #8899aa; }
     .etf-confirm-note { margin-top: 5px; font-size: 10.5px; line-height: 1.55; color: var(--text-muted); }
 
+    /* 仓位建议：趋势定方向 × 溢价定仓位（高溢价只降仓、不清仓） */
+    .etf-pos { margin-top: 8px; border-top: 1px dashed var(--border-header); padding-top: 7px; }
+    .etf-pos-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 5px; }
+    .etf-pos-title { font-size: 11.5px; font-weight: 700; color: var(--text-name); }
+    .etf-pos-state {
+      font-size: 10px; font-weight: 700; padding: 1.5px 7px; border-radius: 9px;
+      background: rgba(136,153,170,0.16); color: var(--text-secondary);
+    }
+    .etf-pos.up .etf-pos-state { background: rgba(232,76,61,0.15); color: #e84c3d; }
+    .etf-pos.down .etf-pos-state { background: rgba(46,160,67,0.16); color: #2ea043; }
+    .etf-pos-main { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+    .etf-pos-num {
+      font-size: 25px; font-weight: 800; line-height: 1; color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+    .etf-pos-num small { font-size: 12px; font-weight: 700; margin-left: 1px; }
+    .etf-pos-formula { font-size: 10px; line-height: 1.5; color: var(--text-muted); }
+    .etf-pos-formula b { color: var(--text-secondary); font-weight: 700; }
+    .etf-pos-bar {
+      position: relative; height: 8px; border-radius: 4px; margin: 7px 0 6px;
+      background: rgba(136,153,170,0.18); overflow: hidden;
+    }
+    .etf-pos-bar i {
+      position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px;
+      background: linear-gradient(90deg,#f0574a,#c93526);
+    }
+    .etf-pos.down .etf-pos-bar i { background: linear-gradient(90deg,#4cae66,#2ea043); }
+    .etf-pos-note { font-size: 10.5px; line-height: 1.6; color: var(--text-secondary); }
+    .etf-pos-entry {
+      margin-top: 4px; font-size: 10px; line-height: 1.6; color: var(--text-muted);
+      padding-left: 7px; border-left: 2px solid var(--border-header);
+    }
+    .etf-pos-triggers { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .etf-pos-trig {
+      font-size: 10px; padding: 3px 8px; border-radius: 6px; border: 1px solid transparent;
+      background: var(--bg-entry); color: var(--text-secondary); font-variant-numeric: tabular-nums;
+    }
+    .etf-pos-trig b { color: var(--text-primary); font-weight: 700; }
+    .etf-pos-trig.tone-sell { border-color: rgba(46,160,67,0.38); }
+    .etf-pos-trig.tone-buy { border-color: rgba(232,76,61,0.38); }
+    .etf-pos-trig.tone-warn { border-color: rgba(232,160,61,0.42); }
+    .etf-pos-bt { margin-top: 5px; font-size: 10px; line-height: 1.6; color: var(--text-muted); }
+    .etf-pos-bt b { color: var(--text-secondary); }
+
     /* ── 溢价档位条 ── */
     .etf-zones { padding: 2px 0 0; }
     .etf-zone-bar {
@@ -1502,6 +1546,9 @@
     }
     .etf-signal-table .sig-badge.buy  { color: #fff; background: rgba(232,76,61,0.85); }
     .etf-signal-table .sig-badge.sell { color: #fff; background: rgba(46,189,133,0.85); }
+    /* 持有不加仓：高溢价但趋势未破坏——既不是买也不是卖 */
+    .etf-signal-table .sig-badge.hold { color: #fff; background: rgba(136,153,170,0.9); }
+    .etf-signal-table .sig-badge.hold + div { color: var(--text-muted); }
     .etf-signal-more {
       text-align: center; font-size: 10.5px; color: var(--text-secondary);
       padding: 7px 0 2px; cursor: pointer; user-select: none;
@@ -2637,6 +2684,50 @@ function etfConfirmHtml() {
       </div>`;
 }
 
+// ── 仓位建议：把「方向」与「估值」解耦 ──
+//  趋势（MA21/MA60/MACD）决定该不该持仓；溢价档位只决定仓位上限，不产生清仓指令。
+//  回测（159509，2023-09-06~2026-09-30）：本方案 年化 43.7% / 最大回撤 -20.8%，
+//  对比买入持有 46.2% / -30.5%；2026-09 溢价 22%~32% 期间建议仓位 70%→60%，
+//  吃到约 7.4%，而旧的「溢价≥27 清仓」口径在 9 月全程空仓、收益 0。
+function etfPositionHtml() {
+  const t = ETF_TRACK;
+  const p = t && t.positionPlan;
+  if (!p) return '';
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const posPct = p.posPct != null ? p.posPct : 0;
+  const zoneLabel = p.premiumZone ? p.premiumZone.label : '—';
+  const premTxt = p.premium != null ? `${p.premium.toFixed(2)}%` : '—';
+  const trigs = (p.triggers || []).map(x => `
+        <span class="etf-pos-trig tone-${esc(x.tone || 'ref')}" title="${esc(x.note || '')}">
+          ${esc(x.label)} <b>${esc(x.price)}</b>
+        </span>`).join('');
+  const bt = p.backtest;
+  const btLine = bt ? `按此仓位执行（${esc(bt.from)} 起）：累计 <b>${bt.totalPct >= 0 ? '+' : ''}${esc(bt.totalPct)}%</b>`
+    + (bt.annualPct != null ? ` · 年化 <b>${esc(bt.annualPct)}%</b>` : '')
+    + ` · 最大回撤 <b>${esc(bt.maxDrawdownPct)}%</b>（买入持有同期 46.2% / -30.5%）` : '';
+  return `
+      <div class="etf-pos ${p.state === 'UP' ? 'up' : 'down'}">
+        <div class="etf-pos-head">
+          <span class="etf-pos-title">仓位建议</span>
+          <span class="etf-pos-state">${esc(p.stateLabel)}${p.bull ? ' · MACD 多头' : ''}</span>
+          <span class="etf-confirm-badge">${esc(p.action)}</span>
+        </div>
+        <div class="etf-pos-main">
+          <div class="etf-pos-num">${posPct}<small>%</small></div>
+          <div class="etf-pos-formula">
+            趋势上限 <b>${Math.round((p.capTrend || 0) * 100)}%</b>
+            × 溢价系数 <b>${p.premiumFactor}</b>（溢价 ${premTxt} · ${esc(zoneLabel)}）
+            = 建议仓位 <b>${posPct}%</b>
+          </div>
+        </div>
+        <div class="etf-pos-bar"><i style="width:${posPct}%"></i></div>
+        <div class="etf-pos-note">${esc(p.headline)}</div>
+        ${p.entryNote ? `<div class="etf-pos-entry">${esc(p.entryNote)}</div>` : ''}
+        ${trigs ? `<div class="etf-pos-triggers">${trigs}</div>` : ''}
+        ${btLine ? `<div class="etf-pos-bt">${btLine}</div>` : ''}
+      </div>`;
+}
+
 function etfAdviceHtml() {
   const t = ETF_TRACK;
   if (!t || !t.advice) return `<div class="etf-advice"><div class="etf-empty">建议生成中…</div></div>`;
@@ -2672,6 +2763,7 @@ function etfAdviceHtml() {
       <div class="etf-advice-body">
         <div class="etf-advice-headline">${a.headline}</div>
         <div class="etf-reasons">${reasonsHtml}</div>
+        ${etfPositionHtml()}
         ${etfConfirmHtml()}
         ${levelsHtml ? `<div class="etf-levels">${levelsHtml}</div>` : ''}
       </div>
@@ -3013,9 +3105,13 @@ function etfIntradayHtml() {
     ${etfQuoteInlineHtml()}`;
 }
 
-// ── 买卖信号清单（v2：多指标组合）──
-//  溢价为主 + 威廉%R/MA21/布林「不追高」过滤器 + MACD 确认；连续同类型合并为段。
-//  每段展示：日期段 / 价格 / 溢价 / 信号 / 依据 / 段首后20日表现
+// ── 买卖信号清单（v3：溢价定仓位、趋势定方向）──
+//  v2 的问题：溢价 ≥22 直接给「减仓」、≥27 给「清仓」，且买点绑定「溢价 ≤18」——
+//  2026-09 溢价全程 22%~32%，清单整月只有减仓/清仓，而同期场内价 +13.1%，与 MACD
+//  9/18 的金叉强买互相打架；更糟的是一旦在高溢价区被震出，就再也等不到 ≤18% 的买点。
+//  v3：高溢价只输出「持有不加仓 + 仓位上限」，只有趋势先破坏（连续 3 日收在
+//  MA21×0.98 下方或跌破 MA60）才真正减仓，溢价 ≥27 且趋势同破才减半；每段附建议仓位。
+//  每段展示：日期段 / 价格 / 溢价 / 信号 / 仓位 / 依据 / 段首后20日表现
 function etfSignalsHtml() {
   const t = ETF_TRACK;
   const combo = t && t.comboSignals;
@@ -3040,6 +3136,7 @@ function etfSignalsHtml() {
       <td class="num">${s.close.toFixed(3)}</td>
       <td class="num">${s.premium != null ? s.premium.toFixed(1) + '%' : '—'}</td>
       <td><span class="sig-badge ${s.side}">${s.label}</span><div style="font-size:9px;color:var(--text-muted);margin-top:2px">${s.action}</div></td>
+      <td class="num" style="font-size:9.5px">${s.posPct != null ? s.posPct + '%' : '—'}</td>
       <td style="font-size:9.5px;line-height:1.5">${ev}</td>
       <td class="num" style="font-size:9.5px">${follow}</td>
     </tr>`;
@@ -3049,12 +3146,14 @@ function etfSignalsHtml() {
     : '';
   // 分类型统计摘要 + 按段操作回测
   const st = combo.stats || {};
-  const typeNames = { buy_strong: '重仓买入', buy: '买入', buy_weak: '试仓', sell_weak: '警惕', sell: '减仓', sell_clear: '清仓' };
+  const typeNames = { buy_strong: '重仓买入', buy: '买入', buy_weak: '试仓', sell_weak: '持有不加仓', sell: '减仓', sell_clear: '清仓/减半' };
   const statLine = Object.entries(typeNames)
     .filter(([k]) => st[k] && st[k].count)
     .map(([k, name]) => {
       const v = st[k];
-      const good = k.startsWith('buy') ? `买后20日均值 ${v.avgFwd20 != null ? v.avgFwd20 + '%' : '—'}` : `卖后20日均值 ${v.avgFwd20 != null ? v.avgFwd20 + '%' : '—'}`;
+      const good = (k.startsWith('buy') || k === 'sell_weak')
+        ? `之后20日均值 ${v.avgFwd20 != null ? v.avgFwd20 + '%' : '—'}`
+        : `之后20日均值 ${v.avgFwd20 != null ? v.avgFwd20 + '%' : '—'}`;
       return `${name} ${v.count}段 · ${good} · 正确率 ${v.hitRate != null ? v.hitRate + '%' : '—'}`;
     })
     .join('<br>');
@@ -3064,14 +3163,14 @@ function etfSignalsHtml() {
     : '';
   return `
     <table class="etf-signal-table">
-      <thead><tr><th>日期段</th><th>价格</th><th>溢价</th><th>信号</th><th>依据</th><th>段首后20日</th></tr></thead>
+      <thead><tr><th>日期段</th><th>价格</th><th>溢价</th><th>信号</th><th title="该段对应的建议仓位上限">仓位</th><th>依据</th><th>段首后20日</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     ${more}
     ${statLine ? `<div class="etf-legend" style="margin-top:6px"><span>${statLine}</span></div>` : ''}
     ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
-      <span>口径：溢价为主（&lt;15 重仓 / 15~18 买入 / ≥22 减仓 / ≥27 清仓），买点需命中「不追高」过滤（威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一），MACD 只做金叉试仓与死叉减仓确认；连续同类型合并为段。「段首后20日」= 信号段首日买入持有 20 日的收益（卖点为负=躲过下跌）</span>
+      <span>口径（v3）：<b>溢价决定仓位、趋势决定方向</b>。买点仍需「不追高」过滤（溢价&lt;18 且 威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）；高溢价（≥22）<b>不再直接减仓</b>——趋势仍在 MA21 上方时只输出「持有不加仓」并给出仓位上限，只有连续 3 日收在 MA21×0.98 下方或跌破 MA60 才真正减仓；溢价 ≥27 且趋势同时破坏才减半。连续同类型合并为段。「段首后20日」= 段首日买入持有 20 日的收益。</span>
     </div>`;
 }
 
@@ -3349,7 +3448,7 @@ function renderEtfView() {
       <div id="etf-macd">${etfMacdHtml()}</div>
     </div>
     <div class="etf-section">
-      <div class="etf-sec-title"><span>买卖信号清单</span><span class="sub">溢价为主 · 威廉%R / MA21 / 布林 / MACD 共振 · 全历史 ${t && t.comboSignals && t.comboSignals.signals ? t.comboSignals.signals.length : '—'} 段</span></div>
+      <div class="etf-sec-title"><span>买卖信号清单</span><span class="sub">溢价定仓位 · 趋势定方向 · 全历史 ${t && t.comboSignals && t.comboSignals.signals ? t.comboSignals.signals.length : '—'} 段</span></div>
       <div id="etf-signals">${etfSignalsSectionInner()}</div>
     </div>
     <div class="etf-section">
