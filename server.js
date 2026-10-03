@@ -2970,9 +2970,45 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
     wait_us:    { label: '等重仓确认', action: '暂缓加仓/减仓', side: 'hold' },
     panic_wait: { label: '抄底未确认', action: '撤回防守仓', side: 'hold' },
     panic_try:  { label: '恐慌试仓',  action: '小仓试仓 20~35%', side: 'buy' },
+    weak_warn:  { label: '走弱预警',  action: '停止加仓·准备减仓', side: 'hold' },
     sell:       { label: '减仓',     action: '减仓',     side: 'sell' },
     sell_clear: { label: '清仓/减半', action: '清仓或减半', side: 'sell' },
   };
+  // ── v8「走弱就减仓」：卖出侧彻底与溢价解耦 ────────────────────────────────
+  // 起因（用户 2026-10-03 复盘）：2025-12-09 起纳指科技开始走弱、2026-01-12 收盘跌破
+  // MA21，清单这两天**完全没有减仓/清仓提示**。根因：卖出侧整个长在「高溢价（≥22%）」
+  // 分支里，而这两天的溢价是 19.9% / 19.0%，落在中低溢价区 —— 那里只有买入分支，
+  // 走弱信号被整个吞掉。v7 铁律明明已把 tier 判成 'run'，却只把「买入」降级成 wait_us
+  // （side=hold），从没产生过真正的减仓指令，铁律的下半句（「翻绿或跌破 MA21 都要减仓
+  // 清仓跑路」）在清单里是空转的。
+  // 修正：把「走弱」提升为**独立于溢价**的判定层，四条各计 1 分，溢价多低都不豁免
+  // （低溢价只代表便宜，不代表不会继续跌——2026-01~03 一路「低溢价→加仓」亏 3 个月
+  // 就是最好的反例）：
+  //   ① 纳指科技跌破 MA21  ② 纳指科技 MACD 翻绿  ③ 纳指100 跌破 MA21  ④ 纳指100 MACD 翻绿
+  // 距 MA21 的破位用「裸线」判定（不加 2% 缓冲、不等连续 3 日）：预警的价值就在「早」，
+  // 等 trendBroken 确认时 2025-12-16 已经从 2.348 跌到 2.264。
+  // 分级（实测 5 组方案后选定的这一组，见下）：
+  //   3 清仓/减半 = 纳指科技与纳指100 **同时**转坏（趋势级，立即执行，不等持续）
+  //   2 减仓     = 只有本 ETF 自己转弱，但已连续 WEAK_RUN_DAYS 个交易日没修复
+  //   1 走弱预警 = 刚出现的单日征兆，或只有纳指100 单方面走弱（本 ETF 自己没事）
+  // 另加一条比死叉更早的前兆（计 1 分）：MACD 红柱连续 2 日缩短 + DIF 拐头向下。
+  // 2025-12-12 命中（红柱 0.0125→0.0108→0.0076、DIF 0.0497→0.0484），比 12-16 死叉早 2 日。
+  // 恐慌抄底窗口豁免（恐慌底本来就是破位+翻绿，不该再喊减仓）。
+  // 实测（764 日，真实线上函数，9 组变体 A/B）：
+  //   逐日输出 + 只按总分分级（不看单双侧/不管持续）  → 167 段 · 按段回测 +74%
+  //   双杀且至少一条破位才清仓                        → 151 段 · +207%
+  //   两条都破位才清仓                                → 138 段 · +233%
+  //   单侧持续 2 日就减仓                             → 120 段 · +200%
+  //   **本方案（双杀=清仓 · 单侧持续 3 日=减仓）**     → 119 段 · **+243%**
+  //   单侧持续 4 日                                   → 117 段 · +230%
+  // 关键：把「只破位 1~2 天」也判成减仓是最伤的一种（+243% → +74%），因为那些位置
+  // 后 20 日平均还是涨 2.7% 的——牛市回调不该砍仓，只该预警。
+  // 本方案下减仓段后 20 日平均 -0.5%（9 组里唯一为负的，方向判对了）。
+  // 关键区间落地：2025-12-12~15 走弱预警 → 12-16~24 清仓/减半 → 12-25~31 减仓
+  //   → 2026-01-05~06 清仓/减半 → 01-07~16 减仓（用户点名的 1/12 在段内）→ 01-19~20 清仓/减半。
+  const WEAK_REPEAT_DAYS = 5;   // 「走弱预警」小字追加到买入行上的最小间隔（交易日）
+  const WEAK_RUN_DAYS = 3;      // 单侧转弱持续这么多交易日才升到「减仓」
+  let weakLevel = 0, weakCd = 0, etfWeakRun = 0;
 
   const sigs = [];
   let breakArmed = false;   // 死叉后是否还允许一次「跌破 MA21」确认减仓
@@ -3069,6 +3105,68 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
         const tp = posAt(i);
         if (tp != null) ev.push(`建议仓位上限 ${Math.round(tp * 100)}%（持有，不减仓）`);
       }
+    }
+    // ── v8 走弱层：与溢价彻底解耦，「翻绿 / 跌破 MA21」任何一条命中都要有减仓提示 ──
+    // 放在溢价分支之后：只要评分 ≥2 就**覆盖**掉买入结论（溢价再低也不豁免），
+    // 评分为 1 时只在买入信号上追加警示、没有买入信号时才单独出「走弱预警」段。
+    // 动能衰竭（红柱连续 2 日缩短 + DIF 拐头）是比死叉更早的前兆，也算 1 分。
+    if (!isPanic) {
+      const gt = gtRow || {};
+      const wHit = [];
+      const etfBelow = ma21[i] != null && C[i] < ma21[i];
+      if (gt.etfRed === false) wHit.push('纳指科技 MACD 翻绿');
+      if (etfBelow) wHit.push(`纳指科技跌破 MA21（收 ${C[i].toFixed(3)} < ${ma21[i].toFixed(3)}）`);
+      if (gt.usRed === false) wHit.push('纳指100 MACD 翻绿');
+      if (gt.usAbove === false) wHit.push(`纳指100 跌破 MA21（${gt.usClose} < ${gt.usMa21}）`);
+      const nEtf = (gt.etfRed === false ? 1 : 0) + (etfBelow ? 1 : 0);
+      const nUs = (gt.usRed === false ? 1 : 0) + (gt.usAbove === false ? 1 : 0);
+      // 本 ETF 自己是否已经转弱（破位或翻绿任一）
+      etfWeakRun = (nEtf > 0) ? etfWeakRun + 1 : 0;
+      // 动能衰竭：红柱连续 2 日缩短 + DIF 拐头向下，且价格还在 MA21 上方（尚未破位）
+      const histAt = j => (bars[j] && bars[j].dif != null && bars[j].dea != null) ? bars[j].dif - bars[j].dea : null;
+      const h0 = histAt(i), h1 = histAt(i - 1), h2 = histAt(i - 2);
+      const d0 = bars[i] ? bars[i].dif : null, d1 = bars[i - 1] ? bars[i - 1].dif : null;
+      if (h0 != null && h1 != null && h2 != null && h0 > 0 && h0 < h1 && h1 < h2
+          && d0 != null && d1 != null && d0 < d1 && ma21[i] != null && C[i] >= ma21[i]) {
+        wHit.push('MACD 红柱连续 2 日缩短且 DIF 拐头（动能衰竭，尚未破位）');
+      }
+      // 分级：
+      //   3 清仓/减半 = 纳指科技与纳指100 **同时**转坏（趋势级，立即执行，不等持续）
+      //   2 减仓     = 只有本 ETF 自己转弱，但已连续 WEAK_RUN_DAYS 日没修复
+      //   1 走弱预警 = 刚出现的单日征兆，或只有纳指100 单方面走弱
+      const lv = (nEtf > 0 && nUs > 0) ? 3
+        : (nEtf > 0 && etfWeakRun >= WEAK_RUN_DAYS) ? 2
+        : (wHit.length > 0 ? 1 : 0);
+      if (lv === 0) { weakLevel = 0; weakCd = 0; }
+      else if (lv >= 2) {
+        // 逐日输出：合并后就是一条完整的「减仓/清仓区间」，比只在触发日闪一下更好读
+        // （2026-01-09 ~ 01-16 会连成一整段，中间 1/12 的破位加速也在段内）。
+        code = lv === 3 ? 'sell_clear' : 'sell';
+        tag = 'weak';
+        ev = [
+          `溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）：低溢价只代表便宜，不代表不会继续跌`,
+          `走弱命中 —— ${wHit.join('、')}`,
+          lv === 3
+            ? '两条（纳指科技 + 纳指100）同时转坏 → 按铁律清仓或减半，先跑再说'
+            : `本 ETF 已连续 ${etfWeakRun} 个交易日处于「翻绿 / MA21 下方」→ 按铁律减仓，别再补仓；回到「翻红 + 站上 MA21」再谈重仓`,
+        ];
+      } else {
+        const wSelf = wHit.some(x => x.indexOf('纳指科技') === 0 || x.indexOf('动能衰竭') >= 0);
+        if ((!code || code === 'sell_weak') && wSelf) {
+          // 「持有不加仓」是溢价维度的中性结论，走弱前兆信息量更大，直接覆盖。
+          // 只有纳指100 单方面走弱、本 ETF 自己没事时不出独立段（只在买入行追加小字）。
+          code = 'weak_warn'; tag = 'weak';
+          ev = [
+            `溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）`,
+            `走弱前兆 —— ${wHit.join('、')}`,
+            '还没确认转坏，但已停止走强 → 停止加仓/不再补仓，再命中一项就减仓',
+          ];
+        } else if ((code === 'buy_strong' || code === 'buy' || code === 'buy_weak' || code === 'buy_small') && weakCd === 0) {
+          ev.push(`⚠ 已出现走弱征兆（${wHit.join('、')}）：按铁律只能小仓试错，再命中一项就要减仓`);
+          weakCd = WEAK_REPEAT_DAYS;
+        }
+      }
+      if (weakCd > 0) weakCd--;
     }
     // 非重仓档时把所有「买入/加仓」降级——恐慌抄底属更严格的极端条件，不受此门限制。
     //   run（ETF MACD 翻绿 / 纳指100「MACD 翻绿」或「跌破 MA21」）→ 等重仓确认：暂缓加仓，按铁律减仓

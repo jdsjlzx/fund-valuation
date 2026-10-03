@@ -1628,6 +1628,9 @@
     /* 持有不加仓：高溢价但趋势未破坏——既不是买也不是卖 */
     .etf-signal-table .sig-badge.hold { color: #fff; background: rgba(136,153,170,0.9); }
     .etf-signal-table .sig-badge.hold + div { color: var(--text-muted); }
+    /* 走弱预警：还没到减仓，但已不再走强——用橙色和「持有不加仓」区分开 */
+    .etf-signal-table .sig-badge.hold.warn { background: rgba(230,145,45,0.92); }
+    .etf-signal-table .sig-badge.hold.warn + div { color: #e6912d; }
     .etf-signal-more {
       text-align: center; font-size: 10.5px; color: var(--text-secondary);
       padding: 7px 0 2px; cursor: pointer; user-select: none;
@@ -3438,7 +3441,7 @@ function etfSignalsHtml() {
       <td class="num" style="font-size:9.5px;white-space:nowrap">${segLabel(s)}</td>
       <td class="num">${s.close.toFixed(3)}</td>
       <td class="num">${s.premium != null ? s.premium.toFixed(1) + '%' : '—'}</td>
-      <td><span class="sig-badge ${s.side}${s.code === 'buy_small' ? ' small' : ''}">${s.label}</span><div style="font-size:9px;color:var(--text-muted);margin-top:2px">${s.action}</div></td>
+      <td><span class="sig-badge ${s.side}${s.code === 'buy_small' ? ' small' : ''}${s.code === 'weak_warn' ? ' warn' : ''}">${s.label}</span><div style="font-size:9px;color:var(--text-muted);margin-top:2px">${s.action}</div></td>
       <td class="num" style="font-size:9.5px">${s.posPct != null ? s.posPct + '%' : '—'}</td>
       <td style="font-size:9.5px;line-height:1.5">${ev}</td>
       <td class="num" style="font-size:9.5px">${follow}</td>
@@ -3452,6 +3455,7 @@ function etfSignalsHtml() {
   const typeNames = {
     buy_strong: '重仓买入', buy: '买入', buy_weak: '试仓', buy_small: '少量买入',
     wait_us: '等重仓确认', panic_wait: '抄底未确认', panic_try: '恐慌试仓',
+    weak_warn: '走弱预警',
     sell_weak: '持有不加仓', sell: '减仓', sell_clear: '清仓/减半',
   };
   const statLine = Object.entries(typeNames)
@@ -3476,7 +3480,9 @@ function etfSignalsHtml() {
     ${statLine ? `<div class="etf-legend" style="margin-top:6px"><span>${statLine}</span></div>` : ''}
     ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
-      <span>口径（v7.2）：<b>重仓的唯一条件 = MACD 翻红 且 收盘站上 21 日均线</b>，纳指科技 ETF 与纳斯达克 100 都要满足；溢价只决定在这三档里多买/少买一点，<b>永远不能把「便宜」升级成「重仓」</b>。
+      <span><b>v8 新增：走弱预警 / 减仓层（与溢价彻底解耦）</b>。起因是 2025-12 那波走弱在清单里<b>完全没有减仓提示</b>——卖出侧原本整个长在「高溢价（≥22%）」分支里，而 2025-12-16 的溢价只有 20.6%、2026-01-12 只有 19.0%，落在中低溢价区，走弱信号被整个吞掉。现在「翻绿 / 跌破 MA21」独立计分，<b>溢价多低都不豁免</b>（低溢价只代表便宜，不代表不会继续跌）：四条各 1 分 = 纳指科技跌破 MA21、纳指科技 MACD 翻绿、纳指100 跌破 MA21、纳指100 MACD 翻绿。
+      <b>三级输出</b>：<b class="down">清仓/减半</b> = 纳指科技与纳指100 <b>同时</b>转坏（趋势级，立即执行）；<b class="down">减仓</b> = 只有本 ETF 自己转弱但已连续 3 个交易日没修复（只闪一天的回调不减仓——实测那样会把回测从 +254% 打到 +74%）；<b style="color:#e6912d">走弱预警</b> = 刚出现的单日征兆，另含 <b>MACD 红柱连续 2 日缩短且 DIF 拐头</b> 这个比死叉更早的动能衰竭前兆（2025-12-12 就触发了，比 12-16 死叉早 2 个交易日）。实测（764 日，119 段）：减仓段后 20 日平均 <b class="down">-0.5%</b>（方向对）；按段回测 +243%（v7.2 为 +254%、买入持有 +224%）。
+      <br>口径（v7.2）：<b>重仓的唯一条件 = MACD 翻红 且 收盘站上 21 日均线</b>，纳指科技 ETF 与纳斯达克 100 都要满足；溢价只决定在这三档里多买/少买一点，<b>永远不能把「便宜」升级成「重仓」</b>。
       <b>三档门控</b>：<b class="up">重仓档</b>（四条全满足）→ 按溢价正常加仓，&lt;15% 可到 85%；<b>试仓档</b>（两条都翻红，但 ETF 自己还没站回 MA21）→ <b>溢价 ≥15% 只 20%、&lt;15% 才 35%</b>；<b class="down">跑路档</b>（ETF MACD 翻绿，或纳指100「MACD 翻绿」/「跌破 MA21」）→ 减到 20%（&lt;15% 留 35%）。<b>入场认翻红、跑路认跌破 MA21</b>（外加 ETF 自己翻绿）——这是 8 种组合里实测最好的一组。
       <b>v7 的起因</b>：2026-01~03 只按「溢价低 → 抄底仓 85%」一路加仓，跟着美股跌了 3 个月（跟随者口径均仓 82%、亏损 14.4%）——
       <b>溢价低只代表「有性价比」，不是抄底/重仓的理由</b>。v7 之后同一段全程压在 6~35%，<b>仓位 &gt;50% 的天数为 0</b>，跟随者亏损收窄到 4.9%。
@@ -3761,10 +3767,6 @@ function renderEtfView() {
     ${ETF_LOAD_ERR ? `<div class="etf-section"><div class="etf-alert danger"><span class="etf-alert-title">数据异常</span><span class="etf-alert-text">${ETF_LOAD_ERR}</span></div></div>` : ''}
     <div id="etf-advice-wrap">${etfAdviceHtml()}</div>
     <div class="etf-section">
-      <div class="etf-sec-title"><span>溢价档位 · 买入线</span><span class="sub">${(t && t.premium && t.premium.rules) ? `≤${t.premium.rules.buy}% 买入 · ＜${t.premium.rules.add}% 多买` : '策略阈值'}</span></div>
-      <div id="etf-zones">${etfPremiumZonesHtml()}</div>
-    </div>
-    <div class="etf-section">
       <div class="etf-sec-title"><span>MACD 柱（日K）</span><span class="sub">信号口径与 macd买卖 视图一致</span></div>
       <div id="etf-macd">${etfMacdHtml()}</div>
     </div>
@@ -3782,6 +3784,10 @@ function renderEtfView() {
         <a href="javascript:void(0)" onclick="etfSetPremiumRange('all')" class="${ETF_PREMIUM_RANGE === 'all' ? 'on' : ''}">全部</a>
       </span></div>
       <div id="etf-premium-chart">${etfPremiumChartHtml()}</div>
+    </div>
+    <div class="etf-section">
+      <div class="etf-sec-title"><span>溢价档位 · 买入线</span><span class="sub">${(t && t.premium && t.premium.rules) ? `≤${t.premium.rules.buy}% 买入 · ＜${t.premium.rules.add}% 多买` : '策略阈值'}</span></div>
+      <div id="etf-zones">${etfPremiumZonesHtml()}</div>
     </div>
     <div class="etf-section">
       <div class="etf-sec-title"><span>我的持仓</span><span class="sub">仅存本机浏览器</span></div>
