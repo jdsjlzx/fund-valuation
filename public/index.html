@@ -1640,6 +1640,32 @@
     }
     .etf-signal-more:active { opacity: .6; }
 
+    /* 手机端（≤480px）：买卖信号清单 7 列横排放不下，改为每行一张卡片——
+       第 1 行：起始日 + 信号徽标；第 2 行：价格/溢价/仓位/后20日（带小标签）；
+       第 3 行：依据全文。桌面端布局不变（data-label 只在手机端显示）。 */
+    @media (max-width: 480px) {
+      .etf-combo-table thead { display: none; }
+      .etf-combo-table, .etf-combo-table tbody { display: block; }
+      .etf-combo-table tr {
+        display: flex; flex-wrap: wrap; align-items: baseline;
+        margin: 8px 0; padding: 8px 10px;
+        border: 1px solid var(--border); border-radius: 8px;
+      }
+      .etf-combo-table td { display: block; border-bottom: none; padding: 2px 0; }
+      .etf-combo-table td.sig-date { order: 1; flex: 1 1 auto; font-size: 11px; }
+      .etf-combo-table td.sig-sig { order: 2; flex: 0 0 auto; text-align: right; }
+      .etf-combo-table td.sig-sig > div { display: inline; margin: 0 0 0 4px; }
+      .etf-combo-table td.sig-stat { order: 3; flex: 0 0 auto; margin: 5px 12px 0 0; }
+      .etf-combo-table td.sig-stat::before {
+        content: attr(data-label); color: var(--text-muted);
+        margin-right: 3px; font-size: 9px;
+      }
+      .etf-combo-table td.sig-ev {
+        order: 4; flex: 1 1 100%; margin-top: 6px; padding-top: 6px;
+        border-top: 1px dashed var(--border);
+      }
+    }
+
     /* ── 关键指标 ── */
     .etf-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px 6px; }
     .etf-metric { background: var(--etf-panel); border-radius: 6px; padding: 6px 7px; }
@@ -3440,13 +3466,13 @@ function etfSignalsHtml() {
     const follow = f == null ? '待验证' : `<span class="${cls(f)}">${etfPct(f)}</span>`;
     const ev = (s.evidence || []).join('<br>');
     return `<tr>
-      <td class="num" style="font-size:9.5px;white-space:nowrap">${segLabel(s)}</td>
-      <td class="num">${s.close.toFixed(3)}</td>
-      <td class="num">${s.premium != null ? s.premium.toFixed(1) + '%' : '—'}</td>
-      <td><span class="sig-badge ${s.side}${s.code === 'buy_small' ? ' small' : ''}${s.code === 'weak_warn' ? ' warn' : ''}${s.code === 'sell_run' ? ' run' : ''}">${s.label}</span><div style="font-size:9px;color:var(--text-muted);margin-top:2px">${s.action}</div></td>
-      <td class="num" style="font-size:9.5px">${s.posPct != null ? s.posPct + '%' : '—'}</td>
-      <td style="font-size:9.5px;line-height:1.5">${ev}</td>
-      <td class="num" style="font-size:9.5px">${follow}</td>
+      <td class="num sig-date" style="font-size:9.5px;white-space:nowrap">${segLabel(s)}</td>
+      <td class="num sig-stat" data-label="价格">${s.close.toFixed(3)}</td>
+      <td class="num sig-stat" data-label="溢价">${s.premium != null ? s.premium.toFixed(1) + '%' : '—'}</td>
+      <td class="sig-sig"><span class="sig-badge ${s.side}${s.code === 'buy_small' ? ' small' : ''}${s.code === 'weak_warn' ? ' warn' : ''}${s.code === 'sell_run' ? ' run' : ''}">${s.label}</span><div style="font-size:9px;color:var(--text-muted);margin-top:2px">${s.action}</div></td>
+      <td class="num sig-stat" data-label="仓位" style="font-size:9.5px">${s.posPct != null ? s.posPct + '%' : '—'}</td>
+      <td class="sig-ev" style="font-size:9.5px;line-height:1.5">${ev}</td>
+      <td class="num sig-stat" data-label="后20日" style="font-size:9.5px">${follow}</td>
     </tr>`;
   }).join('');
   const more = all.length > 14
@@ -3474,7 +3500,7 @@ function etfSignalsHtml() {
     : '';
   return `
     ${etfSignalPosChartHtml()}
-    <table class="etf-signal-table">
+    <table class="etf-signal-table etf-combo-table">
       <thead><tr><th title="从这一天开始按提示操作；已结束的段以小字标注结束日">起始日</th><th>价格</th><th>溢价</th><th>信号</th><th title="该段对应的建议仓位上限">仓位</th><th>依据</th><th title="在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：买入信号为正=买对了，卖出信号为负=躲过了下跌">信号后20日涨跌</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
