@@ -1640,29 +1640,88 @@
     }
     .etf-signal-more:active { opacity: .6; }
 
-    /* 手机端（≤480px）：买卖信号清单 7 列横排放不下，改为每行一张卡片——
-       第 1 行：起始日 + 信号徽标；第 2 行：价格/溢价/仓位/后20日（带小标签）；
-       第 3 行：依据全文。桌面端布局不变（data-label 只在手机端显示）。 */
     @media (max-width: 480px) {
       .etf-combo-table thead { display: none; }
-      .etf-combo-table, .etf-combo-table tbody { display: block; }
+      .etf-combo-table,
+      .etf-combo-table tbody { display: block; }
       .etf-combo-table tr {
-        display: flex; flex-wrap: wrap; align-items: baseline;
-        margin: 8px 0; padding: 8px 10px;
-        border: 1px solid var(--border); border-radius: 8px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 7px 6px;
+        margin: 9px 0;
+        padding: 9px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--etf-panel);
       }
-      .etf-combo-table td { display: block; border-bottom: none; padding: 2px 0; }
-      .etf-combo-table td.sig-date { order: 1; flex: 1 1 auto; font-size: 11px; }
-      .etf-combo-table td.sig-sig { order: 2; flex: 0 0 auto; text-align: right; }
-      .etf-combo-table td.sig-sig > div { display: inline; margin: 0 0 0 4px; }
-      .etf-combo-table td.sig-stat { order: 3; flex: 0 0 auto; margin: 5px 12px 0 0; }
+      .etf-combo-table td {
+        display: block;
+        min-width: 0;
+        border-bottom: none;
+        padding: 0;
+      }
+      .etf-combo-table td.sig-date {
+        grid-column: 1 / 3;
+        font-size: 11px !important;
+        line-height: 1.35;
+        color: var(--text-primary);
+      }
+      .etf-combo-table td.sig-date::before,
+      .etf-combo-table td.sig-sig::before,
       .etf-combo-table td.sig-stat::before {
-        content: attr(data-label); color: var(--text-muted);
-        margin-right: 3px; font-size: 9px;
+        display: block;
+        margin: 0 0 3px;
+        color: var(--text-muted);
+        font-size: 9px;
+        font-weight: 500;
       }
+      .etf-combo-table td.sig-date::before { content: '起始日'; }
+      .etf-combo-table td.sig-sig {
+        grid-column: 3 / 5;
+        text-align: right;
+        line-height: 1.35;
+      }
+      .etf-combo-table td.sig-sig::before { content: '信号'; }
+      .etf-combo-table td.sig-sig > .sig-badge {
+        padding: 3px 7px;
+        font-size: 10.5px;
+      }
+      .etf-combo-table td.sig-sig > div {
+        margin-top: 3px !important;
+        color: var(--text-secondary) !important;
+      }
+      .etf-combo-table td.sig-stat {
+        border: 1px solid var(--border-badge);
+        border-radius: 7px;
+        background: var(--bg-badge);
+        padding: 5px 6px;
+        font-size: 11px !important;
+        font-weight: 700;
+        line-height: 1.25;
+        text-align: left;
+        font-variant-numeric: tabular-nums;
+      }
+      .etf-combo-table td.sig-stat::before { content: attr(data-label); }
       .etf-combo-table td.sig-ev {
-        order: 4; flex: 1 1 100%; margin-top: 6px; padding-top: 6px;
-        border-top: 1px dashed var(--border);
+        grid-column: 1 / -1;
+        margin-top: 2px;
+        padding: 7px 8px;
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        background: rgba(136,153,170,0.06);
+        font-size: 9.8px !important;
+        line-height: 1.55 !important;
+      }
+      .etf-combo-table td.sig-ev::before {
+        content: '依据';
+        display: inline-block;
+        margin: 0 6px 3px 0;
+        padding: 1px 5px;
+        border-radius: 999px;
+        color: var(--text-secondary);
+        background: var(--bg-badge);
+        font-size: 9px;
+        font-weight: 600;
       }
     }
 
