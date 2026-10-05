@@ -2931,8 +2931,9 @@ function buildEtfSignals(klines) {
 //  · 溢价率是一级变量——但只决定「仓位上限」与「能不能加仓」，不直接产生清仓：
 //    <15 重仓区 / 15~18 买入区 / 18~22 观望区 / 22~27 高溢价（≤3 成）/ ≥27 极高（≤2 成）
 //  · 「不追高」过滤器（威廉%R≤-60 / 收盘<MA21 / 收盘<布林中轨，任一命中）显著改善买点质量
-//  · 高溢价区仍保留 MACD 级别的离散买卖点（v4 新增，避免整段被「持有不加仓」吞掉）：
-//      死叉 → 减仓；死叉后首次跌破 MA21 → 确认减仓（一轮空头只确认一次）；
+//  · 高溢价区仍保留 MACD 级别提示（v9）：
+//      死叉 → 走弱预警；死叉后首次跌破 MA21 → 减仓；
+//      跌破 MA21+MA30 → 清仓；三线全破 → 跑路清仓；
 //      金叉 → 少量买入（溢价偏高，仓位不超过 3 成）
 //  · 布林上轨/威廉超买（≥-10）作为高位过热信号，在「持有不加仓」段里提示别追高
 //  输出按「连续同类型合并为段」，每段带证据列表与信号后 20 日涨跌
@@ -2989,25 +2990,16 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
   //   ① 纳指科技跌破 MA21  ② 纳指科技 MACD 翻绿  ③ 纳指100 跌破 MA21  ④ 纳指100 MACD 翻绿
   // 距 MA21 的破位用「裸线」判定（不加 2% 缓冲、不等连续 3 日）：预警的价值就在「早」，
   // 等 trendBroken 确认时 2025-12-16 已经从 2.348 跌到 2.264。
-  // 分级（实测 5 组方案后选定的这一组，见下）：
-  //   3 清仓/减半 = 纳指科技与纳指100 **同时**转坏（趋势级，立即执行，不等持续）
-  //   2 减仓     = 只有本 ETF 自己转弱，但已连续 WEAK_RUN_DAYS 个交易日没修复
-  //   1 走弱预警 = 刚出现的单日征兆，或只有纳指100 单方面走弱（本 ETF 自己没事）
+  // 分级（2026-08-19 复盘后改为“动能预警、价格确认”）：
+  //   1 走弱预警 = MACD 翻绿 / 红柱缩短 / DIF 拐头，但价格仍在 MA21 上方
+  //   2 减仓     = MACD 翻绿 + 跌破 MA21，或纳指100 跌破 MA21
+  //   3 清仓     = 任一标的跌破 MA21+MA30
+  //   4 跑路清仓 = 任一标的 MA21+MA30+MA60 三线全破（本 ETF 自己没事）
   // 另加一条比死叉更早的前兆（计 1 分）：MACD 红柱连续 2 日缩短 + DIF 拐头向下。
   // 2025-12-12 命中（红柱 0.0125→0.0108→0.0076、DIF 0.0497→0.0484），比 12-16 死叉早 2 日。
   // 恐慌抄底窗口豁免（恐慌底本来就是破位+翻绿，不该再喊减仓）。
-  // 实测（764 日，真实线上函数，9 组变体 A/B）：
-  //   逐日输出 + 只按总分分级（不看单双侧/不管持续）  → 167 段 · 按段回测 +74%
-  //   双杀且至少一条破位才清仓                        → 151 段 · +207%
-  //   两条都破位才清仓                                → 138 段 · +233%
-  //   单侧持续 2 日就减仓                             → 120 段 · +200%
-  //   **本方案（双杀=清仓 · 单侧持续 3 日=减仓）**     → 119 段 · **+243%**
-  //   单侧持续 4 日                                   → 117 段 · +230%
-  // 关键：把「只破位 1~2 天」也判成减仓是最伤的一种（+243% → +74%），因为那些位置
-  // 后 20 日平均还是涨 2.7% 的——牛市回调不该砍仓，只该预警。
-  // 本方案下减仓段后 20 日平均 -0.5%（9 组里唯一为负的，方向判对了）。
-  // 关键区间落地：2025-12-12~15 走弱预警 → 12-16~24 清仓/减半 → 12-25~31 减仓
-  //   → 2026-01-05~06 清仓/减半 → 01-07~16 减仓（用户点名的 1/12 在段内）→ 01-19~20 清仓/减半。
+  // 2026-08-19~09-17 的关键教训：MACD 翻绿后价格仍在高位震荡并最终向上突破，
+  // 所以 MACD 只做预警；是否减仓交给 MA21，是否清仓交给 MA21+MA30。
   //
   // ── v8.1 清仓铁律（用户 2026-10-03）：跌破组合均线 → 立即清仓，不等持续、不看溢价 ──
   // 用户原话：「纳指科技收盘价有一天低于 21、30 均线，马上提示清仓；同时低于 21、30、60，
@@ -3023,8 +3015,7 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
   //   所以 sell_run 的信号后 20 日正确率偏低（约 21%）是**有意接受的**，不是策略缺陷，
   //   不要再为「优化」这个正确率去放宽/收紧三条全破的判定。
   const WEAK_REPEAT_DAYS = 5;   // 「走弱预警」小字追加到买入行上的最小间隔（交易日）
-  const WEAK_RUN_DAYS = 3;      // 单侧转弱持续这么多交易日才升到「减仓」
-  let weakLevel = 0, weakCd = 0, etfWeakRun = 0;
+  let weakCd = 0;
 
   const sigs = [];
   let breakArmed = false;   // 死叉后是否还允许一次「跌破 MA21」确认减仓
@@ -3090,7 +3081,7 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
     } else if (p >= PREMIUM_WATCH) {
       // 高溢价本身不是「清仓」理由，但它一定是「仓位上限」：统一压到 3 成以内
       // （≥27 压到 2 成）。高溢价区里仍然保留 MACD 级别的离散买卖点——
-      //   死叉 → 减仓；死叉后的首次跌破 MA21 → 确认减仓（一次死叉只确认一次，
+      //   死叉 → 走弱预警；死叉后的首次跌破 MA21 → 减仓（一次死叉只确认一次，
       //   避免同一轮空头里反复重复输出）；金叉 → 少量买入。
       const broke = trendBroken[i];
       const dead = deathCross(i);
@@ -3103,9 +3094,9 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
         code = 'sell';
         ev = [`溢价 ${p.toFixed(1)}%（高溢价区）`, '趋势破坏：连续 3 日收在 MA21 缓冲带下或跌破 MA60', '按仓位建议降到 30% 以内'];
       } else if (dead) {
-        code = 'sell'; tag = 'dead';
+        code = 'weak_warn'; tag = 'weak';
         breakArmed = true;
-        ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_WATCH} 高溢价区）`, 'MACD 死叉（DIF 下穿 DEA），动能转弱', '高溢价 + 动能转弱 → 减仓，仓位压到 3 成以内'];
+        ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_WATCH} 高溢价区）`, 'MACD 死叉（DIF 下穿 DEA），动能转弱', 'MACD 单独翻绿只预警，不直接减仓；若跌破 MA21 再升级为减仓'];
       } else if (brokeMa21 && breakArmed) {
         code = 'sell'; tag = 'ma';
         breakArmed = false;
@@ -3122,10 +3113,10 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
         if (tp != null) ev.push(`建议仓位上限 ${Math.round(tp * 100)}%（持有，不减仓）`);
       }
     }
-    // ── v8 走弱层：与溢价彻底解耦，「翻绿 / 跌破 MA21」任何一条命中都要有减仓提示 ──
-    // 放在溢价分支之后：只要评分 ≥2 就**覆盖**掉买入结论（溢价再低也不豁免），
-    // 评分为 1 时只在买入信号上追加警示、没有买入信号时才单独出「走弱预警」段。
-    // 动能衰竭（红柱连续 2 日缩短 + DIF 拐头）是比死叉更早的前兆，也算 1 分。
+    // ── 走弱层：MACD 单独翻绿只预警；真正减仓看价格破位 ─────────────────────────
+    // 2026-08-19 复盘：MACD 先翻绿/红柱缩短后，价格仍可能在强趋势里横盘再上攻。
+    // 因此分级改为：MACD 翻绿或红柱缩短 = 预警；MACD 翻绿 + 跌破 MA21 = 减仓；
+    // 跌破 MA21+MA30 = 清仓；MA21+MA30+MA60 三线全破 = 跑路清仓。
     if (!isPanic) {
       const gt = gtRow || {};
       const wHit = [];
@@ -3134,11 +3125,6 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
       if (etfBelow) wHit.push(`纳指科技跌破 MA21（收 ${C[i].toFixed(3)} < ${ma21[i].toFixed(3)}）`);
       if (gt.usRed === false) wHit.push('纳指100 MACD 翻绿');
       if (gt.usAbove === false) wHit.push(`纳指100 跌破 MA21（${gt.usClose} < ${gt.usMa21}）`);
-      const nEtf = (gt.etfRed === false ? 1 : 0) + (etfBelow ? 1 : 0);
-      const nUs = (gt.usRed === false ? 1 : 0) + (gt.usAbove === false ? 1 : 0);
-      // 本 ETF 自己是否已经转弱（破位或翻绿任一）
-      etfWeakRun = (nEtf > 0) ? etfWeakRun + 1 : 0;
-      // 动能衰竭：红柱连续 2 日缩短 + DIF 拐头向下，且价格还在 MA21 上方（尚未破位）
       const histAt = j => (bars[j] && bars[j].dif != null && bars[j].dea != null) ? bars[j].dif - bars[j].dea : null;
       const h0 = histAt(i), h1 = histAt(i - 1), h2 = histAt(i - 2);
       const d0 = bars[i] ? bars[i].dif : null, d1 = bars[i - 1] ? bars[i - 1].dif : null;
@@ -3146,72 +3132,67 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
           && d0 != null && d1 != null && d0 < d1 && ma21[i] != null && C[i] >= ma21[i]) {
         wHit.push('MACD 红柱连续 2 日缩短且 DIF 拐头（动能衰竭，尚未破位）');
       }
-      // ── v8.1 清仓铁律（用户 2026-10-03）：跌破组合均线 → 立即清仓，不等持续、不看溢价 ──
-      // 「有一天收盘价低于 21、30 均线 → 马上清仓；同时低于 21、30、60 → 跑路清仓；
-      //   纳指100 出现同样情况 → 也清仓」。
-      // 与 v8 的四项计分正交：这里看的是「价格在几条均线下方」的位置结构，不是动能。
-      // 破 MA30 说明已不只是 3 周级别的回调（MA21），而是跌穿近 1.5 个月持仓成本区；
-      // 三条全破说明中期趋势彻底转空（2026-03 那种），必须立刻跑路。
+
       const etfBelow30 = ma30[i] != null && C[i] < ma30[i];
       const etfBelow60 = ma60[i] != null && C[i] < ma60[i];
-      const etfDbl = etfBelow && etfBelow30;              // ETF 跌破 MA21+MA30
-      const etfTpl = etfDbl && etfBelow60;                // ETF 三条全破
-      const usDbl = gt.usAbove === false && gt.usBelow30 === true;    // 纳指100 跌破 MA21+MA30
-      const usTpl = usDbl && gt.usBelow60 === true;                   // 纳指100 三条全破
+      const etfDbl = etfBelow && etfBelow30;
+      const etfTpl = etfDbl && etfBelow60;
+      const usDbl = gt.usAbove === false && gt.usBelow30 === true;
+      const usTpl = usDbl && gt.usBelow60 === true;
       const clearHit = [];
+      if (etfBelow) clearHit.push(`纳指科技跌破 MA21（收 ${C[i].toFixed(3)} < ${ma21[i].toFixed(3)}）`);
       if (etfBelow30) clearHit.push(`纳指科技跌破 MA30（收 ${C[i].toFixed(3)} < ${ma30[i].toFixed(3)}）`);
       if (etfBelow60) clearHit.push(`纳指科技跌破 MA60（收 ${C[i].toFixed(3)} < ${ma60[i].toFixed(3)}）`);
+      if (gt.usAbove === false) clearHit.push(`纳指100 跌破 MA21（${gt.usClose} < ${gt.usMa21}）`);
       if (gt.usBelow30 === true) clearHit.push(`纳指100 跌破 MA30（${gt.usClose}）`);
       if (gt.usBelow60 === true) clearHit.push(`纳指100 跌破 MA60（${gt.usClose}）`);
-      // 分级：
-      //   4 跑路清仓 = 任一标的「MA21+MA30+MA60 三条全破」（中期趋势彻底转空）
-      //   3 清仓     = 任一标的「跌破 MA21+MA30」（立即，不等持续），或两条同时转坏（v8 双杀）
-      //   2 减仓     = 只有本 ETF 自己转弱，但已连续 WEAK_RUN_DAYS 日没修复
-      //   1 走弱预警 = 刚出现的单日征兆，或只有纳指100 单方面走弱
+
+      const etfMacdWeak = gt.etfRed === false;
+      const usMacdWeak = gt.usRed === false;
+      const usWeakBreak = usMacdWeak && gt.usAbove === false;
       const lv = (etfTpl || usTpl) ? 4
-        : (etfDbl || usDbl || (nEtf > 0 && nUs > 0)) ? 3
-        : (nEtf > 0 && etfWeakRun >= WEAK_RUN_DAYS) ? 2
+        : (etfDbl || usDbl) ? 3
+        : ((etfMacdWeak && etfBelow) || usWeakBreak) ? 2
         : (wHit.length > 0 ? 1 : 0);
-      if (lv === 0) { weakLevel = 0; weakCd = 0; }
+      if (lv === 0) { weakCd = 0; }
       else if (lv >= 2) {
-        // 逐日输出：合并后就是一条完整的「减仓/清仓区间」，比只在触发日闪一下更好读
-        // （2026-01-09 ~ 01-16 会连成一整段，中间 1/12 的破位加速也在段内）。
         code = lv === 4 ? 'sell_run' : (lv === 3 ? 'sell_clear' : 'sell');
         tag = 'weak';
-        const hitLine = clearHit.length && lv >= 3
-          ? `破位命中 —— ${clearHit.join('、')}${wHit.length ? '；另 ' + wHit.join('、') : ''}`
-          : `走弱命中 —— ${wHit.join('、')}`;
+        const extraHit = wHit.filter(x => {
+          const k = x.split('（')[0];
+          return !clearHit.some(y => y.indexOf(k) >= 0)
+            && !(etfMacdWeak && etfBelow && (x === '纳指科技 MACD 翻绿' || x.indexOf('纳指科技跌破 MA21') === 0));
+        });
+        const hitLine = lv >= 3
+          ? `破位命中 —— ${clearHit.join('、')}${extraHit.length ? '；另 ' + extraHit.join('、') : ''}`
+          : `减仓触发 —— ${etfMacdWeak && etfBelow ? '纳指科技 MACD 翻绿 + 跌破 MA21' : '纳指100 MACD 翻绿 + 跌破 MA21'}${extraHit.length ? '；另 ' + extraHit.join('、') : ''}`;
         ev = [
           `溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）：低溢价只代表便宜，不代表不会继续跌`,
           hitLine,
           lv === 4
             ? 'MA21 / MA30 / MA60 三条均线全部跌破 → 中期趋势彻底转空，立刻清仓跑路，不再等确认'
             : (lv === 3
-              ? (etfDbl || usDbl
-                ? '收盘价已同时跌破 MA21 与 MA30 → 按铁律马上清仓，不等持续、不看溢价'
-                : '两条（纳指科技 + 纳指100）同时转坏 → 按铁律清仓或减半，先跑再说')
-              : `本 ETF 已连续 ${etfWeakRun} 个交易日处于「翻绿 / MA21 下方」→ 按铁律减仓，别再补仓；回到「翻红 + 站上 MA21」再谈重仓`),
+              ? '收盘价已同时跌破 MA21 与 MA30 → 按铁律马上清仓，不等持续、不看溢价'
+              : 'MACD 翻绿已经配合 MA21 破位 → 从预警升级为减仓；等重新翻红并站回 MA21 再谈重仓'),
         ];
       } else {
         const wSelf = wHit.some(x => x.indexOf('纳指科技') === 0 || x.indexOf('动能衰竭') >= 0);
         if ((!code || code === 'sell_weak') && wSelf) {
-          // 「持有不加仓」是溢价维度的中性结论，走弱前兆信息量更大，直接覆盖。
-          // 只有纳指100 单方面走弱、本 ETF 自己没事时不出独立段（只在买入行追加小字）。
           code = 'weak_warn'; tag = 'weak';
           ev = [
             `溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）`,
             `走弱前兆 —— ${wHit.join('、')}`,
-            '还没确认转坏，但已停止走强 → 停止加仓/不再补仓，再命中一项就减仓',
+            'MACD 单独翻绿/缩短只代表动能降温，不代表价格一定下跌；未跌破 MA21 前只停止加仓，不直接减仓',
           ];
         } else if ((code === 'buy_strong' || code === 'buy' || code === 'buy_weak' || code === 'buy_small') && weakCd === 0) {
-          ev.push(`⚠ 已出现走弱征兆（${wHit.join('、')}）：按铁律只能小仓试错，再命中一项就要减仓`);
+          ev.push(`⚠ 已出现走弱征兆（${wHit.join('、')}）：只当预警；若 MACD 翻绿并跌破 MA21，再升级减仓`);
           weakCd = WEAK_REPEAT_DAYS;
         }
       }
       if (weakCd > 0) weakCd--;
     }
     // 非重仓档时把所有「买入/加仓」降级——恐慌抄底属更严格的极端条件，不受此门限制。
-    //   run（ETF MACD 翻绿 / 纳指100「MACD 翻绿」或「跌破 MA21」）→ 等重仓确认：暂缓加仓，按铁律减仓
+    //   run（ETF MACD 翻绿且跌破 MA21，或纳指100 跌破 MA21）→ 等重仓确认：暂缓加仓，按铁律减仓
     //   try（已翻红但价格还没站回 MA21）      → 只给试仓
     if (code && !heavyOk && !isPanic && (code === 'buy_strong' || code === 'buy' || code === 'buy_weak')) {
       ev.push(gateHint);
@@ -3427,42 +3408,18 @@ function buildUsTrendState(klines, usIdx) {
   return out;
 }
 
-// ── v7「重仓铁律」：能不能重仓，只看 MACD 与 MA21 ──────────────────────────────
-// 用户原话（2026-10-03，本轮最重要的一条）：
-//   「美股纳斯达克100价格跌破21天均线，或者纳指科技etf价格跌破21天均线，溢价再低也不能重仓，
-//     只能买一点试错；macd翻红且后面收盘价格站上21天均线，才能重仓——这是重仓的唯一原则。
-//     纳指科技溢价低于15，可以低吸一点点，但不能重仓。同样，美股纳斯达克100价格和纳指科技
-//     etf，macd翻绿或者收盘价格跌破21天均线，都要减仓清仓跑路。」
-// 落地为三档（tier），溢价只在这三档内部做微调，永远不能把「便宜」升级成「重仓」：
+// ── v9「重仓铁律」：入场看 MACD+MA21，出场看价格破位确认 ────────────────
+// 2026-08-19 复盘：MACD 先缩短/翻绿后，价格仍在强趋势里横盘再上攻。
+// 因此 MACD 单独翻绿只作为动能预警，不再直接触发减仓；必须配合价格跌破 MA21 才升级。
+// 当前落地为四档（tier），溢价只在这些档位内部做微调，永远不能把「便宜」升级成「重仓」：
 //   heavy 重仓档：ETF 站上 MA21 且 MACD 翻红，且纳指100 站上 MA21 且「翻红 或 DIF>0」
-//   run   跑路档：ETF MACD 翻绿，或纳指100「MACD 翻绿」/「跌破 MA21」→ 减到 20%（<15% 留 35%）
-//   try   试仓档：两条都翻红，但 ETF 自己还没站回 MA21          → 20%（溢价<15% → 35%）
-//         恐慌「试仓」同样按这一档：溢价 ≥15% 只 20%、<15% 才 35%（用户 2026-01-21~02-03
-//         复盘后定的——那段溢价 15~18% 却给到 35%，跟着一路跌到 3 月，试错仓必须更小）。
-// v7.2 修正（用户直接质疑 2026-04-08）：那天 ETF 与纳指100 都翻红、都站上 MA21，
-//   却因为只认「纳指100 的 DIF 必须在零轴上方」被判成跑路档——纳指100 的 DIF 是 -245.8
-//   （前期跌太深，金叉发生在零轴下方）。这偏离了用户定的原则，于是把「入场」与「跑路」
-//   拆成两条独立的判定，各自贴合用户原话：
-//     入场 heavy = 两条都「站上 MA21」+「MACD 翻红」（美股动能够不着时允许 DIF>0 顶替）
-//     跑路 run   = ETF MACD 翻绿 或 纳指100「MACD 翻绿」/「跌破 MA21」
-//   8 种组合实测（764 日，真实线上函数），最终这套最好：
-//     · 只改动入场、跑路仍看「DIF 破零轴」       → +197% / -19.3%（回撤反而恶化）
-//     · 入场+跑路全改成「一翻绿就跑」            → +124% / -18.0%
-//     · 美股完全不看 MACD（入场只看价格）        → +208% / -18.9%
-//     · v7.1 旧版（入场/跑路都只认 DIF>0）       → +209% / -14.5%（但 4/8 判成跑路档 ✗）
-//     · 本方案（入场=翻红，跑路=翻绿 或 跌破MA21）→ +212% / -15.9%（4/8 起重仓档 ✓）
-//   注意一个反直觉的点：「翻红」用作**入场**条件很好（+212%），
-//   但若把「跑路」也卡成「美股一翻绿就跑」，全期直接掉到 +124%，因为纳指100 死叉太频繁、
-//   隔夜时差又让它和本 ETF 不同步；而「跌破 MA21」做跑路条件却几乎不损失收益。
-//   所以现在的分工是：入场认翻红，跑路认跌破 MA21（外加 ETF 自己翻绿）。
-// 试仓档的档位（v7.1 用户复盘后收紧）：
-//   溢价 ≥15% → 20% 以内；溢价 <15% → 35%。
-//   依据 2026-01-21~02-03 那一段：清单标「恐慌试仓」但溢价在 15~18%，当时给到 35%，
-//   结果一路跌到 3 月——「试错」的仓位不该接近半仓，否则试错失败就是重伤。
-//   原为 35% / 45%，用户明确要求下调为 20% / 35%。
+//   watch 观察档：MACD 翻绿但价格仍在 MA21 上方 → 持有观察、不加仓
+//   run   跑路档：MACD 翻绿且跌破 MA21，或纳指100 同时翻绿并跌破 MA21 → 减到 20%（<15% 留 35%）
+//   try   试仓档：动能恢复但价格还没站回 MA21 → 20%（溢价<15% → 35%）
+// MA21+MA30 仍是清仓铁律，MA21+MA30+MA60 三线全破仍是跑路清仓。
 const POS_TRY_CAP = 0.20;         // 试仓档 · 溢价 ≥15%（恐慌试仓同样适用）
 const POS_TRY_CAP_CHEAP = 0.35;   // 试仓档 · 溢价 <15%：便宜才多给一点，仍远不到重仓
-const POS_RUN_CAP = 0.25;         // 跑路档：ETF MACD 翻绿 / 纳指100 翻绿或跌破 MA21 → 减仓
+const POS_RUN_CAP = 0.25;         // 跑路档：ETF MACD 翻绿且跌破 MA21，或纳指100 同时翻绿并跌破 MA21 → 减仓
 const POS_RUN_CAP_CHEAP = 0.35;   // 溢价 <15% 时留一点底仓
 const POS_MAX_NOT_HEAVY = 0.5;    // 「非重仓档一律 ≤50%」的硬红线
 function buildHeavyGate(rows, usIdx) {
@@ -3509,15 +3466,16 @@ function buildHeavyGate(rows, usIdx) {
     const hasUs = usAbove != null && usZero != null;
     // 重仓（heavy）：ETF 站上 MA21 且 MACD 翻红；纳指100 也要站上 MA21 且动能不能是负的
     const heavy = etfAbove && etfRed && (!hasUs || (usAbove && usZero));
-    // 跑路（run）——用户原话：「macd翻绿或者收盘价格跌破21天均线，都要减仓清仓跑路」
-    const run = !etfRed || (hasUs && (!usRed || !usAbove));
+    // 跑路（run）：单 MACD 翻绿或单独跌破 MA21 都只预警；必须 MACD 翻绿 + 价格破 MA21，才降到减仓档。
+    const run = (!etfRed && !etfAbove) || (hasUs && !usRed && !usAbove);
     const miss = [];
     if (!etfAbove) miss.push('ETF 未站上 MA21');
     if (!etfRed) miss.push('ETF MACD 翻绿');
     if (hasUs && !usAbove) miss.push('纳指100 跌破 MA21');
     if (hasUs && !usRed) miss.push('纳指100 MACD 翻绿');
+    const macdWatch = !etfRed || (hasUs && !usRed);
     out[i] = {
-      tier: heavy ? 'heavy' : (run ? 'run' : 'try'), etfAbove, etfRed, usAbove, usRed, usZero, hasUs, miss,
+      tier: heavy ? 'heavy' : (run ? 'run' : (macdWatch ? 'watch' : 'try')), etfAbove, etfRed, usAbove, usRed, usZero, hasUs, miss,
       usBelow30, usBelow60,
       close: +C[i].toFixed(3), ma21: +ma21[i].toFixed(3),
       dif: bar.dif == null ? null : +bar.dif.toFixed(4), dea: bar.dea == null ? null : +bar.dea.toFixed(4),
@@ -3674,7 +3632,7 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
   const out = [];
   // 美股趋势状态：逐日对齐（rows 含盘中实时那一行；按「美股日期 < 交易日」取最新一根收盘）
   const usTrend = buildUsTrendState(rows, usIdx);
-  // v7 重仓铁律：MACD + MA21 三档门控（heavy / try / run）
+  // 重仓铁律：MACD + MA21 四档门控（heavy / watch / try / run）
   const gates = buildHeavyGate(rows, usIdx);
   let below = 0, state = 'UP', bull = false;
   let panicOn = false, panicAdded = false, panicStartIdx = -1;
@@ -3693,11 +3651,9 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
     // 无外盘 / 指标不足时静默降级为重仓档，保证「抓取失败」不等于「不让买」
     const tier = g ? g.tier : 'heavy';
     let cap;
-    if (tier === 'heavy') {
-      // 只有同时满足「MACD 翻红 + 站上 MA21」（ETF 与纳指100 双双确认）才谈得上重仓，
-      // 此时溢价才有权把上限抬到 85%/65% 的抄底仓。
+    if (tier === 'heavy' || tier === 'watch') {
       cap = state === 'UP' ? (brokeMa60 ? 0.6 : 1.0) : 0.3;
-      if (p != null) {
+      if (tier === 'heavy' && p != null) {
         if (p < PREMIUM_ADD) cap = Math.max(cap, POS_DIP_CAP_CHEAP);
         else if (p < PREMIUM_BUY) cap = Math.max(cap, POS_DIP_CAP_BUY);
       }
@@ -3708,12 +3664,13 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
       const cheap = p != null && p < PREMIUM_ADD;
       const tryCap = cheap ? POS_TRY_CAP_CHEAP : POS_TRY_CAP;
       const runCap = cheap ? POS_RUN_CAP_CHEAP : POS_RUN_CAP;
-      cap = tier === 'try' ? tryCap : Math.min(runCap, tryCap);
+      cap = tier === 'run' ? Math.min(runCap, tryCap) : tryCap;
     }
     // 零轴下死叉：趋势转弱再压一档
     if (state === 'UP' && i > 0 && bars[i - 1] && bars[i - 1].dif >= bars[i - 1].dea && bar.dif != null && bar.dif <= bar.dea && bar.dif < 0) cap *= 0.7;
     const pf = premiumPositionFactor(p);
     let target = Math.max(0, Math.min(1, cap * pf));
+    if (tier === 'watch') target = Math.min(target, POS_MAX_NOT_HEAVY);
     // 恐慌抄底：隔夜外盘重挫 + 极限超卖共振时，仓位下限抬到 65%（不再被溢价系数打折）；
     // 收盘重新站上 MA21 后再补到 85%——「分批重仓」，不为假底一次性买单。
     const panic = !!(panicActive && panicActive.has(rows[i].date));
@@ -3730,9 +3687,10 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
     // 恐慌下限只在高溢价（≥22%）以内生效——溢价极高时仍让「高溢价压仓」规则优先，避免自相矛盾。
     // 恐慌层同样遵守重仓铁律：站上 MA21 只确认「止跌」，要 MACD 翻红（重仓档）才补到 85%。
     if (panicOn && !panicLapsed && (p == null || p <= PREMIUM_WATCH)) {
-      if (panicAdded && tier !== 'run') {
-        // 站上 MA21 = 止跌确认：要 MACD 也翻红（重仓档）才补到 85%，否则 65% 为限
-        target = Math.max(target, tier === 'heavy' ? POS_PANIC_CAP_ADD : POS_PANIC_CAP);
+      if (panicAdded && tier === 'heavy') {
+        target = Math.max(target, POS_PANIC_CAP_ADD);
+      } else if (panicAdded && tier !== 'run') {
+        target = Math.max(target, POS_PANIC_CAP);
       } else {
         // 恐慌「试仓」档（未站回 MA21，或虽站回但 MACD 已翻绿）：
         //   溢价 ≥15% → 20% 以内；溢价 <15% → 35%。
@@ -3746,7 +3704,7 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
       state, bull, ma21: ma21[i] == null ? null : +ma21[i].toFixed(3), ma60: ma60[i] == null ? null : +ma60[i].toFixed(3),
       cap: +cap.toFixed(2), factor: pf, target: +target.toFixed(2), belowDays: below, intraday: !!rows[i].intraday,
       panic, panicAdded: panicOn && panicAdded, panicLapsed,
-      // 重仓铁律的逐日判定：tier = heavy/try/run + 四项条件，供前端说明「为什么不能重仓」
+      // 重仓铁律的逐日判定：tier = heavy/watch/try/run + 四项条件，供前端说明「为什么不能重仓」
       tier, gate: g ? {
         tier: g.tier, etfAbove: g.etfAbove, etfRed: g.etfRed, usAbove: g.usAbove, usRed: g.usRed, usZero: g.usZero, hasUs: g.hasUs,
         usClose: g.usClose, usMa21: g.usMa21, usDif: g.usDif, miss: g.miss,
@@ -3775,7 +3733,7 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
   const usPct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%');
 
   // ── 重仓铁律（v7）：能不能重仓，只看 MACD 翻红 + 站上 MA21，溢价说了不算 ──
-  // 三档的仓位口径（未乘溢价系数）：非重仓档一律 ≤50%
+  // 四档的仓位口径（未乘溢价系数）：非重仓档一律 ≤50%
   const tryPct = Math.round((p != null && p < PREMIUM_ADD ? POS_TRY_CAP_CHEAP : POS_TRY_CAP) * 100);
   // 跑路档再取一次 min（必须 ≤ 试仓档），否则会出现「情况更坏了反而加仓」
   const runPct = Math.round(Math.min(
@@ -3803,13 +3761,15 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
       run: Math.min(POS_RUN_CAP, POS_TRY_CAP), runCheap: Math.min(POS_RUN_CAP_CHEAP, POS_TRY_CAP_CHEAP),
       maxNotHeavy: POS_MAX_NOT_HEAVY,
     },
-    label: tier === 'heavy' ? '重仓条件已满足' : (tier === 'try' ? '未确认 · 只能试仓' : '转弱 · 减仓跑路'),
+    label: tier === 'heavy' ? '重仓条件已满足' : (tier === 'run' ? '破位 · 减仓跑路' : (tier === 'watch' ? '动能转弱 · 持有观察' : '未确认 · 只能试仓')),
   };
   gateInfo.note = tier === 'heavy'
     ? `ETF 站上 MA21（${ma21Txt0}）且 MACD 翻红，纳指100 也站上 MA21 且动能不为负（MACD 翻红 或 DIF 在零轴上方）→ 两条都确认，可以按溢价正常加仓`
-    : (tier === 'try'
-      ? `还差：${gateInfo.miss.join('、')} → 动能已翻红但价格还没站回 MA21，溢价再低也只能试仓 ${tryPct}%`
-      : `触发：${gateInfo.miss.join('、')} → 按铁律减仓到 ${runPct}%（溢价 ${p == null ? '—' : p.toFixed(1) + '%'} 再低也只是留底仓，不能重仓）`);
+    : (tier === 'run'
+      ? `触发：${gateInfo.miss.join('、')} → 价格已经破 MA21，按铁律减仓到 ${runPct}%（溢价 ${p == null ? '—' : p.toFixed(1) + '%'} 再低也只是留底仓，不能重仓）`
+      : (tier === 'watch'
+        ? `还差：${gateInfo.miss.join('、')} → MACD 转弱但价格仍在 MA21 上方，先停止加仓/观察，不直接减仓`
+        : `还差：${gateInfo.miss.join('、')} → 动能已翻红但价格还没站回 MA21，溢价再低也只能试仓 ${tryPct}%`));
 
   const usInfo = {
     ok: usOk,
@@ -3862,12 +3822,14 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
       headline += ` 注意：若 ${PANIC_US_GRACE_DAYS} 个交易日内仍站不回 MA21，就撤回恐慌下限、按防守仓位执行（2026-01-21 那次扛满 30 天亏 6.1%）。`;
     }
   } else if (tier === 'run') {
-    // 铁律：ETF MACD 翻绿 / 纳指100「MACD 翻绿」或「跌破 MA21」→ 减仓跑路，溢价再低也不构成留下来的理由
     const prevPos = prev ? Math.round(prev.target * 100) : null;
     action = `减仓跑路 · ${posPct}%`; tone = 'danger';
-    headline = `${gateInfo.miss.join('、')}——按重仓铁律减仓，先降到 ${posPct}%${prevPos != null && prevPos > posPct ? `（昨日 ${prevPos}%）` : ''}。`
+    headline = `${gateInfo.miss.join('、')}——价格已经破 MA21，按重仓铁律减仓，先降到 ${posPct}%${prevPos != null && prevPos > posPct ? `（昨日 ${prevPos}%）` : ''}。`
       + `溢价${p == null ? '偏低' : ` ${p.toFixed(1)}%（${zone.label}）`}只说明「有性价比」，不构成重仓理由；`
       + `等 ETF MACD 重新翻红且收盘站回 MA21（${ma21Txt0}）才谈加仓。`;
+  } else if (tier === 'watch') {
+    action = `持有观察 · ${posPct}%`; tone = 'warn';
+    headline = `${gateInfo.miss.join('、')}——只是动能转弱，价格仍在 MA21（${ma21Txt0}）上方，先停止加仓、不直接减仓；若 MACD 翻绿并跌破 MA21，再降到减仓档。`;
   } else if (tier === 'try') {
     action = `只可试仓 · ${posPct}%`; tone = 'warn';
     headline = `${gateInfo.miss.join('、')}——还没满足「MACD 翻红 + 站上 MA21」这个重仓的唯一条件，`
@@ -3991,15 +3953,17 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
     ? (last.panicLapsed
         ? `恐慌抄底已触发超过 ${PANIC_US_GRACE_DAYS} 个交易日但仍站不回 MA21 → 撤回 ${Math.round(POS_PANIC_CAP * 100)}% 下限，按 ${posPct}% 的防守仓位执行`
         : last.panicAdded && tier !== 'run'
-          ? `恐慌抄底已获价格确认（站上 MA21）→ ${tier === 'heavy' ? `MACD 也翻红，补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%` : `MACD 未翻红，${Math.round(POS_PANIC_CAP * 100)}% 为限`}`
-          : `触发恐慌抄底信号 → 未满足重仓条件，按 ${posPct}% 试仓档打底（不因溢价低而重仓）`)
+          ? `恐慌抄底已获价格确认（站上 MA21）→ ${tier === 'heavy' ? `MACD 也翻红，补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%` : `${tier === 'watch' ? 'MACD 转弱但尚未破位' : 'MACD 未翻红'}，${Math.round(POS_PANIC_CAP * 100)}% 为限`}`
+          : `触发恐慌抄底信号 → 未满足重仓条件，按 ${posPct}% 防守仓位打底（不因溢价低而重仓）`)
     : tier === 'run'
-      ? `${gateInfo.miss.join('、')} → 减仓档 ${runPct}%（乘溢价系数后 ${posPct}%）：${cheapTxt}，但不满足「MACD 翻红 + 站上 MA21」就不能重仓`
-      : tier === 'try'
-        ? `${gateInfo.miss.join('、')} → 试仓档 ${tryPct}%（乘溢价系数后 ${posPct}%）：${cheapTxt}也只是从 ${Math.round(POS_TRY_CAP * 100)}% 放宽到 ${Math.round(POS_TRY_CAP_CHEAP * 100)}%，远不到重仓；收盘站回 MA21（${ma21Txt0}）且 MACD 翻红才抬到 ${Math.round(POS_DIP_CAP_BUY * 100)}~${Math.round(POS_DIP_CAP_CHEAP * 100)}%`
-        : (dipLiftBase != null && dipLiftBase > trendCap)
-          ? `重仓条件已满足（MACD 翻红 + 站上 MA21）→ 趋势基准上限 ${Math.round(trendCap * 100)}%，溢价 ${p.toFixed(1)}% 属便宜区 → 抬高到 ${Math.round(dipLiftBase * 100)}% 的抄底仓`
-          : `重仓条件已满足 → ${up ? '趋势向上' : '趋势破坏'}，基准上限 ${Math.round(trendCap * 100)}%（再乘溢价系数）`;
+      ? `${gateInfo.miss.join('、')} → 减仓档 ${runPct}%（乘溢价系数后 ${posPct}%）：${cheapTxt}，但价格已破 MA21，不能重仓`
+      : tier === 'watch'
+        ? `${gateInfo.miss.join('、')} → 动能观察档：价格仍在 MA21 上方，只停止加仓，不因 MACD 单独翻绿直接减仓`
+        : tier === 'try'
+          ? `${gateInfo.miss.join('、')} → 试仓档 ${tryPct}%（乘溢价系数后 ${posPct}%）：${cheapTxt}也只是从 ${Math.round(POS_TRY_CAP * 100)}% 放宽到 ${Math.round(POS_TRY_CAP_CHEAP * 100)}%，远不到重仓；收盘站回 MA21（${ma21Txt0}）且 MACD 翻红才抬到 ${Math.round(POS_DIP_CAP_BUY * 100)}~${Math.round(POS_DIP_CAP_CHEAP * 100)}%`
+          : (dipLiftBase != null && dipLiftBase > trendCap)
+            ? `重仓条件已满足（MACD 翻红 + 站上 MA21）→ 趋势基准上限 ${Math.round(trendCap * 100)}%，溢价 ${p.toFixed(1)}% 属便宜区 → 抬高到 ${Math.round(dipLiftBase * 100)}% 的抄底仓`
+            : `重仓条件已满足 → ${up ? '趋势向上' : '趋势破坏'}，基准上限 ${Math.round(trendCap * 100)}%（再乘溢价系数）`;
 
   return {
     action, tone, headline, entryNote, capNote, panic: last.panic, tier, gate: gateInfo,

@@ -117,7 +117,7 @@
       color: var(--text-primary);
       font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
-      max-width: 560px;
+      max-width: 480px;
       margin: 0 auto;
       min-height: 100vh;
     }
@@ -1405,6 +1405,8 @@
     .etf-pos-gate.heavy .etf-pos-gate-tag { color: #c93526; background: rgba(232,76,61,0.12); }
     .etf-pos-gate.try { border-left-color: #d29922; }
     .etf-pos-gate.try .etf-pos-gate-tag { color: #d29922; background: rgba(232,160,61,0.14); }
+    .etf-pos-gate.watch { border-left-color: #d29922; }
+    .etf-pos-gate.watch .etf-pos-gate-tag { color: #d29922; background: rgba(232,160,61,0.14); }
     .etf-pos-gate.run { border-left-color: #2ea043; }
     .etf-pos-gate.run .etf-pos-gate-tag { color: #2ea043; background: rgba(46,160,67,0.14); }
     .etf-gate-item { white-space: nowrap; }
@@ -1640,89 +1642,112 @@
     }
     .etf-signal-more:active { opacity: .6; }
 
-    @media (max-width: 480px) {
-      .etf-combo-table thead { display: none; }
-      .etf-combo-table,
-      .etf-combo-table tbody { display: block; }
-      .etf-combo-table tr {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 7px 6px;
-        margin: 9px 0;
-        padding: 9px;
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        background: var(--etf-panel);
-      }
-      .etf-combo-table td {
-        display: block;
-        min-width: 0;
-        border-bottom: none;
-        padding: 0;
-      }
-      .etf-combo-table td.sig-date {
-        grid-column: 1 / 3;
-        font-size: 11px !important;
-        line-height: 1.35;
-        color: var(--text-primary);
-      }
-      .etf-combo-table td.sig-date::before,
-      .etf-combo-table td.sig-sig::before,
-      .etf-combo-table td.sig-stat::before {
-        display: block;
-        margin: 0 0 3px;
-        color: var(--text-muted);
-        font-size: 9px;
-        font-weight: 500;
-      }
-      .etf-combo-table td.sig-date::before { content: '起始日'; }
-      .etf-combo-table td.sig-sig {
-        grid-column: 3 / 5;
-        text-align: right;
-        line-height: 1.35;
-      }
-      .etf-combo-table td.sig-sig::before { content: '信号'; }
-      .etf-combo-table td.sig-sig > .sig-badge {
-        padding: 3px 7px;
-        font-size: 10.5px;
-      }
-      .etf-combo-table td.sig-sig > div {
-        margin-top: 3px !important;
-        color: var(--text-secondary) !important;
-      }
-      .etf-combo-table td.sig-stat {
-        border: 1px solid var(--border-badge);
-        border-radius: 7px;
-        background: var(--bg-badge);
-        padding: 5px 6px;
-        font-size: 11px !important;
-        font-weight: 700;
-        line-height: 1.25;
-        text-align: left;
-        font-variant-numeric: tabular-nums;
-      }
-      .etf-combo-table td.sig-stat::before { content: attr(data-label); }
-      .etf-combo-table td.sig-ev {
-        grid-column: 1 / -1;
-        margin-top: 2px;
-        padding: 7px 8px;
-        border: 1px dashed var(--border);
-        border-radius: 8px;
-        background: rgba(136,153,170,0.06);
-        font-size: 9.8px !important;
-        line-height: 1.55 !important;
-      }
-      .etf-combo-table td.sig-ev::before {
-        content: '依据';
-        display: inline-block;
-        margin: 0 6px 3px 0;
-        padding: 1px 5px;
-        border-radius: 999px;
-        color: var(--text-secondary);
-        background: var(--bg-badge);
-        font-size: 9px;
-        font-weight: 600;
-      }
+    .etf-combo-table thead { display: none; }
+    .etf-combo-table,
+    .etf-combo-table tbody { display: block; }
+    .etf-combo-table tr {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 4px 8px;
+      margin: 10px 0;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--etf-panel);
+    }
+    .etf-combo-table td {
+      display: block;
+      min-width: 0;
+      border-bottom: none;
+      padding: 0;
+    }
+    .etf-combo-table td.sig-date::before,
+    .etf-combo-table td.sig-sig::before,
+    .etf-combo-table td.sig-stat::before {
+      display: block;
+      margin: 0 0 3px;
+      color: var(--text-muted);
+      font-size: 9px;
+      font-weight: 600;
+    }
+    .etf-combo-table td.sig-sig {
+      order: 1;
+      grid-column: 1 / 4;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 1px 0 2px;
+      text-align: left;
+      line-height: 1.35;
+    }
+    .etf-combo-table td.sig-sig::before { content: none; display: none; }
+    .etf-combo-table td.sig-sig > .sig-badge {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      font-size: 11.5px;
+    }
+    .etf-combo-table td.sig-sig > div {
+      min-width: 0;
+      margin: 0 !important;
+      color: var(--text-primary) !important;
+      font-size: 13px !important;
+      font-weight: 700;
+    }
+    .etf-combo-table td.sig-date {
+      order: 2;
+      grid-column: 4 / 5;
+      align-self: center;
+      justify-self: stretch;
+      padding: 1px 0 2px;
+      font-size: 10px !important;
+      line-height: 1.3;
+      color: var(--text-secondary);
+      text-align: left;
+    }
+    .etf-combo-table td.sig-date::before { content: none; display: none; }
+    .etf-combo-table td.sig-stat {
+      padding: 3px 0 5px;
+      border: none;
+      border-bottom: 1px solid var(--border);
+      background: transparent;
+      border-radius: 0;
+      font-size: 11.5px !important;
+      font-weight: 700;
+      line-height: 1.25;
+      text-align: left;
+      font-variant-numeric: tabular-nums;
+    }
+    .etf-combo-table td.sig-stat[data-label="溢价"] { order: 3; grid-column: 1 / 2; }
+    .etf-combo-table td.sig-stat[data-label="价格"] { order: 4; grid-column: 2 / 3; }
+    .etf-combo-table td.sig-stat[data-label="仓位"] { order: 5; grid-column: 3 / 4; }
+    .etf-combo-table td.sig-stat[data-label="后20日"] { order: 6; grid-column: 4 / 5; }
+    .etf-combo-table td.sig-stat::before { content: attr(data-label); }
+    .etf-combo-table td.sig-ev {
+      order: 7;
+      grid-column: 1 / -1;
+      margin-top: -2px;
+      padding: 0;
+      border-top: 1px dashed var(--border);
+      font-size: 9.8px !important;
+      line-height: 1.5 !important;
+    }
+    .etf-combo-table td.sig-ev::before {
+      content: '依据';
+      display: block;
+      margin: 0 0 2px;
+      color: var(--text-muted);
+      font-size: 9px;
+      font-weight: 600;
+    }
+    .etf-combo-table .sig-ev-item {
+      display: flex;
+      gap: 5px;
+      color: var(--text-secondary);
+    }
+    .etf-combo-table .sig-ev-no {
+      flex: 0 0 auto;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
     }
 
     /* ── 关键指标 ── */
@@ -2884,7 +2909,7 @@ function etfPosAdviceHtml() {
   const item = (label, v, extra) => `<span class="etf-gate-item ${v === true ? 'on' : 'off'}">${esc(label)} <b>${mark(v)}</b>${extra ? ` <i>${esc(extra)}</i>` : ''}</span>`;
   const gateLine = g ? `
         <div class="etf-pos-gate ${esc(g.tier)}">
-          <span class="etf-pos-gate-tag">${g.tier === 'heavy' ? '重仓条件已满足 ✓' : (g.tier === 'try' ? '未确认 · 只能试仓 ⚠' : '转弱 · 减仓跑路 ⚠')}</span>
+          <span class="etf-pos-gate-tag">${g.tier === 'heavy' ? '重仓条件已满足 ✓' : (g.tier === 'run' ? '破位 · 减仓跑路 ⚠' : (g.tier === 'watch' ? '动能转弱 · 持有观察 ⚠' : '未确认 · 只能试仓 ⚠'))}</span>
           ${item('ETF 站上 MA21', g.etfAbove, g.ma21 != null ? g.ma21.toFixed(3) : '')}
           ${item('ETF MACD 翻红', g.etfRed)}
           ${item('纳指100 站上 MA21', g.usAbove, g.usClose != null ? g.usClose.toFixed(0) : '')}
@@ -3339,7 +3364,7 @@ function etfIntradayHtml() {
 //  金叉全吞掉了（8/21 死叉、8/24 跌破 MA21、9/18 金叉在清单里全部消失）。
 //  v4：① 高溢价（≥22%）仓位一律压到 3 成以内（≥27% → 2 成），高溢价只提示
 //      「少量买入 / 持有不加仓」，不追高加仓；
-//      ② 高溢价区恢复 MACD 级别的离散买卖点：死叉 → 减仓，死叉后首次跌破 MA21 →
+//      ② 高溢价区恢复 MACD 级别的离散提示：死叉 → 走弱预警，死叉后首次跌破 MA21 →
 //      确认减仓（一轮空头只确认一次），金叉 → 少量买入（≤3 成）；
 //      ③ 只有趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）才降到 3 成以内，
 //      溢价 ≥27 且趋势同破才减半。
@@ -3523,7 +3548,9 @@ function etfSignalsHtml() {
   const rows = show.map(s => {
     const f = s.fwd20Pct;
     const follow = f == null ? '待验证' : `<span class="${cls(f)}">${etfPct(f)}</span>`;
-    const ev = (s.evidence || []).join('<br>');
+    const ev = (s.evidence || [])
+      .map((x, i) => `<div class="sig-ev-item"><span class="sig-ev-no">${i + 1}.</span><span>${x}</span></div>`)
+      .join('');
     return `<tr>
       <td class="num sig-date" style="font-size:9.5px;white-space:nowrap">${segLabel(s)}</td>
       <td class="num sig-stat" data-label="价格">${s.close.toFixed(3)}</td>
@@ -3567,17 +3594,13 @@ function etfSignalsHtml() {
     ${statLine ? `<div class="etf-legend" style="margin-top:6px"><span>${statLine}</span></div>` : ''}
     ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
-      <span><b>v8 新增：走弱预警 / 减仓层（与溢价彻底解耦）</b>。起因是 2025-12 那波走弱在清单里<b>完全没有减仓提示</b>——卖出侧原本整个长在「高溢价（≥22%）」分支里，而 2025-12-16 的溢价只有 20.6%、2026-01-12 只有 19.0%，落在中低溢价区，走弱信号被整个吞掉。现在「翻绿 / 跌破 MA21」独立计分，<b>溢价多低都不豁免</b>（低溢价只代表便宜，不代表不会继续跌）：四条各 1 分 = 纳指科技跌破 MA21、纳指科技 MACD 翻绿、纳指100 跌破 MA21、纳指100 MACD 翻绿。
-      <b>三级输出</b>：<b class="down">清仓/减半</b> = 纳指科技与纳指100 <b>同时</b>转坏（趋势级，立即执行）；<b class="down">减仓</b> = 只有本 ETF 自己转弱但已连续 3 个交易日没修复（只闪一天的回调不减仓——实测那样会把回测从 +254% 打到 +74%）；<b style="color:#e6912d">走弱预警</b> = 刚出现的单日征兆，另含 <b>MACD 红柱连续 2 日缩短且 DIF 拐头</b> 这个比死叉更早的动能衰竭前兆（2025-12-12 就触发了，比 12-16 死叉早 2 个交易日）。
-      <b>v8.1 清仓铁律</b>（用户原话）：<b>收盘价有一天同时低于 MA21 + MA30 → 马上清仓</b>；<b>同时低于 MA21 + MA30 + MA60 → 跑路清仓</b>；<b>纳指100 出现同样情况 → 也清仓</b>。不等持续、不看溢价。实测（764 日）：清仓段后 20 日命中率 37% → <b>50%</b>（更准了）；按段回测 +217%（v8 为 +243%、买入持有 +224%）。<b>用户定的立场</b>：<b>「三条均线全破」就是清仓标准，不讨论、不豁免</b>——它有时正好出现在阶段底部（2025-04-16、2026-07-17 全破后反弹了 +13%/+12%），但<b>不能去赌</b>；清仓之后若买入机会重新出现（重新翻红 + 站回 MA21），再买回来也不迟。所以「跑路清仓」段信号后 20 日正确率偏低（约 21%）是<b>有意接受的</b>，不是策略缺陷。
-      <br>口径（v7.2）：<b>重仓的唯一条件 = MACD 翻红 且 收盘站上 21 日均线</b>，纳指科技 ETF 与纳斯达克 100 都要满足；溢价只决定在这三档里多买/少买一点，<b>永远不能把「便宜」升级成「重仓」</b>。
-      <b>三档门控</b>：<b class="up">重仓档</b>（四条全满足）→ 按溢价正常加仓，&lt;15% 可到 85%；<b>试仓档</b>（两条都翻红，但 ETF 自己还没站回 MA21）→ <b>溢价 ≥15% 只 20%、&lt;15% 才 35%</b>；<b class="down">跑路档</b>（ETF MACD 翻绿，或纳指100「MACD 翻绿」/「跌破 MA21」）→ 减到 20%（&lt;15% 留 35%）。<b>入场认翻红、跑路认跌破 MA21</b>（外加 ETF 自己翻绿）——这是 8 种组合里实测最好的一组。
-      <b>v7 的起因</b>：2026-01~03 只按「溢价低 → 抄底仓 85%」一路加仓，跟着美股跌了 3 个月（跟随者口径均仓 82%、亏损 14.4%）——
-      <b>溢价低只代表「有性价比」，不是抄底/重仓的理由</b>。v7 之后同一段全程压在 6~35%，<b>仓位 &gt;50% 的天数为 0</b>，跟随者亏损收窄到 4.9%。
-      <b>v7.1 收紧试仓档</b>：2026-01-21~02-03 那段标「恐慌试仓」但溢价在 15~18%，当时给到 35%，结果一路跌到 3 月——<b>试错的仓位不该接近半仓</b>。所以试仓档由 35%/45% 下调为 <b>20%（溢价 ≥15%）/ 35%（溢价 &lt;15%）</b>；恐慌「试仓」同样按这一档。
-      <b>v7.2 修正：入场与跑路拆成两条判定</b>。起因是 <b>2026-04-08 两条标的都已翻红、都已站上 MA21</b>，却因只认「纳指100 的 DIF 必须在零轴上方」被判成跑路档（那天 DIF 是 -245.8，前期跌太深、金叉发生在零轴下方），偏离了「MACD 翻红 + 站上 MA21 才能重仓」这条原则。现按用户原话把两者分开：<b>入场</b>——两条都站上 MA21 且 MACD 翻红（美股动能够不着时允许「DIF 已在零轴上方」顶替）；<b>跑路</b>——ETF MACD 翻绿，或纳指100「MACD 翻绿」/「跌破 MA21」。8 种组合实测（764 日）：只改入场、跑路仍看 DIF 破零轴 → +197% / 回撤 -19.3%（回撤反而恶化）；入场+跑路全改成「一翻绿就跑」 → +124% / -18.0%；美股完全不看 MACD → +208% / -18.9%；<b>本方案 → +212% / -15.9%</b>，4/8 起重仓档生效。反直觉的一点：<b>「翻红」当入场条件很好，但「一翻绿就跑路」代价极大</b>——纳指100 死叉太频繁、隔夜时差又让它和本 ETF 不同步；而「跌破 MA21」做跑路条件几乎不损失收益。
+      <span><b>v9 调整：MACD 单独翻绿只预警，减仓必须看价格破位</b>。2026-08-19 复盘发现：纳指科技在 MACD 红柱缩短、随后翻绿后并没有继续下跌，而是横盘震荡后重新上涨。结论是：<b>MACD 翻绿只代表动能降温，不代表价格一定会跌</b>，不能单独触发减仓。
+      <b>新的分级</b>：<b style="color:#e6912d">走弱预警</b> = MACD 翻绿 / 红柱连续缩短 / DIF 拐头，但价格仍在 MA21 上方，只停止加仓；<b class="down">减仓</b> = MACD 翻绿并跌破 MA21（纳指科技或纳指100）；<b class="down">清仓/减半</b> = 跌破 MA21 + MA30；<b class="down">跑路清仓</b> = MA21 + MA30 + MA60 三线全破。溢价仍只决定仓位上限，不能把破位信号豁免掉。
+      <b>v8.1 清仓铁律</b>（用户原话）：<b>收盘价有一天同时低于 MA21 + MA30 → 马上清仓</b>；<b>同时低于 MA21 + MA30 + MA60 → 跑路清仓</b>；<b>纳指100 出现同样情况 → 也清仓</b>。不等持续、不看溢价。<b>用户定的立场</b>：<b>「三条均线全破」就是清仓标准，不讨论、不豁免</b>——它有时正好出现在阶段底部，但<b>不能去赌</b>；清仓之后若买入机会重新出现（重新翻红 + 站回 MA21），再买回来也不迟。
+      <br>口径：<b>重仓的唯一条件 = MACD 翻红 且 收盘站上 21 日均线</b>，纳指科技 ETF 与纳斯达克 100 都要满足；溢价只决定在这三档里多买/少买一点，<b>永远不能把「便宜」升级成「重仓」</b>。
+      <b>门控</b>：<b class="up">重仓档</b>（四条全满足）→ 按溢价正常加仓，&lt;15% 可到 85%；<b>观察档</b>（MACD 翻绿但价格仍在 MA21 上方）→ 持有观察、不加仓；<b>试仓档</b>（动能恢复但价格还没站回 MA21）→ <b>溢价 ≥15% 只 20%、&lt;15% 才 35%</b>；<b class="down">跑路档</b>（MACD 翻绿且跌破 MA21）→ 减到 20%（&lt;15% 留 35%）。
       <b>恐慌抄底也守这条铁律</b>：未满足重仓条件时只给<b>「恐慌试仓」</b>（溢价 ≥15% 只 20%、&lt;15% 给 35%），不再喊重仓买入；已站上 MA21 但未翻红 → 65%，翻红才补到 85%。触发后 10 个交易日仍站不回 MA21 则撤回、转<b>「抄底未确认」</b>（2026-01-21、2025-03-04 两次各亏 6.1% / 5.4%）。
-      <b>溢价系数</b>：&lt;15% 满仓、15~18% 九成、18~22% 半仓、22~27% 两成半、≥27% 一成半（18~22% 由八成下调到半仓——2026-01 那波跌就是溢价从 23% 压缩到 15%）。低溢价买点仍需命中「不追高」过滤（威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）。高溢价区保留 MACD 级买卖点：<b>死叉 → 减仓</b>、死叉后首次<b>跌破 MA21 → 确认减仓</b>、<b>金叉 → 少量买入（≤3 成）</b>；趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）降到 3 成以内。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>=买对了，<b class="down">卖出信号为负</b>=减仓躲过了下跌。</span>
+      <b>溢价系数</b>：&lt;15% 满仓、15~18% 九成、18~22% 半仓、22~27% 两成半、≥27% 一成半（18~22% 由八成下调到半仓——2026-01 那波跌就是溢价从 23% 压缩到 15%）。低溢价买点仍需命中「不追高」过滤（威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）。高溢价区保留 MACD 级提示：<b>死叉 → 走弱预警</b>、死叉后首次<b>跌破 MA21 → 减仓</b>、<b>金叉 → 少量买入（≤3 成）</b>。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>=买对了，<b class="down">卖出信号为负</b>=减仓躲过了下跌。</span>
     </div>`;
 }
 
