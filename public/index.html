@@ -1966,9 +1966,8 @@ function effectiveChange(q, opts = {}) {
   // 24h 视图统一口径（「今日」以美东日期推进）：
   // ① 美股：盘中用实时涨跌；收盘后读最新夜盘/盘前真实成交（见 OVERNIGHT/PRE 分支）
   // ② 其他市场（日/韩/港/台/A股）：只读「下一个交易日」——即美东傍晚/夜间
-  //    陆续开盘的当地 session（东京/首尔 20:00 ET 开盘，港股/A股 21:30 ET），
-  //    开盘中读实时涨跌；未开盘 / 已收盘 / 节假日一律按 0。
-  //    不再把"上一交易日"的收盘涨跌当作当前涨跌（那已是历史，不属于美东今日）
+  //    陆续开盘并完成的当地 session；当天已交易则显示实时/收盘最终涨跌，
+  //    节假日或未进入新交易日时按 0。
   if (q.tradingToday === false) return 0;
 
   // 现货指数报价（znb_ 通道，如 NDXTMC）：仅美股盘中存在实时变动，
@@ -1976,10 +1975,10 @@ function effectiveChange(q, opts = {}) {
   if (mode === '24h' && q.regularOnly && s !== 'REGULAR') return 0;
 
   if (mode === '24h') {
-    // 非美市场（带 tradingToday 标记）：开盘才有涨跌，否则 0。
+    // 非美市场（带 tradingToday 标记）：当天已有交易则显示实时/收盘最终涨跌。
     // marketState 由后端按当地时间实时标注（withTradingDay → marketSessionState）
     if (q.tradingToday != null) {
-      return s === 'REGULAR' ? (q.regularMarketChangePercent ?? 0) : 0;
+      return q.regularMarketChangePercent ?? 0;
     }
     // 24h模式：实时显示当前时段数据
     // 盘中：直接用盘中实时涨跌
