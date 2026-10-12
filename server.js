@@ -1541,11 +1541,13 @@ function computeOvernightQuote({
     (!sina?.afterHoursPrice || Math.abs(yahooFullday - sina.afterHoursPrice) / sina.afterHoursPrice > 0.001);
 
   // 雪球夜盘（富途同款 Blue Ocean 通道）是否可用：
-  //   个股 = 时间戳落在"本轮夜盘"内；指数 ETF 有连续期货代理，雪球滞后时改用期货。
+  //   判定标准 = 时间戳落在"本轮夜盘"内（xqInSession），不按"距今多少分钟"。
+  //   夜盘尾声（约 03:30 ET 之后）成交稀疏，雪球的推送间隔会拉到几十分钟，
+  //   但最后一条仍是真实成交价（富途夜盘同源），按距今判定会把 ETF 误切到期货代理，
+  //   而 NQ/ES 与 QQQ/SPY 之间存在基差（实测：雪球 +0.31% vs NQ +0.23%），
+  //   期货代理在夜盘中后段会持续偏离真实 ETF 价。
   const xqTs = xq && xq.timestampNight != null ? xq.timestampNight : null;
-  const xqAge = xqTs ? Date.now() - xqTs : Infinity;
   const xqInSession = xqTs != null && xqTs >= overnightSessionStart - 30 * 60000;
-  const xqFreshEnough = !etfFut || xqAge <= XUEQIU_ETF_MAX_LAG_MS;
   const xqPrice = xq && xq.currentNight != null ? xq.currentNight : null;
 
   let chg = null;
@@ -1563,7 +1565,7 @@ function computeOvernightQuote({
   const extMaxLag = etfFut ? XUEQIU_ETF_MAX_LAG_MS : 30 * 60_000;
   const xqExtFresh = xqExtTs != null && xqExtAge <= extMaxLag;
 
-  if (xqInSession && xqFreshEnough && xqPrice != null && closeForOvernight > 0) {
+  if (xqInSession && xqPrice != null && closeForOvernight > 0) {
     // 雪球自带的 percent_night_session 即"相对正股收盘价"的夜盘涨跌幅，
     // 与富途 App 完全同口径，优先直接采用，避免自行换算再引入偏差。
     chg = isFinite(xq.percentNight)

@@ -1991,15 +1991,11 @@ function effectiveChange(q, opts = {}) {
     //    （期货 vs 昨结算价会把整个常规盘涨幅重复计入，例：QQQ 收盘 +1.02%、
     //     盘后终价≈持平，期货口径却显示 +0.99%）
     if (s === 'OVERNIGHT') {
-      // 雪球夜盘 tick（富途「夜盘」同款）或雪球扩展行情最新成交（盘后+夜盘连续），
-      // 两者均为真实成交、基准同为正股收盘价
-      if ((q.overnightSource === 'xueqiu' || q.overnightSource === 'xueqiu-ext') && q.overnightChangePercent != null) {
-        return q.overnightChangePercent;
-      }
-      const closePrice = q.closePrice || q.regularMarketPrice;
-      if (q.afterHoursPrice && closePrice) {
-        return ((q.afterHoursPrice - closePrice) / closePrice) * 100;
-      }
+      // 后端 computeOvernightQuote 已按优先级选好源（xueqiu > xueqiu-ext > yahoo > futures > proxy），
+      // 并把结果放进 overnightChangePercent。直接采用，不要再用 sina afterHoursPrice 重新计算——
+      // afterHoursPrice 是盘后定盘价，可能停滞数天，会覆盖掉后端实时的期货/yahoo 代理值
+      // （实测 QQQ：afterHoursPrice 卡在上周五 751.3754 → 算出来 +0.01%，
+      //  但后端 futures 代理实际 +0.10%，被前者覆盖）。
       return q.overnightChangePercent ?? 0;
     }
     // 盘前：eastmoney 的 regularMarketChangePercent 已是盘前实时价 vs 昨收
