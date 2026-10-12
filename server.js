@@ -1552,6 +1552,17 @@ function computeOvernightQuote({
   let price = null;
   let source = null;
 
+  // 雪球扩展行情（current_ext/percent_ext）的时效性校验：
+  //   实测 QQQ 在雪球上盘后/夜盘 tick 可能数天没更新（xqNightLatestTs 停在 10/9），
+  //   而 percent_ext 字段仍在返回该陈旧值。若不加时效校验直接采用，会跳过后续
+  //   更准的 NQ/ES 期货代理分支，导致 QQQ 等 ETF 在 OVERNIGHT 时段显示几天前的涨幅。
+  const xqExtTs = xq && xq.timestampExt != null ? xq.timestampExt : null;
+  const xqExtAge = xqExtTs ? Date.now() - xqExtTs : Infinity;
+  // 个股容忍度放宽（30 分钟）：尾盘成交稀疏时 ext 数分钟不更新也正常；
+  // ETF 有连续期货代理，过期则优先期货。
+  const extMaxLag = etfFut ? XUEQIU_ETF_MAX_LAG_MS : 30 * 60_000;
+  const xqExtFresh = xqExtTs != null && xqExtAge <= extMaxLag;
+
   if (xqInSession && xqFreshEnough && xqPrice != null && closeForOvernight > 0) {
     // 雪球自带的 percent_night_session 即"相对正股收盘价"的夜盘涨跌幅，
     // 与富途 App 完全同口径，优先直接采用，避免自行换算再引入偏差。
@@ -1560,7 +1571,7 @@ function computeOvernightQuote({
       : ((xqPrice - closeForOvernight) / closeForOvernight) * 100;
     price = xqPrice;
     source = 'xueqiu';
-  } else if (xq && xq.currentExt != null && isFinite(xq.percentExt)) {
+  } else if (xqExtFresh && xq && xq.currentExt != null && isFinite(xq.percentExt)) {
     // 夜盘 tick 尚未刷新（本轮夜盘还没成交推送）时，退而用雪球扩展行情
     // current_ext/percent_ext——盘后+夜盘连续的最新成交价，同样以正股收盘为基准
     // （实测 MKSI：ext 282.48/+1.19% vs 收盘 279.15；盘后 tape 的 286.57/+2.66%
