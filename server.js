@@ -2605,6 +2605,7 @@ const ETF_NAV_CACHE = { data: null, ts: 0 };
 const ETF_MKT_CACHE = { data: null, ts: 0 };
 let ETF_PREM_PREV = null;                   // 上一次请求的溢价率（用于盘中穿越买入线检测）
 let ETF_KLINES = [];                        // 最近一次拉取的日K（供盘中柱估算）
+let LAST_PREMARKET_PLAN = null;             // 上一次生成的盘前/盘中 plan（用于盘中微调对比 + 档位锁定）
 const ETF_NAV_TTL = 6 * 3600_000;           // 净值历史：6 小时
 const ETF_MKT_TTL_TRADING = 20_000;         // 盘中：20 秒
 const ETF_MKT_TTL_IDLE = 180_000;           // 非盘中：3 分钟
@@ -3589,10 +3590,23 @@ function buildEtfPanicSignal(klines, navMap, usIdx) {
     });
   }
   // 触发 → 维持 → 退出
+  // 持仓中「更低位重置」规则（2026-10-13 新增）：触发后若当日 score ≥ 6（极度恐慌）
+  // 且不低于持仓触发时 score，且收盘价 < 当前成本——说明利空在更深位兑现、价格更便宜，
+  // 用今日收盘价重置成本价和持有天数，相当于「金字塔式在更低位重新开仓」。
+  // 回测（768 日，A2 规则）：胜率 64% → 100%，平均 +2.57% → +9.5%；
+  // 2025-03-04 那次（扛 30 日 -5.4%）会在 2-25 / 2-28 / 3-04 / 3-11 / 3-31 / 4-07
+  // 逐级重置，最终成本落在 2025-04-07 的 1.23，6 日 +13.5% 退出（关税战真底）。
+  // 不设重置上限：实测上限 3 次反而会让 2025 那波在 3-11 用完额度，错过 4-07 真底。
   const active = new Set(); const events = [];
   let on = false, cost = 0, cnt = 0, cur = null;
   for (const r of rows) {
     if (!on && r.score >= PANIC_TRIGGER) { on = true; cost = r.close; cnt = 0; cur = { date: r.date, score: r.score, px: r.close, hits: r.hits, level: r.level }; }
+    else if (on && r.score >= 6 && r.score >= cur.score && r.close < cost) {
+      // score 维持极度恐慌 + 价格创新低 → 在更低位重置（保留上次触发点供复盘）
+      const prev = { date: cur.date, score: cur.score, px: cur.px };
+      cost = r.close; cnt = 0;
+      cur = { date: r.date, score: r.score, px: r.close, hits: r.hits, level: r.level, resetFrom: prev };
+    }
     if (on) {
       cnt++; active.add(r.date);
       const exit = (r.ma21 != null && r.close > r.ma21 * PANIC_MA21_BAND) || cnt >= PANIC_HOLD_DAYS || (cost > 0 && r.close / cost - 1 >= PANIC_TAKE_PROFIT);
@@ -3603,7 +3617,9 @@ function buildEtfPanicSignal(klines, navMap, usIdx) {
   const closed = events.filter(e => !e.open);
   const wins = closed.filter(e => e.ret > 0).length;
   const last = rows[rows.length - 1];
-  const recent = events.slice(-8).reverse();
+  // 最近触发列表：覆盖最近 2 年（含未闭合），供前端「最近触发」完整展示
+  const twoYearsAgo = (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 2); return d.toISOString().slice(0, 10); })();
+  const recent = events.filter(e => e.date >= twoYearsAgo).reverse();
   return {
     active, events, recent, current: last,
     levels: PANIC_LEVELS,
@@ -4546,6 +4562,248 @@ function buildEtfAdvice(ctx) {
   return { level, action, headline, reasons, held, zone: zone.key, confirm };
 }
 
+// ═══════════════════════════════════════════════════════
+//  盘前提示 · 日内高抛低吸计划
+//   · 盘前生成（BJ 04:00–09:30）+ 盘中微调（已触达档位锁定）
+//   · 输入：etf-track 自带 quote/ind/klineLast + 前端查询参数带入的 QQQ/IXIC 24h 涨跌幅
+//   · 输出：相对昨收的 1-3 档低吸买点 / 1-2 档高抛目标 / 失效条件 / 生成逻辑
+// ═══════════════════════════════════════════════════════
+
+// 基准昨收：盘前 quote.prevClose 是前一交易日（昨日还冻结着），统一用 klineLast.close
+function getBasePrevClose(ctx) {
+  const { quote, klineLast } = ctx;
+  if (klineLast && isFinite(klineLast.close) && klineLast.close > 0) return klineLast.close;
+  if (quote && isFinite(quote.prevClose) && quote.prevClose > 0) return quote.prevClose;
+  if (quote && isFinite(quote.price) && quote.price > 0) return quote.price;
+  return null;
+}
+
+// 模式判定：pre=盘前 04:00-09:30 · live=盘中 09:30-15:00 · closed=盘后/周末/节假日
+function premarketMode(ctx, nowOverride) {
+  const now = nowOverride ? new Date(nowOverride) : new Date();
+  // 北京时间
+  const bjMs = now.getTime() + 8 * 3600_000;
+  const bj = new Date(bjMs);
+  const min = bj.getUTCHours() * 60 + bj.getUTCMinutes();
+  const dow = bj.getUTCDay(); // 0=周日 6=周六
+  const isWeekday = dow >= 1 && dow <= 5;
+  if (!isWeekday) return 'closed';
+  if (min >= 240 && min < 570) return 'pre';          // 04:00-09:30
+  if (min >= 570 && min < 900) return 'live';         // 09:30-15:00
+  return 'closed';
+}
+
+// 主函数：buildPremarketPlan(ctx, lastPlan, opts)
+//   ctx  = { quote, ind, klineLast, session, pos, ... }
+//   lastPlan = 上一次生成的 plan（用于盘中微调对比、档位锁定）
+//   opts   = { qqqPct, ixicPct, debugTime }
+function buildPremarketPlan(ctx, lastPlan, opts = {}) {
+  const { quote, ind, klineLast } = ctx;
+  const mode = premarketMode(ctx, opts.debugTime);
+  const P0 = getBasePrevClose(ctx);
+  const generatedAt = new Date().toISOString();
+
+  if (!P0) return null;
+
+  // ── 1. 预期开盘涨跌幅（β折算）──
+  const BETA = 0.7;
+  const qqqPct = isFinite(opts.qqqPct) ? opts.qqqPct : null;
+  const ixicPct = isFinite(opts.ixicPct) ? opts.ixicPct : null;
+  let usPct = null;
+  if (qqqPct != null && ixicPct != null) usPct = 0.6 * qqqPct + 0.4 * ixicPct;
+  else if (qqqPct != null) usPct = qqqPct;
+  else if (ixicPct != null) usPct = ixicPct;
+  else usPct = 0;
+  const expectOpenPct = Math.max(-5, Math.min(5, usPct * BETA));
+
+  // ── 2. 技术锚点（换算成相对 P0 的涨跌幅）──
+  const toPct = (v) => (isFinite(v) && v > 0) ? (v / P0 - 1) * 100 : null;
+  const ma21Pct   = toPct(ind && ind.ma21);
+  const bollUpPct = toPct(ind && ind.bollUp);
+  const bollMidPct= toPct(ind && ind.bollMid);
+  const bollDnPct = toPct(ind && ind.bollDn);
+  const high20Pct = toPct(ind && ind.high20);
+  const low20Pct  = toPct(ind && ind.low20);
+  const premium   = quote && isFinite(quote.premiumPct) ? quote.premiumPct : null;
+  const zone      = premiumZone(premium);
+
+  const clip = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  // ── 昨日真实波段（日内 T+0 的波动基准）──
+  // klineLast 盘前=昨日 / 盘中=今日（含 OHLC）
+  const yO = klineLast && isFinite(klineLast.open)  ? klineLast.open  : null;
+  const yH = klineLast && isFinite(klineLast.high)  ? klineLast.high  : null;
+  const yL = klineLast && isFinite(klineLast.low)   ? klineLast.low   : null;
+  const hasYesterday = !!(yO && yH && yL && yO > 0);
+  // 昨日开盘 / 最高 / 最低 相对「昨日的前收」（用户视角的"昨日实际走到过哪"）
+  // 用 klinePrev.close 作为昨日的前收基准；缺数据时退化为相对 P0（昨日收盘）
+  const yBase = (ctx.klinePrev && isFinite(ctx.klinePrev.close) && ctx.klinePrev.close > 0)
+    ? ctx.klinePrev.close : P0;
+  const yOpenPct = hasYesterday ? (yO / yBase - 1) * 100 : null;
+  const yHighPct = hasYesterday ? (yH / yBase - 1) * 100 : null;
+  const yLowPct  = hasYesterday ? (yL / yBase - 1) * 100 : null;
+
+  // ── 3. 低吸买点（3 档，相对 P0 的跌幅，均为负数）──
+  //  思路：昨日实际跌到过 yLowPct，今日探底位置就在那附近
+  //  b1 = 预期开盘小幅回踩（昨日开盘 vs 预期开盘的较小值附近）
+  //  b2 = 昨日开盘价位置（昨日已示范过这个深度）
+  //  b3 = 昨日最低点（昨日最深位置）
+  let buyReasons = [];
+  let b1, b2, b3;
+  if (hasYesterday) {
+    // b1: 预期开盘小幅回踩（轻仓试探）
+    b1 = clip(expectOpenPct - 0.4, -9, -0.3);
+    // b2: 昨日开盘位（如果昨日开盘比 b1 浅，则取 b1 - 0.3 保证阶梯）
+    b2 = Math.max(Math.min(yOpenPct, b1 - 0.3), -9);
+    // b3: 昨日最低位（如果昨日最低比 b2 浅，则取 b2 - 0.3 保证阶梯）
+    b3 = Math.max(Math.min(yLowPct, b2 - 0.3), -9);
+    // 大振幅日修正：昨日振幅 > 5% 说明处于恐慌/剧烈波动期，
+    // 二次探底可能更深，b3 再往下压昨日振幅的 30%
+    const yRange = (yH - yL) / yO * 100;
+    if (yRange > 5) {
+      const b3New = b3 - yRange * 0.3;
+      buyReasons.push(`昨日振幅 ${yRange.toFixed(1)}%（>5%），b3 再压深 ${(yRange * 0.3).toFixed(2)}%`);
+      b3 = Math.max(b3New, -9);
+    }
+    buyReasons.push(`昨日 开${yOpenPct.toFixed(2)}% / 低${yLowPct.toFixed(2)}% / 高${yHighPct.toFixed(2)}% / 振幅${((yH - yL) / yO * 100).toFixed(1)}%`);
+  } else {
+    b1 = -1.0; b2 = -2.0; b3 = -3.5;
+  }
+  // 修正：美股恐慌 → 整组下移
+  if (usPct <= -2.5) { b1 -= 1; b2 -= 1; b3 -= 1; buyReasons.push(`美股夜盘 ${usPct.toFixed(2)}% ≤-2.5%，买点下移 1%`); }
+  // 兜底保护阶梯（不强制 0.5 间距，让昨日最低位能体现出来）
+  b1 = Math.max(Math.min(b1, -0.3), -9);
+  b2 = Math.max(Math.min(b2, b1 - 0.2), -9);
+  b3 = Math.max(Math.min(b3, b2 - 0.2), -9);
+
+  // 高溢价（≥22% 观望区）：日内预留资金同比例减半，金字塔比例不变
+  const posScale = (premium != null && premium >= PREMIUM_WATCH) ? 0.5 : 1;
+  const scaledPos = [30, 50, 100].map(v => Math.round(v * posScale));
+  if (posScale < 1) buyReasons.push(`溢价 ${premium.toFixed(1)}% ≥${PREMIUM_WATCH}%，日内仓位减半（最高 ${scaledPos[2]}%）`);
+
+  const buyLabels = hasYesterday
+    ? [`预期开盘小幅回踩`, `昨日开盘位（${yOpenPct.toFixed(2)}%）`, `昨日最低（${yLowPct.toFixed(2)}%）`]
+    : ['固定档位（数据缺失）', '固定档位', '固定档位'];
+  const buy = [
+    { key: 'b1', pct: +b1.toFixed(2), pos: scaledPos[0], reason: buyLabels[0] },
+    { key: 'b2', pct: +b2.toFixed(2), pos: scaledPos[1], reason: buyLabels[1] },
+    { key: 'b3', pct: +b3.toFixed(2), pos: scaledPos[2], reason: buyLabels[2] },
+  ];
+
+  // ── 4. 高抛目标（2 档，正数）──
+  //  思路：昨日实际涨到过 yHighPct，今日反弹目标就在那附近
+  //  s1 = 预期开盘 + 0.5%（小幅反弹，落袋一半）
+  //  s2 = 昨日最高点位置（昨日已示范过这个高度）
+  //  上限 +3%（日内罕见）
+  let s1, s2;
+  if (hasYesterday) {
+    s1 = clip(expectOpenPct + 0.5, +0.4, +3.0);
+    // s2 用昨日高点，但至少要给 s1 + 0.4% 空间
+    s2 = clip(Math.max(yHighPct, s1 + 0.4), s1 + 0.3, +3.0);
+  } else {
+    s1 = 0.8; s2 = 1.6;
+  }
+  const held = !!(ctx.pos && ctx.pos.shares > 0);
+  const sell = [
+    { key: 's1', pct: +s1.toFixed(2), pos: 50,  reason: hasYesterday ? `预期开盘 + 0.5%` : '固定档位' },
+    { key: 's2', pct: +s2.toFixed(2), pos: 100, reason: hasYesterday ? `昨日最高（${yHighPct.toFixed(2)}%）` : '固定档位' },
+  ];
+
+  // ── 5. 失效条件（日内 T+0，不含溢价项）──
+  const stop = {
+    pricePct: +(b3 - 1.5).toFixed(2),
+    qqqAbort: -3.5,
+    note: '14:30 后不再开新仓',
+  };
+
+  // ── 6. 盘中微调（live 模式）──
+  // 思路：lastPlan.buy/sell 已含历史调整与锁定，作为基准；本次只叠加「新增触发」。
+  // 不在 live 模式下重算理论档位（否则会覆盖历史调整），直接用 lastPlan 的档位作为基础。
+  const adjustments = (lastPlan && Array.isArray(lastPlan.adjustments)) ? [...lastPlan.adjustments] : [];
+  const touched = (lastPlan && lastPlan.touched) ? { ...lastPlan.touched } : {};
+  if (mode === 'live' && lastPlan && Array.isArray(lastPlan.buy) && Array.isArray(lastPlan.sell)) {
+    // 用 lastPlan 的档位（已含历史调整）覆盖本次新算的
+    for (const b of buy) {
+      const orig = lastPlan.buy.find(x => x.key === b.key);
+      if (orig) b.pct = orig.pct;
+    }
+    for (const s of sell) {
+      const orig = lastPlan.sell.find(x => x.key === s.key);
+      if (orig) s.pct = orig.pct;
+    }
+
+    // 触发 1：开盘偏离（仅首次进入 live 时记录一次）
+    if (!touched._openDevLogged) {
+      const open = quote && isFinite(quote.open) ? quote.open : null;
+      if (open && lastPlan.expectOpenPct != null) {
+        const openPct = (open / P0 - 1) * 100;
+        const dev = openPct - lastPlan.expectOpenPct;
+        if (Math.abs(dev) >= 1.5) {
+          const shift = dev * 0.6;
+          for (const b of buy) if (!touched[b.key]) {
+            // 买点不上移成正数：低开日 b1 最多移到 -0.3%（仍要是回踩）
+            b.pct = Math.min(-0.3, +(b.pct + shift).toFixed(2));
+          }
+          for (const s of sell) if (!touched[s.key]) {
+            // 卖点不下移成负数：低吸日 s1 至少保持 +0.3% 的止盈目标
+            s.pct = Math.max(0.3, +(s.pct + shift).toFixed(2));
+          }
+          adjustments.push({ at: generatedAt, trigger: `开盘偏离 ${dev >= 0 ? '+' : ''}${dev.toFixed(2)}%`, delta: `档位平移 ${shift >= 0 ? '+' : ''}${shift.toFixed(2)}%` });
+        }
+        touched._openDevLogged = true;   // 无论是否调整都只记一次
+      }
+    }
+
+    // （日内 T+0 不跟踪溢价突变，溢价是长期持仓成本问题）
+
+    // 触发 2：穿越档位 → 锁定
+    const curPrice = quote && isFinite(quote.price) ? quote.price : null;
+    if (curPrice) {
+      const curPct = (curPrice / P0 - 1) * 100;
+      for (const b of buy) {
+        if (!touched[b.key] && curPct <= b.pct) {
+          touched[b.key] = true;
+          adjustments.push({ at: generatedAt, trigger: `跌破 ${b.key.toUpperCase()} ${b.pct}%`, delta: `${b.key} 锁定（已触发买点）` });
+        }
+      }
+      for (const s of sell) {
+        if (!touched[s.key] && curPct >= s.pct) {
+          touched[s.key] = true;
+          adjustments.push({ at: generatedAt, trigger: `涨到 ${s.key.toUpperCase()} ${s.pct}%`, delta: `${s.key} 锁定（已触发卖点）` });
+        }
+      }
+    }
+  }
+
+  // ── 7. 生成逻辑一句话 ──
+  const logicParts = [];
+  if (qqqPct != null || ixicPct != null) {
+    logicParts.push(`昨夜 QQQ ${qqqPct != null ? (qqqPct >= 0 ? '+' : '') + qqqPct.toFixed(2) + '%' : '—'} / IXIC ${ixicPct != null ? (ixicPct >= 0 ? '+' : '') + ixicPct.toFixed(2) + '%' : '—'} × β${BETA} → 预期开盘 ${expectOpenPct >= 0 ? '+' : ''}${expectOpenPct.toFixed(2)}%`);
+  } else {
+    logicParts.push('美股数据缺失，按预期开盘 0% 处理');
+  }
+  if (premium != null) logicParts.push(`当前溢价 ${premium.toFixed(1)}%（${zone.label}）`);
+  if (buyReasons.length) logicParts.push(buyReasons.join('；'));
+  const logic = logicParts.join(' · ');
+
+  return {
+    mode,
+    generatedAt,
+    basePrevClose: +P0.toFixed(3),
+    expectOpenPct: +expectOpenPct.toFixed(2),
+    inputs: {
+      qqqPct: qqqPct != null ? +qqqPct.toFixed(2) : null,
+      ixicPct: ixicPct != null ? +ixicPct.toFixed(2) : null,
+      premium: premium != null ? +premium.toFixed(2) : null,
+      ma21: ind && ind.ma21, bollUp: ind && ind.bollUp, bollDn: ind && ind.bollDn,
+      high20: ind && ind.high20, low20: ind && ind.low20,
+    },
+    buy, sell, stop, touched, adjustments,
+    held,
+    logic,
+  };
+}
+
 // 盘中提示：状态型条件（每次请求重算，前端按 key 去重后只提示新增项）
 function buildEtfAlerts(ctx) {
   const { quote, ind, todayBar, signals } = ctx;
@@ -4911,12 +5169,33 @@ app.get('/api/etf-track', async (req, res) => {
       todayBar,
       premCross,
       session: data.session,
+      klineLast: data.klineLast,
+      klinePrev: ETF_KLINES.length >= 2 ? ETF_KLINES[ETF_KLINES.length - 2] : null,   // 前一日 K 线（含 OHLC）
     };
     const advice = buildEtfAdvice(ctx);
     ctx.advice = advice;
     const alerts = buildEtfAlerts(ctx);
 
-    const payload = { success: true, ...data, pos, advice, alerts, todayBar, premCross };
+    // 盘前提示 · 日内高抛低吸计划
+    // qqqPct/ixicPct 由前端从 LAST_MAP 用 effectiveChange(24h) 算好后通过查询参数带入
+    const qqqPct = parseFloat(req.query.qqqPct);
+    const ixicPct = parseFloat(req.query.ixicPct);
+    const debugTime = req.query.debugTime || null;
+    // 跨天时清空旧 plan（昨日 adjustments/touched 不留到次日）
+    if (LAST_PREMARKET_PLAN && LAST_PREMARKET_PLAN._date && LAST_PREMARKET_PLAN._date !== todayStr) {
+      LAST_PREMARKET_PLAN = null;
+    }
+    const premarket = buildPremarketPlan(ctx, LAST_PREMARKET_PLAN, {
+      qqqPct: isFinite(qqqPct) ? qqqPct : null,
+      ixicPct: isFinite(ixicPct) ? ixicPct : null,
+      debugTime,
+    });
+    if (premarket) {
+      premarket._date = todayStr;
+      LAST_PREMARKET_PLAN = premarket;
+    }
+
+    const payload = { success: true, ...data, pos, advice, alerts, todayBar, premCross, premarket };
     if (req.query.diag === '1') {
       payload.diag = {
         klineCount: ETF_KLINES.length,
