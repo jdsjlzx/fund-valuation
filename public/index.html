@@ -1995,11 +1995,38 @@ function fmtEtHm(ms) {
 }
 
 // mode: 'default' (homepage) — REGULAR shows realtime, all other states show last reg only
-//       '24h' — 实时价格 vs 前收盘：盘中用regular涨跌，盘后/隔夜用 reg+post 累计
+//       '24h' — 盘中/盘前用相对昨收，盘后/夜盘用盘外增量（vs 当日收盘）
+//       'cumulative' — 盘前提示专用：任何时段都返回「相对昨收的累计涨跌幅」
+//                      盘后/夜盘 = (1+盘中涨跌)×(1+盘外增量)-1，盘前/盘中 = regularMarketChangePercent
+//                      解决用户视角"昨晚跌了 X%" 与代码读到的"盘外增量 Y%" 口径不一致问题
 function effectiveChange(q, opts = {}) {
   if (!q) return null;
   const mode = opts.mode || 'default';
   const s = q.marketState;
+
+  // 盘前提示专用：相对昨收的累计涨跌幅（含盘中 + 盘外/夜盘）
+  // 仅在调用方明确指定 mode:'cumulative' 时启用，不影响其他面板
+  if (mode === 'cumulative') {
+    if (q.tradingToday === false) return 0;
+    if (s === 'REGULAR' || s === 'PRE' || s === 'PREPRE') {
+      // 盘中/盘前：regularMarketChangePercent 本身已是相对昨收
+      return q.regularMarketChangePercent ?? 0;
+    }
+    // 盘后/夜盘/已收盘：复合 盘中涨跌 × 盘外增量
+    const regPct = q.regularMarketChangePercent ?? 0;
+    let extPct = null;
+    if (s === 'OVERNIGHT') {
+      extPct = q.overnightChangePercent ?? null;
+    } else {
+      // POST / CLOSED：用盘外价 vs 收盘价
+      const closePrice = q.closePrice || q.regularMarketPrice;
+      if (q.afterHoursPrice && closePrice) {
+        extPct = ((q.afterHoursPrice - closePrice) / closePrice) * 100;
+      }
+    }
+    if (extPct == null || !isFinite(extPct)) return regPct;
+    return ((1 + regPct / 100) * (1 + extPct / 100) - 1) * 100;
+  }
 
   // 收盘估值(default)视图：日韩股按「昨日涨跌幅」计（后端 yesterdayChangePercent）。
   // QDII 基金净值 T+2 滞后（实测 457001 等最新净值仅到 9/29），昨日日韩 session
@@ -2722,11 +2749,45 @@ async function loadEtfTrack() {
     const pos = etfPosition();
     const params = [];
     if (pos.shares > 0) { params.push(`cost=${pos.avgCost.toFixed(4)}`, `shares=${pos.shares}`); }
-    // 把 QQQ/IXIC 的 24h 有效涨跌幅带给后端，用于盘前提示计算
+    // 把 QQQ/IXIC 的「昨日盘中」与「今日盘前段」两个涨跌幅分开传给后端
+    // - regPct：昨日盘中（昨前收 → 昨收），即 regularMarketChangePercent
+    // - prePct：今日盘前段（昨收 → 当前盘前/盘后/夜盘价），24h 口径下的盘外增量
+    // 分开展示：不叠加（用户视角 "昨日跌 1.93% + 今日盘前再跌 0.95%" 是两个独立信号）
+    // 后端逻辑：预期开盘用 prePct（最贴近今日动量）；
+    //          昨日盘中 + 今日盘前同向下跌 → 恐慌二次探底，买点再压深
     const qqq = LAST_MAP && LAST_MAP['QQQ'];
     const ixic = LAST_MAP && LAST_MAP['IXIC'];
-    const qqqPct = qqq ? effectiveChange(qqq, { mode: '24h' }) : null;
-    const ixicPct = ixic ? effectiveChange(ixic, { mode: '24h' }) : null;
+    const split = (q) => {
+      if (!q) return { regPct: null, prePct: null };
+      const s = q.marketState;
+      // 盘中/盘前：current=盘前实时价，reg 已是相对昨收；prePct 单段等同 regPct
+      if (s === 'REGULAR' || s === 'PRE' || s === 'PREPRE') {
+        return { regPct: q.regularMarketChangePercent ?? 0, prePct: q.regularMarketChangePercent ?? 0 };
+      }
+      // 盘后/夜盘/已收盘：regPct=昨日盘中，prePct=盘外增量
+      const regPct = q.regularMarketChangePercent ?? 0;
+      let prePct = null;
+      if (s === 'OVERNIGHT') {
+        prePct = q.overnightChangePercent ?? null;
+      } else {
+        const closePrice = q.closePrice || q.regularMarketPrice;
+        if (q.afterHoursPrice && closePrice) {
+          prePct = ((q.afterHoursPrice - closePrice) / closePrice) * 100;
+        }
+      }
+      return { regPct, prePct };
+    };
+    const { regPct: qqqRegPct, prePct: qqqPrePct } = split(qqq);
+    const { regPct: ixicRegPct, prePct: ixicPrePct } = split(ixic);
+    if (isFinite(qqqRegPct)) params.push(`qqqRegPct=${qqqRegPct.toFixed(3)}`);
+    if (isFinite(qqqPrePct)) params.push(`qqqPrePct=${qqqPrePct.toFixed(3)}`);
+    if (isFinite(ixicRegPct)) params.push(`ixicRegPct=${ixicRegPct.toFixed(3)}`);
+    if (isFinite(ixicPrePct)) params.push(`ixicPrePct=${ixicPrePct.toFixed(3)}`);
+    // 累计口径（兼容旧字段，后端 fallback 用）
+    const qqqPct = (isFinite(qqqRegPct) && isFinite(qqqPrePct))
+      ? ((1 + qqqRegPct / 100) * (1 + qqqPrePct / 100) - 1) * 100 : null;
+    const ixicPct = (isFinite(ixicRegPct) && isFinite(ixicPrePct))
+      ? ((1 + ixicRegPct / 100) * (1 + ixicPrePct / 100) - 1) * 100 : null;
     if (isFinite(qqqPct)) params.push(`qqqPct=${qqqPct.toFixed(3)}`);
     if (isFinite(ixicPct)) params.push(`ixicPct=${ixicPct.toFixed(3)}`);
     const qs = params.length ? '?' + params.join('&') : '';
