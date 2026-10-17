@@ -119,6 +119,7 @@ app.get('/api/funds', (req, res) => {
 // ═══════════════════════════════════════════════════════
 const quoteCache = new Map();
 const QUOTE_TTL = 4 * 1000;
+const closedQuoteCache = new Map();
 // Yahoo extended-hours 缓存（夜盘用，fulldayPrice 数据 60s 内复用，避免 Yahoo 限流）
 const yahooExtCache = new Map();
 const YAHOO_EXT_TTL = 120_000;  // 120 秒：夜盘成交稀疏，且走代理链路需控制雅虎调用量
@@ -1221,14 +1222,66 @@ const MARKET_SESSIONS = {
   TW: [[540, 810]],   // 9:00–13:30
 };
 
-// 该市场此刻是否在交易中：'REGULAR' / 'CLOSED'；未知市场返回 null（不覆盖原值）
-function marketSessionState(marketKey) {
+function marketPhase(marketKey) {
   const key = typeof marketKey === 'number' ? 'KR' : marketKey;   // 数字偏移 = 腾讯韩股通道
   const sessions = MARKET_SESSIONS[key];
   if (!sessions) return null;
   const { day, min } = marketClock(MARKET_TZ_OFFSET[key]);
-  if (day === 0 || day === 6) return 'CLOSED';
-  return sessions.some(([a, b]) => min >= a && min < b) ? 'REGULAR' : 'CLOSED';
+  if (day === 0 || day === 6) return 'HOLIDAY';
+  const firstOpen = Math.min(...sessions.map(([a]) => a));
+  const lastClose = Math.max(...sessions.map(([, b]) => b));
+  if (min < firstOpen) return 'PRE';
+  if (min >= lastClose) return 'POST';
+  return sessions.some(([a, b]) => min >= a && min < b) ? 'REGULAR' : 'REGULAR';
+}
+
+// 该市场此刻是否在交易中：'REGULAR' / 'CLOSED'；未知市场返回 null（不覆盖原值）
+function marketSessionState(marketKey) {
+  const phase = marketPhase(marketKey);
+  if (!phase) return null;
+  return phase === 'REGULAR' ? 'REGULAR' : 'CLOSED';
+}
+
+function quoteMarketKey(symbol) {
+  if (isKoreanSymbol(symbol)) return 'KR';
+  if (isTaiwanSymbol(symbol)) return 'TW';
+  if (isJapanSymbol(symbol)) return 'JP';
+  if (HK_STOCKS_SET.has(symbol) || /^\d{4,5}$/.test(symbol)) return 'HK';
+  if (/^\d{6}$/.test(symbol)) return 'CN';
+  return null;
+}
+
+function closedQuoteCacheKey(symbol, quote) {
+  if (!quote || !quote.sessionDate || quote.marketState === 'REGULAR') return null;
+  const mk = quoteMarketKey(symbol);
+  if (!mk || marketSessionState(mk) === 'REGULAR') return null;
+  return `${symbol}:${quote.sessionDate}:${quote.marketState}`;
+}
+
+function closedQuoteCacheValidForToday(entry, marketKey) {
+  if (!entry || !entry.quote || !entry.quote.sessionDate) return false;
+  const key = typeof marketKey === 'number' ? 'KR' : marketKey;
+  return entry.marketDate === marketToday(MARKET_TZ_OFFSET[key]) && entry.phase === marketPhase(key);
+}
+
+function getClosedCachedQuote(symbol) {
+  const mk = quoteMarketKey(symbol);
+  if (!mk || marketSessionState(mk) === 'REGULAR') return null;
+  const entry = closedQuoteCache.get(symbol);
+  if (!closedQuoteCacheValidForToday(entry, mk)) {
+    closedQuoteCache.delete(symbol);
+    return null;
+  }
+  return entry.quote;
+}
+
+function rememberClosedQuote(quote) {
+  const mk = quoteMarketKey(quote.symbol);
+  const key = closedQuoteCacheKey(quote.symbol, quote);
+  if (!key || !mk) return;
+  const prev = closedQuoteCache.get(quote.symbol);
+  if (prev && prev.key === key) return;
+  closedQuoteCache.set(quote.symbol, { key, quote, marketDate: marketToday(MARKET_TZ_OFFSET[mk]), phase: marketPhase(mk) });
 }
 
 function krMarketState() {
@@ -1626,13 +1679,24 @@ app.get('/api/quotes', async (req, res) => {
     return res.json({ success: true, data: cached.data, cached: true });
   }
 
+  const closedCachedData = [];
+  const liveSymbols = [];
+  for (const s of symbols) {
+    const q = getClosedCachedQuote(s);
+    if (q) closedCachedData.push(q);
+    else liveSymbols.push(s);
+  }
+  if (liveSymbols.length === 0 && closedCachedData.length) {
+    return res.json({ success: true, data: closedCachedData, cached: true, closedCached: true });
+  }
+
   // Route each symbol: eastmoney(US) → Naver(KR) → TWSE(TW) → Tencent(JP) → Yahoo(SG) → Sina(forex/HK/A股/兜底)
-  const krSymbols   = symbols.filter((s) =>  isKoreanSymbol(s));
-  const twSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && isTaiwanSymbol(s));
-  const jpSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && isJapanSymbol(s));
-  const yhSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isJapanSymbol(s) && isYahooSymbol(s));
-  const emSymbols   = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isJapanSymbol(s) && !isYahooSymbol(s) && emSecid(s));
-  const sinaSymbols = symbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isJapanSymbol(s) && !isYahooSymbol(s) && !emSecid(s));
+  const krSymbols   = liveSymbols.filter((s) =>  isKoreanSymbol(s));
+  const twSymbols   = liveSymbols.filter((s) => !isKoreanSymbol(s) && isTaiwanSymbol(s));
+  const jpSymbols   = liveSymbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && isJapanSymbol(s));
+  const yhSymbols   = liveSymbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isJapanSymbol(s) && isYahooSymbol(s));
+  const emSymbols   = liveSymbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isJapanSymbol(s) && !isYahooSymbol(s) && emSecid(s));
+  const sinaSymbols = liveSymbols.filter((s) => !isKoreanSymbol(s) && !isTaiwanSymbol(s) && !isJapanSymbol(s) && !isYahooSymbol(s) && !emSecid(s));
   const secidToSym  = new Map(emSymbols.map((s) => [emSecid(s), s]));
 
   try {
@@ -1891,6 +1955,7 @@ app.get('/api/quotes', async (req, res) => {
     // 未命中后台预取（下一轮行情请求即可带上），绝不阻塞本次响应。
     // puresinaData 里含港股/A股/参考标的，attachIntlYday 按市场集合过滤，非目标市场原样返回
     const data = [
+      ...closedCachedData,
       ...mergedEmData,
       ...puresinaData.map(attachIntlYday),
       ...krData.map(attachIntlYday),
@@ -1898,6 +1963,7 @@ app.get('/api/quotes', async (req, res) => {
       ...jpData.map(attachIntlYday),
       ...yhData,
     ];
+    for (const q of data) rememberClosedQuote(q);
     if (data.length === 0) throw new Error('No quotes returned');
     quoteCache.set(cacheKey, { data, ts: Date.now() });
     if (diag) {
@@ -1908,6 +1974,8 @@ app.get('/api/quotes', async (req, res) => {
         data,
         diag: {
           usState,
+          closedCacheHit: closedCachedData.length,
+          liveRequested: liveSymbols.length,
           eastmoneyRequested: emSymbols.length,
           eastmoneyReturned: Object.keys(emMap).length,
           sinaRequested: sinaAll.length,
@@ -3345,11 +3413,19 @@ const POS_FACTOR_TABLE = [
 
 // ── 外围情绪源：纳指综合 / 费城半导体 日K（新浪美股）──
 // 「恐慌抄底」信号的外盘输入。抓取失败时静默降级（信号自动退化为 6 项技术评分）。
-const US_IDX_CACHE = { data: null, ts: 0 };
-const US_IDX_TTL = 6 * 3600e3;
+const US_IDX_CACHE = { data: null, ts: 0, state: null };
+const US_IDX_TTL = 10 * 60e3;
 async function fetchUsIndexHistory() {
-  if (US_IDX_CACHE.data && Date.now() - US_IDX_CACHE.ts < US_IDX_TTL) return US_IDX_CACHE.data;
+  const usState = getUSMarketState();
+  const staleAcrossClose = US_IDX_CACHE.state === 'REGULAR' && usState !== 'REGULAR';
+  if (US_IDX_CACHE.data && !staleAcrossClose && Date.now() - US_IDX_CACHE.ts < US_IDX_TTL) return US_IDX_CACHE.data;
   const out = {};
+  const closeHistory = (arr) => {
+    const dates = arr.map(r => r.d), closes = arr.map(r => r.c), ret = {}, ret5 = {};
+    for (let i = 1; i < arr.length; i++) ret[dates[i]] = +((arr[i].c / arr[i - 1].c - 1) * 100).toFixed(2);
+    for (let i = 5; i < arr.length; i++) ret5[dates[i]] = +((arr[i].c / arr[i - 5].c - 1) * 100).toFixed(2);
+    return { dates, closes, ret, ret5 };
+  };
   // ndx = 纳斯达克 100：本 ETF 跟踪的就是纳指科技，比纳指综合（ixic）更贴近；
   // 且它的 MA21 / MACD 直接参与「能不能重仓」的门控（见 buildHeavyGate）。
   await Promise.all([['ixic', '.IXIC'], ['ndx', '.NDX'], ['sox', '.SOX']].map(async ([key, sym]) => {
@@ -3361,14 +3437,15 @@ async function fetchUsIndexHistory() {
       const m = txt.match(/x\((\[[\s\S]*\])\)/);
       if (!m) return;
       const arr = JSON.parse(m[1]).map(r => ({ d: r.d, c: +r.c })).filter(r => r.d && isFinite(r.c));
-      const dates = arr.map(r => r.d), closes = arr.map(r => r.c), ret = {}, ret5 = {};
-      for (let i = 1; i < arr.length; i++) ret[dates[i]] = +((arr[i].c / arr[i - 1].c - 1) * 100).toFixed(2);
-      for (let i = 5; i < arr.length; i++) ret5[dates[i]] = +((arr[i].c / arr[i - 5].c - 1) * 100).toFixed(2);
-      // closes 供「美股趋势状态」使用（MA50 / 20 日低点）
-      out[key] = { dates, closes, ret, ret5 };
+      out[key] = closeHistory(arr);
     } catch (e) { console.error('[us-index]', key, e.message); }
   }));
-  if (out.ixic) { US_IDX_CACHE.data = out; US_IDX_CACHE.ts = Date.now(); }
+  try {
+    const rows = await fetchTencentDayKline('usQQQ.OQ', 1000);
+    const arr = rows.map(r => ({ d: r.date, c: +r.close })).filter(r => r.d && isFinite(r.c));
+    if (arr.length) out.qqq = closeHistory(arr);
+  } catch (e) { console.error('[us-index]', 'qqq', e.message); }
+  if (out.ixic) { US_IDX_CACHE.data = out; US_IDX_CACHE.ts = Date.now(); US_IDX_CACHE.state = usState; }
   return US_IDX_CACHE.data;
 }
 
@@ -3559,36 +3636,48 @@ function buildEtfPanicSignal(klines, navMap, usIdx) {
     const dd = ds[r];
     return { date: dd, ixic: usIdx.ixic.ret[dd] ?? null, ixic5: usIdx.ixic.ret5[dd] ?? null, sox: usIdx.sox ? (usIdx.sox.ret[dd] ?? null) : null };
   };
-  const rows = [];
-  for (let i = 21; i < n; i++) {
-    const hits = []; let s = 0;
+  const fmtPct = v => (v == null || !isFinite(v)) ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+  const scoreAt = (i, ovOverride) => {
+    const hits = [], checks = []; let s = 0;
+    const addCheck = (key, value, rule, ok, why) => {
+      const item = { key, value, rule, ok: !!ok, why };
+      checks.push(item);
+      if (item.ok) { s++; hits.push({ key, value, why }); }
+    };
     const bp = B.up[i] != null ? (C[i] - B.dn[i]) / (B.up[i] - B.dn[i]) : null;
-    if (W[i] != null && W[i] <= -95) { s++; hits.push({ key: '威廉%R', value: W[i].toFixed(0), why: '≤ -95 极限超卖' }); }
-    if (bp != null && bp <= 0.10) { s++; hits.push({ key: '布林位置', value: (bp * 100).toFixed(0) + '%', why: '贴近下轨' }); }
-    if (R[i] != null && R[i] <= 40) { s++; hits.push({ key: 'RSI14', value: R[i].toFixed(0), why: '≤ 40 弱势区' }); }
-    if (prem[i] != null && prem[i] <= PREMIUM_BUY) { s++; hits.push({ key: '溢价', value: prem[i].toFixed(1) + '%', why: '≤ 18% 便宜区' }); }
+    addCheck('威廉%R', W[i] != null ? W[i].toFixed(0) : '—', '≤ -95 极限超卖', W[i] != null && W[i] <= -95, '短线动量是否杀到极端低位');
+    addCheck('布林位置', bp != null ? (bp * 100).toFixed(0) + '%' : '—', '≤ 10% 贴近下轨', bp != null && bp <= 0.10, '价格是否贴近布林下轨');
+    addCheck('RSI14', R[i] != null ? R[i].toFixed(0) : '—', '≤ 40 弱势区', R[i] != null && R[i] <= 40, '14 日 RSI 是否进入弱势区');
+    addCheck('溢价', prem[i] != null ? prem[i].toFixed(1) + '%' : '—', `≤ ${PREMIUM_BUY}% 便宜区`, prem[i] != null && prem[i] <= PREMIUM_BUY, '场内溢价是否回到可买区');
     const r5 = i >= 5 ? (C[i] / C[i - 5] - 1) * 100 : null;
-    if (r5 != null && r5 <= -4) { s++; hits.push({ key: '5日跌幅', value: r5.toFixed(1) + '%', why: '≤ -4% 急跌' }); }
+    addCheck('5日跌幅', r5 != null ? r5.toFixed(1) + '%' : '—', '≤ -4% 急跌', r5 != null && r5 <= -4, 'ETF 近 5 个交易日是否急跌');
     const hi20 = Math.max(...C.slice(Math.max(0, i - 19), i + 1));
     const dd20 = (C[i] / hi20 - 1) * 100;
-    if (dd20 <= -6) { s++; hits.push({ key: '距20日高', value: dd20.toFixed(1) + '%', why: '≤ -6% 回撤' }); }
-    const ov = ovAt(klines[i].date);
-    if (ov) {
-      if ((ov.ixic != null && ov.ixic <= -1.5) || (ov.sox != null && ov.sox <= -3)) {
-        s++;
-        hits.push({ key: '隔夜外围', value: `纳指 ${ov.ixic == null ? '—' : ov.ixic.toFixed(2) + '%'} · 费半 ${ov.sox == null ? '—' : ov.sox.toFixed(2) + '%'}`, why: `外盘重挫（美股 ${ov.date}）` });
-      } else if (ov.ixic5 != null && ov.ixic5 <= -5) {
-        s++;
-        hits.push({ key: '纳指5日', value: ov.ixic5.toFixed(1) + '%', why: '≤ -5% 外盘连跌' });
-      }
-    }
+    addCheck('距20日高', dd20.toFixed(1) + '%', '≤ -6% 回撤', dd20 <= -6, 'ETF 是否从 20 日高点明显回撤');
+    const ov = ovOverride || ovAt(klines[i].date);
+    const ovDailyHit = !!(ov && ((ov.ixic != null && ov.ixic <= -1.5) || (ov.sox != null && ov.sox <= -3)));
+    const ovFiveHit = !!(ov && ov.ixic5 != null && ov.ixic5 <= -5);
+    addCheck(
+      ov && ov.latest ? '最新外围' : '隔夜外围',
+      ov ? `纳指 ${fmtPct(ov.ixic)} · 费半 ${fmtPct(ov.sox)} · 纳指5日 ${fmtPct(ov.ixic5)}` : '—',
+      '纳指≤-1.5% 或费半≤-3%；或纳指5日≤-5%',
+      ovDailyHit || ovFiveHit,
+      ov ? `美股 ${ov.date} 外盘恐慌输入` : '外盘数据缺失'
+    );
     const lv = PANIC_LEVELS.find(x => s >= x.min);
-    rows.push({
+    return {
       date: klines[i].date, close: +C[i].toFixed(3), premium: prem[i] == null ? null : +prem[i].toFixed(2),
-      score: s, hits, level: lv.label, levelNote: lv.note, overnight: ov,
+      score: s, hits, checks, level: lv.label, levelNote: lv.note, overnight: ov,
       ma21: ma21[i] == null ? null : +ma21[i].toFixed(3),
-    });
-  }
+    };
+  };
+  const latestUsAt = () => {
+    if (!usIdx || !usIdx.ixic || !Array.isArray(usIdx.ixic.dates) || !usIdx.ixic.dates.length) return null;
+    const dd = usIdx.ixic.dates[usIdx.ixic.dates.length - 1];
+    return { date: dd, ixic: usIdx.ixic.ret[dd] ?? null, ixic5: usIdx.ixic.ret5[dd] ?? null, sox: usIdx.sox ? (usIdx.sox.ret[dd] ?? null) : null, latest: true };
+  };
+  const rows = [];
+  for (let i = 21; i < n; i++) rows.push(scoreAt(i));
   // 触发 → 维持 → 退出
   // 持仓中「更低位重置」规则（2026-10-13 新增）：触发后若当日 score ≥ 6（极度恐慌）
   // 且不低于持仓触发时 score，且收盘价 < 当前成本——说明利空在更深位兑现、价格更便宜，
@@ -3617,11 +3706,15 @@ function buildEtfPanicSignal(klines, navMap, usIdx) {
   const closed = events.filter(e => !e.open);
   const wins = closed.filter(e => e.ret > 0).length;
   const last = rows[rows.length - 1];
+  const latestOv = latestUsAt();
+  const current = latestOv && last && (!last.overnight || latestOv.date > last.overnight.date)
+    ? scoreAt(n - 1, latestOv)
+    : last;
   // 最近触发列表：覆盖最近 2 年（含未闭合），供前端「最近触发」完整展示
   const twoYearsAgo = (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 2); return d.toISOString().slice(0, 10); })();
   const recent = events.filter(e => e.date >= twoYearsAgo).reverse();
   return {
-    active, events, recent, current: last,
+    active, events, recent, current,
     levels: PANIC_LEVELS,
     config: { trigger: PANIC_TRIGGER, cap: POS_PANIC_CAP, capAdd: POS_PANIC_CAP_ADD, holdDays: PANIC_HOLD_DAYS, takeProfit: PANIC_TAKE_PROFIT },
     stats: {
@@ -4566,7 +4659,7 @@ function buildEtfAdvice(ctx) {
 //  盘前提示 · 日内高抛低吸计划
 //   · 盘前生成（BJ 04:00–09:30）+ 盘中微调（已触达档位锁定）
 //   · 输入：etf-track 自带 quote/ind/klineLast + 前端查询参数带入的 QQQ/IXIC 24h 涨跌幅
-//   · 输出：相对昨收的 1-3 档低吸买点 / 1-2 档高抛目标 / 失效条件 / 生成逻辑
+//   · 输出：相对昨收的 1-5 档低吸买点 / 1-2 档高抛目标 / 失效条件 / 生成逻辑
 // ═══════════════════════════════════════════════════════
 
 // 基准昨收：按 K 线日期判断哪根是"昨日"
@@ -4588,8 +4681,8 @@ function getBasePrevClose(ctx, mode) {
   return null;
 }
 
-// 模式判定：pre=盘前 04:00-09:30 · live=盘中 09:30-15:00 · closed=盘后/周末/节假日
-function premarketMode(ctx, nowOverride) {
+// 模式判定：pre=盘前 04:00-09:30 · live=盘中 09:30-15:00 · next=美股收盘后生成下个交易日计划 · closed=无有效外盘输入
+function premarketMode(ctx, nowOverride, opts = {}) {
   const now = nowOverride ? new Date(nowOverride) : new Date();
   // 北京时间
   const bjMs = now.getTime() + 8 * 3600_000;
@@ -4597,10 +4690,68 @@ function premarketMode(ctx, nowOverride) {
   const min = bj.getUTCHours() * 60 + bj.getUTCMinutes();
   const dow = bj.getUTCDay(); // 0=周日 6=周六
   const isWeekday = dow >= 1 && dow <= 5;
-  if (!isWeekday) return 'closed';
-  if (min >= 240 && min < 570) return 'pre';          // 04:00-09:30
-  if (min >= 570 && min < 900) return 'live';         // 09:30-15:00
-  return 'closed';
+  if (isWeekday && min >= 240 && min < 570) return 'pre';          // 04:00-09:30
+  if (isWeekday && min >= 570 && min < 900) return 'live';         // 09:30-15:00
+  const hasUsCloseInput = [opts.qqqRegPct, opts.ixicRegPct, opts.qqqPct, opts.ixicPct].some(v => isFinite(v));
+  return hasUsCloseInput ? 'next' : 'closed';
+}
+
+function buildPremarketHistoryReview(klines, usIdx, qqqMovePct) {
+  if (!Array.isArray(klines) || klines.length < 60 || !usIdx || !usIdx.qqq || qqqMovePct == null || !isFinite(qqqMovePct) || qqqMovePct >= 0) return null;
+  const q = usIdx.qqq;
+  if (!Array.isArray(q.dates) || !q.ret) return null;
+  const lo = qqqMovePct * 1.3;
+  const hi = qqqMovePct * 0.7;
+  const cutoff = (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 2); return d.toISOString().slice(0, 10); })();
+  const nextEtfAfter = (d) => {
+    let loIdx = 0, hiIdx = klines.length - 1, ans = -1;
+    while (loIdx <= hiIdx) {
+      const mid = (loIdx + hiIdx) >> 1;
+      if (klines[mid].date > d) { ans = mid; hiIdx = mid - 1; }
+      else loIdx = mid + 1;
+    }
+    return ans;
+  };
+  const rows = [];
+  const lastEtfDate = klines[klines.length - 1].date;
+  for (const d of q.dates) {
+    if (d < cutoff) continue;
+    const move = q.ret[d];
+    if (move == null || move < lo || move > hi) continue;
+    const i = nextEtfAfter(d);
+    if (i < 1 || klines[i].date > lastEtfDate) continue;
+    const prevClose = klines[i - 1].close;
+    const row = klines[i];
+    if (!(prevClose > 0) || !(row.close > 0) || !(row.low > 0)) continue;
+    rows.push({
+      qqqDate: d,
+      qqqMove: move,
+      etfDate: row.date,
+      closePct: +((row.close / prevClose - 1) * 100).toFixed(2),
+      lowPct: +((row.low / prevClose - 1) * 100).toFixed(2),
+      close: +row.close.toFixed(3),
+      low: +row.low.toFixed(3),
+    });
+  }
+  if (!rows.length) return { target: +qqqMovePct.toFixed(2), range: { lo: +lo.toFixed(2), hi: +hi.toFixed(2) }, period: '近2年', count: 0, samples: [] };
+  const avg = arr => +(arr.reduce((s, v) => s + v, 0) / arr.length).toFixed(2);
+  const quantile = (arr, qv) => {
+    const a = [...arr].sort((a, b) => a - b);
+    const pos = Math.min(a.length - 1, Math.max(0, Math.round(qv * (a.length - 1))));
+    return +a[pos].toFixed(2);
+  };
+  const closeP = rows.map(r => r.closePct);
+  const lowP = rows.map(r => r.lowPct);
+  const samples = [...rows].sort((a, b) => Math.abs(a.qqqMove - qqqMovePct) - Math.abs(b.qqqMove - qqqMovePct)).slice(0, 5);
+  return {
+    target: +qqqMovePct.toFixed(2),
+    range: { lo: +lo.toFixed(2), hi: +hi.toFixed(2) },
+    period: '近2年',
+    count: rows.length,
+    close: { avg: avg(closeP), median: quantile(closeP, 0.5), worst: Math.min(...closeP), best: Math.max(...closeP) },
+    low: { avg: avg(lowP), median: quantile(lowP, 0.5), worst: Math.min(...lowP), best: Math.max(...lowP) },
+    samples,
+  };
 }
 
 // 主函数：buildPremarketPlan(ctx, lastPlan, opts)
@@ -4609,13 +4760,6 @@ function premarketMode(ctx, nowOverride) {
 //   opts   = { qqqPct, ixicPct, debugTime }
 function buildPremarketPlan(ctx, lastPlan, opts = {}) {
   const { quote, ind, klineLast } = ctx;
-  const mode = premarketMode(ctx, opts.debugTime);
-  const P0 = getBasePrevClose(ctx, mode);
-  const generatedAt = new Date().toISOString();
-
-  if (!P0) return null;
-
-  // ── 1. 预期开盘涨跌幅（β折算）──
   const BETA = 0.7;
   const qqqPct = isFinite(opts.qqqPct) ? opts.qqqPct : null;
   const ixicPct = isFinite(opts.ixicPct) ? opts.ixicPct : null;
@@ -4627,14 +4771,25 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
   const qqqPrePct = isFinite(opts.qqqPrePct) ? opts.qqqPrePct : null;
   const ixicRegPct = isFinite(opts.ixicRegPct) ? opts.ixicRegPct : null;
   const ixicPrePct = isFinite(opts.ixicPrePct) ? opts.ixicPrePct : null;
+  const mode = premarketMode(ctx, opts.debugTime, { qqqPct, ixicPct, qqqRegPct, ixicRegPct });
+  const P0 = getBasePrevClose(ctx, mode);
+  const generatedAt = new Date().toISOString();
+
+  if (!P0) return null;
+
+  // ── 1. 预期开盘涨跌幅（β折算）──
 
   const mix = (a, b) => (a != null && b != null) ? 0.6 * a + 0.4 * b : (a != null ? a : (b != null ? b : null));
-  // 预期开盘主驱动：今日盘前段（缺失时退化为累计 qqqPct）
-  let usPct = mix(qqqPrePct, ixicPrePct);
+  // 预期开盘主驱动：盘前/盘中用盘前段；美股收盘后的下个交易日计划用整日累计跌幅，缺失时退回正规盘跌幅。
+  let usPct = mode === 'next' ? mix(qqqPct, ixicPct) : mix(qqqPrePct, ixicPrePct);
+  if (mode === 'next' && usPct == null) usPct = mix(qqqRegPct, ixicRegPct);
+  if (usPct == null) usPct = mix(qqqPrePct, ixicPrePct);
   if (usPct == null) usPct = mix(qqqPct, ixicPct);
+  if (usPct == null) usPct = mix(qqqRegPct, ixicRegPct);
   if (usPct == null) usPct = 0;
   // 昨日盘中（用于恐慌二次探底判定；缺失时不参与）
   const usRegPct = mix(qqqRegPct, ixicRegPct);
+  const historyReview = buildPremarketHistoryReview(ctx.klines || [], ctx.usIdx, qqqRegPct);
   const expectOpenPct = Math.max(-5, Math.min(5, usPct * BETA));
 
   // ── 2. 技术锚点（换算成相对 P0 的涨跌幅）──
@@ -4670,13 +4825,12 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
   const yHighPct = hasYesterday ? (yH / yBase - 1) * 100 : null;
   const yLowPct  = hasYesterday ? (yL / yBase - 1) * 100 : null;
 
-  // ── 3. 低吸买点（3 档，相对 P0 的跌幅，均为负数）──
-  //  思路：昨日实际跌到过 yLowPct，今日探底位置就在那附近
-  //  b1 = 预期开盘小幅回踩（昨日开盘 vs 预期开盘的较小值附近）
-  //  b2 = 昨日开盘价位置（昨日已示范过这个深度）
-  //  b3 = 昨日最低点（昨日最深位置）
+  // ── 3. 低吸买点（5 档，相对 P0 的跌幅，均为负数）──
+  //  思路：前三档围绕预期开盘/昨日波段，后两档围绕历史相似跌幅里的深水区。
+  //  b1 = 预期开盘小幅回踩；b2 = 昨日开盘位；b3 = 昨日最低/历史均值深水区
+  //  b4 = 历史偏极端盘中跌幅；b5 = 历史最差附近 / 极端恐慌预留
   let buyReasons = [];
-  let b1, b2, b3;
+  let b1, b2, b3, b4, b5;
   if (hasYesterday) {
     // b1: 预期开盘小幅回踩（轻仓试探）
     b1 = clip(expectOpenPct - 0.4, -9, -0.3);
@@ -4684,6 +4838,8 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
     b2 = Math.max(Math.min(yOpenPct, b1 - 0.3), -9);
     // b3: 昨日最低位（如果昨日最低比 b2 浅，则取 b2 - 0.3 保证阶梯）
     b3 = Math.max(Math.min(yLowPct, b2 - 0.3), -9);
+    b4 = b3 - 0.8;
+    b5 = b4 - 0.8;
     // 大振幅日修正：昨日振幅 > 5% 说明处于恐慌/剧烈波动期，
     // 二次探底可能更深，b3 再往下压昨日振幅的 30%
     const yRange = (yH - yL) / yO * 100;
@@ -4694,10 +4850,10 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
     }
     buyReasons.push(`昨日 开${yOpenPct.toFixed(2)}% / 低${yLowPct.toFixed(2)}% / 高${yHighPct.toFixed(2)}% / 振幅${((yH - yL) / yO * 100).toFixed(1)}%`);
   } else {
-    b1 = -1.0; b2 = -2.0; b3 = -3.5;
+    b1 = -1.0; b2 = -2.0; b3 = -3.5; b4 = -4.5; b5 = -5.5;
   }
   // 修正①：美股恐慌 → 整组下移（基于今日盘前段）
-  if (usPct <= -2.5) { b1 -= 1; b2 -= 1; b3 -= 1; buyReasons.push(`美股盘前 ${usPct.toFixed(2)}% ≤-2.5%，买点下移 1%`); }
+  if (usPct <= -2.5) { b1 -= 1; b2 -= 1; b3 -= 1; b4 -= 1; b5 -= 1; buyReasons.push(`美股盘前 ${usPct.toFixed(2)}% ≤-2.5%，买点下移 1%`); }
   // 修正②：双段同向下跌（昨日盘中 + 今日盘前都跌）→ 二次探底压深
   //   场景：昨日盘中跌 X%、今日盘前继续跌 Y%，说明抛压在延续，今日可能击穿昨日最低
   //   压深幅度 = |昨日盘中跌幅| × 30%（昨日跌得越多，今日探底越深）
@@ -4705,26 +4861,51 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
   //       昨日 -3.50% / 盘前 -1.20% → 压深 1.05%
   if (usRegPct != null && usRegPct <= -0.5 && usPct <= -0.5) {
     const deepen = Math.abs(usRegPct) * 0.3;
-    b1 -= deepen; b2 -= deepen; b3 -= deepen;
+    b1 -= deepen; b2 -= deepen; b3 -= deepen; b4 -= deepen; b5 -= deepen;
     buyReasons.push(`昨日盘中 ${usRegPct.toFixed(2)}% + 今日盘前 ${usPct.toFixed(2)}% 双段同向下跌，二次探底买点下移 ${deepen.toFixed(2)}%`);
+  }
+  if (historyReview && historyReview.count >= 5 && historyReview.low) {
+    const hMed = historyReview.low.median;
+    const hAvg = historyReview.low.avg;
+    const hWorst = historyReview.low.worst;
+    if (isFinite(hMed) && isFinite(hAvg) && isFinite(hWorst)) {
+      const histB1 = hMed - 0.3;
+      const histB2 = hAvg - 0.3;
+      const histB3 = Math.max(hWorst, hAvg - 2.0);
+      const histB4 = Math.max(hWorst - 0.4, hAvg - 3.0);
+      const histB5 = Math.max(hWorst - 1.0, -9);
+      const old = [b1, b2, b3, b4, b5];
+      b1 = Math.min(b1, histB1);
+      b2 = Math.min(b2, histB2);
+      b3 = Math.min(b3, histB3);
+      b4 = Math.min(b4, histB4);
+      b5 = Math.min(b5, histB5);
+      if (b1 !== old[0] || b2 !== old[1] || b3 !== old[2] || b4 !== old[3] || b5 !== old[4]) {
+        buyReasons.push(`近2年相似 QQQ 跌幅 ${historyReview.count} 次：次日盘中最大跌幅中位 ${hMed.toFixed(2)}% / 平均 ${hAvg.toFixed(2)}% / 最差 ${hWorst.toFixed(2)}%，据此校准低吸点`);
+      }
+    }
   }
   // 兜底保护阶梯（不强制 0.5 间距，让昨日最低位能体现出来）
   b1 = Math.max(Math.min(b1, -0.3), -9);
   b2 = Math.max(Math.min(b2, b1 - 0.2), -9);
   b3 = Math.max(Math.min(b3, b2 - 0.2), -9);
+  b4 = Math.max(Math.min(b4, b3 - 0.2), -9.5);
+  b5 = Math.max(Math.min(b5, b4 - 0.2), -10);
 
   // 高溢价（≥22% 观望区）：日内预留资金同比例减半，金字塔比例不变
   const posScale = (premium != null && premium >= PREMIUM_WATCH) ? 0.5 : 1;
-  const scaledPos = [30, 50, 100].map(v => Math.round(v * posScale));
-  if (posScale < 1) buyReasons.push(`溢价 ${premium.toFixed(1)}% ≥${PREMIUM_WATCH}%，日内仓位减半（最高 ${scaledPos[2]}%）`);
+  const scaledPos = [20, 30, 50, 75, 100].map(v => Math.round(v * posScale));
+  if (posScale < 1) buyReasons.push(`溢价 ${premium.toFixed(1)}% ≥${PREMIUM_WATCH}%，日内仓位减半（最高 ${scaledPos[4]}%）`);
 
   const buyLabels = hasYesterday
-    ? [`预期开盘小幅回踩`, `昨日开盘位（${yOpenPct.toFixed(2)}%）`, `昨日最低（${yLowPct.toFixed(2)}%）`]
-    : ['固定档位（数据缺失）', '固定档位', '固定档位'];
+    ? [`预期开盘小幅回踩`, `昨日开盘位（${yOpenPct.toFixed(2)}%）`, `昨日最低（${yLowPct.toFixed(2)}%）`, '历史相似深水区', '极端恐慌预留']
+    : ['固定档位（数据缺失）', '固定档位', '固定档位', '深水预留', '极端预留'];
   const buy = [
     { key: 'b1', pct: +b1.toFixed(2), pos: scaledPos[0], reason: buyLabels[0] },
     { key: 'b2', pct: +b2.toFixed(2), pos: scaledPos[1], reason: buyLabels[1] },
     { key: 'b3', pct: +b3.toFixed(2), pos: scaledPos[2], reason: buyLabels[2] },
+    { key: 'b4', pct: +b4.toFixed(2), pos: scaledPos[3], reason: buyLabels[3] },
+    { key: 'b5', pct: +b5.toFixed(2), pos: scaledPos[4], reason: buyLabels[4] },
   ];
 
   // ── 4. 高抛目标（2 档，正数）──
@@ -4748,7 +4929,7 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
 
   // ── 5. 失效条件（日内 T+0，不含溢价项）──
   const stop = {
-    pricePct: +(b3 - 1.5).toFixed(2),
+    pricePct: +(b5 - 1.0).toFixed(2),
     qqqAbort: -3.5,
     note: '14:30 后不再开新仓',
   };
@@ -4827,9 +5008,11 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
       seg.push(`IXIC 昨日盘中 ${fmtPct(ixicRegPct)} / 今日盘前 ${fmtPct(ixicPrePct)}`);
     }
     logicParts.push(seg.join(' · '));
-    logicParts.push(`盘前段混合 ${fmtPct(usPct)} × β${BETA} → 预期开盘 ${fmtPct(expectOpenPct)}`);
+    logicParts.push(`${mode === 'next' ? '美股收盘累计' : '盘前段混合'} ${fmtPct(usPct)} × β${BETA} → 预期开盘 ${fmtPct(expectOpenPct)}`);
   } else if (qqqPct != null || ixicPct != null) {
     logicParts.push(`昨夜 QQQ ${fmtPct(qqqPct)} / IXIC ${fmtPct(ixicPct)} × β${BETA} → 预期开盘 ${fmtPct(expectOpenPct)}`);
+  } else if (qqqRegPct != null || ixicRegPct != null) {
+    logicParts.push(`美股正规盘 QQQ ${fmtPct(qqqRegPct)} / IXIC ${fmtPct(ixicRegPct)} × β${BETA} → 预期开盘 ${fmtPct(expectOpenPct)}`);
   } else {
     logicParts.push('美股数据缺失，按预期开盘 0% 处理');
   }
@@ -4857,6 +5040,7 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
     },
     buy, sell, stop, touched, adjustments,
     held,
+    historyReview,
     logic,
   };
 }
@@ -5141,6 +5325,7 @@ async function getEtfMarketData() {
     positionPlan,
     // 恐慌抄底：外盘重挫 + 极限超卖 + 溢价压缩 共振时的加仓窗口（含历史触发胜率）
     panicSignal,
+    usIdx,
     stats,
     premium: {
       current: quote ? quote.premiumPct : null,
@@ -5226,6 +5411,8 @@ app.get('/api/etf-track', async (req, res) => {
       todayBar,
       premCross,
       session: data.session,
+      klines: ETF_KLINES,
+      usIdx: data.usIdx,
       klineLast: data.klineLast,
       klinePrev: ETF_KLINES.length >= 2 ? ETF_KLINES[ETF_KLINES.length - 2] : null,   // 前一日 K 线（含 OHLC）
       klinePrev2: ETF_KLINES.length >= 3 ? ETF_KLINES[ETF_KLINES.length - 3] : null,  // 前两日 K 线（盘中算"昨日的前收"用）
@@ -5273,6 +5460,8 @@ app.get('/api/etf-track', async (req, res) => {
           const closePrice = q.closePrice || q.regularMarketPrice;
           if (q.afterHoursPrice && closePrice) {
             prePct = ((q.afterHoursPrice - closePrice) / closePrice) * 100;
+          } else {
+            prePct = 0;
           }
         }
         return { regPct, prePct };
@@ -5295,8 +5484,29 @@ app.get('/api/etf-track', async (req, res) => {
         ixicPct = ((1 + ixicRegPct / 100) * (1 + ixicPrePct / 100) - 1) * 100;
       }
     }
+    if (!isFinite(qqqRegPct) && data.usIdx && data.usIdx.qqq && Array.isArray(data.usIdx.qqq.dates) && data.usIdx.qqq.dates.length) {
+      const d = data.usIdx.qqq.dates[data.usIdx.qqq.dates.length - 1];
+      const v = data.usIdx.qqq.ret && data.usIdx.qqq.ret[d];
+      if (isFinite(v)) qqqRegPct = v;
+    }
+    if (!isFinite(ixicRegPct) && data.usIdx && data.usIdx.ixic && Array.isArray(data.usIdx.ixic.dates) && data.usIdx.ixic.dates.length) {
+      const d = data.usIdx.ixic.dates[data.usIdx.ixic.dates.length - 1];
+      const v = data.usIdx.ixic.ret && data.usIdx.ixic.ret[d];
+      if (isFinite(v)) ixicRegPct = v;
+    }
+    if (!isFinite(qqqPct) && isFinite(qqqRegPct) && isFinite(qqqPrePct)) qqqPct = ((1 + qqqRegPct / 100) * (1 + qqqPrePct / 100) - 1) * 100;
+    if (!isFinite(ixicPct) && isFinite(ixicRegPct) && isFinite(ixicPrePct)) ixicPct = ((1 + ixicRegPct / 100) * (1 + ixicPrePct / 100) - 1) * 100;
+    const premarketModeForCache = premarketMode(ctx, debugTime, {
+      qqqPct: isFinite(qqqPct) ? qqqPct : null,
+      ixicPct: isFinite(ixicPct) ? ixicPct : null,
+      qqqRegPct: isFinite(qqqRegPct) ? qqqRegPct : null,
+      ixicRegPct: isFinite(ixicRegPct) ? ixicRegPct : null,
+    });
+    const planDate = data.session && data.session.lastTradingDate && premarketModeForCache === 'next'
+      ? data.session.lastTradingDate + ':next'
+      : todayStr;
     // 跨天时清空旧 plan（昨日 adjustments/touched 不留到次日）
-    if (LAST_PREMARKET_PLAN && LAST_PREMARKET_PLAN._date && LAST_PREMARKET_PLAN._date !== todayStr) {
+    if (LAST_PREMARKET_PLAN && LAST_PREMARKET_PLAN._date && LAST_PREMARKET_PLAN._date !== planDate) {
       LAST_PREMARKET_PLAN = null;
     }
     const premarket = buildPremarketPlan(ctx, LAST_PREMARKET_PLAN, {
@@ -5309,11 +5519,12 @@ app.get('/api/etf-track', async (req, res) => {
       debugTime,
     });
     if (premarket) {
-      premarket._date = todayStr;
+      premarket._date = planDate;
       LAST_PREMARKET_PLAN = premarket;
     }
 
-    const payload = { success: true, ...data, pos, advice, alerts, todayBar, premCross, premarket };
+    const { usIdx: _usIdx, ...publicData } = data;
+    const payload = { success: true, ...publicData, pos, advice, alerts, todayBar, premCross, premarket };
     if (req.query.diag === '1') {
       payload.diag = {
         klineCount: ETF_KLINES.length,
