@@ -2790,10 +2790,10 @@ function etfPct(v) {
 }
 
 // 图表宽度：按容器实际宽度出图，避免固定 viewBox 被横向拉伸导致文字变形
-// （body 有 max-width 560px，左右各 12px padding；extra 为容器额外内缩，如盘面面板卡片的边框+内边距）
+// （body 有 max-width 480px，左右各 12px padding；extra 为容器额外内缩，如盘面面板卡片的边框+内边距）
 function etfChartWidth(extra = 0) {
   const vw = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 400;
-  return Math.max(280, Math.min(vw, 560) - 24 - extra);
+  return Math.max(280, Math.min(vw, 480) - 24 - extra);
 }
 
 // 移动加权平均成本（AVCO）：买入累加成本，卖出按当时均价结转已实现盈亏
