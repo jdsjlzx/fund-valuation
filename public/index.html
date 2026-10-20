@@ -3589,7 +3589,7 @@ function etfIntradayHtml() {
   if (!d || !d.points || d.points.length < 2) return head('—') + `<div class="etf-empty">分时数据不可用</div>` + etfQuoteInlineHtml();
   const pts = d.points;
   const prevClose = d.prevClose || q.prevClose || pts[0].price;
-  const W = etfChartWidth(24), H = 124, PL = 36, PR = 10, PT = 9, PB = 18;   // 面板卡片：左右边框1+内边距11
+  const W = etfChartWidth(24), H = 124, PL = 36, PR = 44, PT = 9, PB = 18;   // 面板卡片：左右边框1+内边距11；PR 留 44 给最新价签
   const vals = [];
   pts.forEach(p => { vals.push(p.price); if (p.avg != null) vals.push(p.avg); });
   vals.push(prevClose);
@@ -3647,7 +3647,13 @@ function etfIntradayHtml() {
   const pricePath = pathOf('price');
   const avgPath = pathOf('avg');
   const areaPath = pricePath ? `${pricePath} L${X(n - 1).toFixed(1)} ${(H - PB).toFixed(1)} L${X(0).toFixed(1)} ${(H - PB).toFixed(1)} Z` : '';
-  const lastDot = `<circle cx="${X(n - 1).toFixed(1)}" cy="${Y(lastP).toFixed(1)}" r="2.6" fill="${main}"/>`;
+  // 最新价标签：吸附在最后一个点右侧，跟随涨跌着色；Y 防越界
+  const lastX = X(n - 1), lastY = Y(lastP);
+  const lastDot = `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="2.6" fill="${main}"/>`;
+  const lastLblY = Math.max(PT + 6, Math.min(H - PB - 6, lastY));
+  const lastLabel = `
+    <rect x="${(lastX + 4).toFixed(1)}" y="${(lastLblY - 7).toFixed(1)}" width="${PR - 6}" height="14" rx="3" fill="${main}"/>
+    <text x="${(lastX + 4 + (PR - 6) / 2).toFixed(1)}" y="${(lastLblY + 3.4).toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="600" fill="#fff">${lastP.toFixed(3)}</text>`;
 
   const chgFromPrev = ((lastP / prevClose - 1) * 100);
   const dataTime = (q.quoteTime || '').slice(11);
@@ -3666,7 +3672,7 @@ function etfIntradayHtml() {
         ${prevLine}${refLines}
         ${avgPath ? `<path d="${avgPath}" fill="none" stroke="#e8a03d" stroke-width="1.1" stroke-dasharray="3 2" opacity="0.9"/>` : ''}
         ${pricePath ? `<path d="${pricePath}" fill="none" stroke="${main}" stroke-width="1.5"/>` : ''}
-        ${lastDot}
+        ${lastDot}${lastLabel}
       </svg>
     </div>
     <div class="etf-legend">
