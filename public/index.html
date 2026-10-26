@@ -2818,6 +2818,29 @@ function etfPosition() {
   return { shares, cost, avgCost: shares > 0 ? cost / shares : 0, realized };
 }
 
+// ═══ 浏览器标题实时显示纳指科技 涨跌幅/净值（仅在 #/etf tab）═══
+const DOC_TITLE_DEFAULT = '美股基金估值';
+function updateDocTitle() {
+  if (typeof document === 'undefined') return;
+  const inEtfTab = currentRoute().view === 'etf';
+  if (!inEtfTab) {
+    if (document.title !== DOC_TITLE_DEFAULT && !document.title.startsWith('🔔')) {
+      document.title = DOC_TITLE_DEFAULT;
+    }
+    return;
+  }
+  const q = ETF_TRACK && ETF_TRACK.quote;
+  if (!q || q.price == null) {
+    document.title = `纳指科技 · ${DOC_TITLE_DEFAULT}`;
+    return;
+  }
+  const pct = q.changePct;
+  const arrow = pct == null ? '' : (pct > 0 ? '▲' : pct < 0 ? '▼' : '');
+  const pctStr = pct == null ? '--' : `${arrow}${Math.abs(pct).toFixed(2)}%`;
+  const priceStr = `¥${Number(q.price).toFixed(4)}`;
+  document.title = `${pctStr} ${priceStr} · 纳指科技`;
+}
+
 async function loadEtfTrack() {
   if (ETF_LOADING) return;
   ETF_LOADING = true;
@@ -2876,6 +2899,7 @@ async function loadEtfTrack() {
     ETF_TRACK = json;
     ETF_LOAD_ERR = null;
     processEtfAlerts(json.alerts || []);
+    updateDocTitle();
   } catch (e) {
     ETF_LOAD_ERR = e.message;
   } finally {
@@ -4562,6 +4586,7 @@ function renderDetail(idx, mode) {
 // ═══════════════════════════════════════════════════
 function rerender() {
   const r = currentRoute();
+  updateDocTitle();
   if (r.view === 'detail') renderDetail(r.idx, r.mode);
   else if (r.view === '24h') render24h();
   else if (r.view === 'history') renderHistory();
