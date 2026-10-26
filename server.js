@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const https = require('https');
 const http = require('http');
 const path = require('path');
@@ -6,7 +7,35 @@ const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.use(express.static(path.join(__dirname, 'public')));
+
+// ═══ 带宽优化：gzip 压缩 + 静态资源强缓存 ═══
+app.use(compression({
+  level: 6,                    // 压缩等级 6 (速度与压缩率平衡)
+  threshold: 1024,             // 仅压缩 >1KB 的响应
+  filter: (req, res) => {
+    // API 响应和 HTML 都压缩；图片等已是压缩格式则跳过
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  }
+}));
+
+// 静态资源强缓存 1 天（HTML/JS/CSS 内容变化不频繁）
+app.use(express.static(path.join(__dirname, 'public'), {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true,
+  setHeaders: (res, filePath) => {
+    // HTML 文件缓存缩短到 5 分钟，确保更新及时
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'public, max-age=300');
+    }
+  }
+}));
+
+// 轻量健康检查端点（keep-alive 专用，< 100 bytes）
+app.get('/api/health', (req, res) => {
+  res.json({ ok: 1 });
+});
 
 // ═══════════════════════════════════════════════════════
 //  Fund roster (display name → eastmoney code)
@@ -111,6 +140,8 @@ app.get('/api/funds', (req, res) => {
   if (!fundsCache) {
     return res.status(500).json({ error: 'holdings data not loaded. Run: npm run update-holdings' });
   }
+  // 基金列表变化不频繁，允许浏览器/中间缓存 5 分钟
+  res.setHeader('Cache-Control', 'public, max-age=300');
   res.json({ success: true, funds: fundsCache, loadedAt: fundsCacheTs });
 });
 
@@ -5670,16 +5701,19 @@ app.get('/api/fund-history', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════
-//  Keep-alive: self-ping every 5 minutes to prevent sleep
+//  Keep-alive: self-ping every 30 minutes to reduce bandwidth
+//  Note: Render free tier sleeps after 15min idle, so this
+//  won't prevent cold start, but minimizes self-ping traffic.
 // ═══════════════════════════════════════════════════════
 function startKeepAlive(port) {
   const selfUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://fund-valuation-m37d.onrender.com';
-  const INTERVAL = 5 * 60 * 1000; // 5 minutes
+  const INTERVAL = 30 * 60 * 1000; // 30 minutes
 
   setInterval(() => {
-    const url = selfUrl.startsWith('https') ? selfUrl : selfUrl;
     const mod = selfUrl.startsWith('https') ? https : http;
-    const req = mod.get(selfUrl + '/', (res) => {
+    const req = mod.get(selfUrl + '/api/health', (res) => {
+      // 消费响应数据但丢弃，避免占用内存
+      res.resume();
       console.log(`[keep-alive] ping ${selfUrl} → ${res.statusCode}`);
     });
     req.on('error', (err) => {
@@ -5688,7 +5722,7 @@ function startKeepAlive(port) {
     req.end();
   }, INTERVAL);
 
-  console.log(`[keep-alive] 每5分钟自动访问 ${selfUrl}`);
+  console.log(`[keep-alive] 每30分钟自动访问 ${selfUrl}/api/health`);
 }
 
 // ═══════════════════════════════════════════════════════
