@@ -404,16 +404,21 @@ function cleanHoldings(holdings, source) {
 }
 
 function mergeLatestWithFull(latest, full) {
-  const map = new Map();
-  for (const h of cleanHoldings(full ? full.holdings : [], 'full_report')) {
-    map.set(holdingKey(h), h);
-  }
+  const merged = [];
+  const seen = new Set();
+
   for (const h of cleanHoldings(latest ? latest.holdings : [], 'latest_report')) {
-    map.set(holdingKey(h), h);
+    merged.push(h);
+    seen.add(holdingKey(h));
   }
-  return [...map.values()]
-    .sort((a, b) => b.w - a.w)
-    .slice(0, MAX_HOLDINGS);
+  for (const h of cleanHoldings(full ? full.holdings : [], 'full_report')) {
+    const key = holdingKey(h);
+    if (seen.has(key)) continue;
+    merged.push(h);
+    seen.add(key);
+  }
+
+  return merged.slice(0, MAX_HOLDINGS);
 }
 
 async function fetchFundHoldings(code) {

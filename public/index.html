@@ -4317,7 +4317,7 @@ function renderList() {
   let rows = '';
   const sorted = sortedFundIndices(map, fxChg, {});
   const lastPinnedIdx = [...sorted].reverse().findIndex(x => pinnedSet.has(x.idx));
-  const lastPinnedPos = lastPinnedIdx >= 0 ? sorted.length - 1 - lastPinnedIdx : -1;
+  const lastPinnedPos = lastPinnedIdx >= 0 ? ordered.length - 1 - lastPinnedIdx : -1;
   sorted.forEach((item, pos) => {
     const { idx, chg } = item;
     const fund = FUNDS[idx];
@@ -4341,7 +4341,7 @@ function renderList() {
         <span class="fund-pct ${cls(chg)}">${fmtPct(chg)}</span>
         <span class="chevron">›</span>
       </div>`;
-    if (pos === lastPinnedPos && lastPinnedPos < sorted.length - 1) rows += '<div class="pin-divider"></div>';
+    if (pos === lastPinnedPos && lastPinnedPos < ordered.length - 1) rows += '<div class="pin-divider"></div>';
     prevFundPct.set(idx, chg);
   });
 
@@ -4510,9 +4510,9 @@ function renderDetail(idx, mode) {
   const opts = mode === '24h' ? { mode: '24h' } : {};
   const est = calcFund(fund, map, fxChg, opts);
 
-  const sorted = [...(fund.holdings || [])].sort((a, b) => b.w - a.w);
-  const visible = expanded ? sorted : sorted.slice(0, 10);
-  const hasMore = sorted.length > 10;
+  const ordered = [...(fund.holdings || [])];
+  const visible = expanded ? ordered : ordered.slice(0, 10);
+  const hasMore = ordered.length > 10;
 
   const rowsHtml = visible.map(h => {
     const isUs = isUSHolding(h);
@@ -4542,19 +4542,19 @@ function renderDetail(idx, mode) {
   }).join('');
 
   const expandHtml = (hasMore && !expanded)
-    ? `<button class="retry-btn" style="display:block;width:100%;margin:0;padding:16px;border-radius:0;border:none;border-bottom:1px solid var(--border);background:transparent;color:var(--text-name);font-size:14px" onclick="expandAll()">展开全部数据 (${sorted.length})</button>`
+    ? `<button class="retry-btn" style="display:block;width:100%;margin:0;padding:16px;border-radius:0;border:none;border-bottom:1px solid var(--border);background:transparent;color:var(--text-name);font-size:14px" onclick="expandAll()">展开全部数据 (${ordered.length})</button>`
     : '';
 
   const qDate = fund.reportDate || '';
   const yDate = fund.annualDate || '';
-  const coveragePct = ((Number(fund.coverageWeight) || sorted.reduce((s, h) => s + h.w, 0)) * 100).toFixed(1);
+  const coveragePct = ((Number(fund.coverageWeight) || ordered.reduce((s, h) => s + h.w, 0)) * 100).toFixed(1);
   let noteText;
   if (qDate && yDate && qDate !== yDate) {
-    noteText = `基于 ${qDate} 最新报告结合 ${yDate} 中报/年报持仓计算, 披露覆盖 ${coveragePct}%, 剩余权重用指数代理, 共 ${sorted.length} 支`;
+    noteText = `基于 ${qDate} 最新报告结合 ${yDate} 中报/年报持仓计算, 披露覆盖 ${coveragePct}%, 剩余权重用指数代理, 共 ${ordered.length} 支`;
   } else if (qDate) {
-    noteText = `基于 ${qDate} 最新报告持仓计算, 披露覆盖 ${coveragePct}%, 剩余权重用指数代理, 共 ${sorted.length} 支`;
+    noteText = `基于 ${qDate} 最新报告持仓计算, 披露覆盖 ${coveragePct}%, 剩余权重用指数代理, 共 ${ordered.length} 支`;
   } else {
-    noteText = `基于公开披露持仓计算, 披露覆盖 ${coveragePct}%, 剩余权重用指数代理, 共 ${sorted.length} 支`;
+    noteText = `基于公开披露持仓计算, 披露覆盖 ${coveragePct}%, 剩余权重用指数代理, 共 ${ordered.length} 支`;
   }
 
   const mktLabel24h = mode === '24h' ? us24hSession() : '';
