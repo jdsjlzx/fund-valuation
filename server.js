@@ -1666,8 +1666,7 @@ function computeOvernightQuote({
     price = xq.currentExt;
     source = 'xueqiu-ext';
   } else if (yahooCoversOvernight) {
-    // Yahoo fullday（含盘前/盘后/隔夜），海外网络可达时为实时值
-    chg = yahoo.fulldayChangePercent;
+    chg = closeForOvernight > 0 ? ((yahooFullday - closeForOvernight) / closeForOvernight) * 100 : yahoo.fulldayChangePercent;
     price = yahooFullday;
     source = 'yahoo';
   } else if (etfFut) {
