@@ -5705,8 +5705,13 @@ app.get('/api/fund-history', async (req, res) => {
 //  Note: Render free tier sleeps after 15min idle, so this
 //  won't prevent cold start, but minimizes self-ping traffic.
 // ═══════════════════════════════════════════════════════
-function startKeepAlive(port) {
-  const selfUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://fund-valuation-m37d.onrender.com';
+function startKeepAlive() {
+  const selfUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL;
+  if (!selfUrl) {
+    console.log('[keep-alive] 本地环境未启用');
+    return;
+  }
+
   const INTERVAL = 30 * 60 * 1000; // 30 minutes
 
   setInterval(() => {
@@ -5733,5 +5738,5 @@ app.listen(PORT, () => {
   // Warm fund cache in background
   loadHoldingsFromFile();
   // Self-ping to prevent server sleep
-  startKeepAlive(PORT);
+  startKeepAlive();
 });
