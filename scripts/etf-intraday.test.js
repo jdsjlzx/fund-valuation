@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const test = require('node:test');
 const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-const declaration = (source, name) => source.match(new RegExp(`^function ${name}\\([^]*?^\\}`, 'm'))[0];
+const declaration = (source, name) => source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, 'm'))[0];
 const names = ['etfMinuteNumber', 'isEtfContinuousMinute', 'parseEtfMinuteData', 'getBasePrevClose', 'premarketMode', 'buildPremarketPlan', 'buildEtfIntradayBands', 'buildEtfIntradayGuide', 'buildEtfIntradaySignals', 'buildEtfAlerts'];
 const context = vm.createContext({ PREMIUM_BUY: 18, PREMIUM_WATCH: 22, PREMIUM_ADD: 15, PREMIUM_DANGER: 27,
   premiumZone: () => ({ key: 'exit', label: '极高' }), premiumPriceLadder: () => null,
@@ -334,15 +334,23 @@ test('非交易时段与休市均不触发盘中通知', () => {
   assert.equal(browser.etfAlertsActive(Date.parse('2026-11-05T05:00:00Z')), false);
 });
 
-test('次日计划默认折叠，展开状态保留，盘中计划不折叠', () => {
-  const browser = vm.createContext({ ETF_TRACK: { premarket: { mode: 'next', buy: [], sell: [], stop: {}, basePrevClose: 3 }, quote: {} },
-    ETF_NEXT_PLAN_OPEN: false, escHtml: String, etfPremarketHistoryHtml: () => '' });
+test('盘前参考计划独立默认折叠，开盘收盘及次日都可展开且记录随计划折叠', () => {
+  const browser = vm.createContext({ ETF_TRACK: { today: '2026-11-05', premarket: { mode: 'next', buy: [], sell: [], stop: {}, basePrevClose: 3 }, quote: {} },
+    ETF_PLAN_OPEN: false, escHtml: String, etfPremarketHistoryHtml: () => '' });
   vm.runInContext(declaration(html, 'etfPremarketHtml'), browser);
+  for (const mode of ['pre', 'live', 'closed', 'next']) {
+    browser.ETF_TRACK.premarket.mode = mode;
+    browser.ETF_PLAN_OPEN = false;
+    const folded = browser.etfPremarketHtml();
+    assert.match(folded, /<details class="etf-plan-fold"\s+ontoggle/);
+    assert.doesNotMatch(folded, /盘前／盘中/);
+    assert.match(folded, mode === 'next' ? /下个交易日 · 参考计划/ : /盘前提示 · 参考计划/);
+    if (mode === 'next' || mode === 'closed') assert.ok(folded.indexOf('今日计划记录') < folded.indexOf('</details>'));
+    browser.ETF_PLAN_OPEN = true;
+    assert.match(browser.etfPremarketHtml(), /<details class="etf-plan-fold" open/);
+  }
+  browser.ETF_TRACK.premarket = null; browser.ETF_PLAN_OPEN = false;
   assert.match(browser.etfPremarketHtml(), /<details class="etf-plan-fold"\s+ontoggle/);
-  browser.ETF_NEXT_PLAN_OPEN = true;
-  assert.match(browser.etfPremarketHtml(), /<details class="etf-plan-fold" open/);
-  browser.ETF_TRACK.premarket.mode = 'live';
-  assert.doesNotMatch(browser.etfPremarketHtml(), /etf-plan-fold/);
 });
 
 test('图表用中文区分观察和买卖候选，不把观察标为买', () => {
@@ -721,4 +729,61 @@ test('标题四字状态优先高抛风险再低吸，支持QQQ上证异动并�
   browser.ETF_LOAD_ERR = 'failed'; assert.equal(browser.etfTitleStatus(), '数据过期');
   browser.currentRoute = () => ({ view: 'qdii' }); browser.updateDocTitle();
   assert.equal(browser.document.title, '美股基金估值');
+});
+
+test('ETF停牌时标题继续显示温和回升回落反弹，保留原ETF价格且不产生买卖信号', () => {
+  for (const symbol of ['QQQ', 'SSE']) for (const direction of [1, -1]) {
+    const browser = motionBrowser();
+    browser.currentRoute = () => ({ view: 'etf' }); browser.document = { title: '' }; browser.DOC_TITLE_DEFAULT = '美股基金估值';
+    browser.ETF_TRACK = { session: { trading: false }, quote: { price: 2.921, changePct: 0 } };
+    const start = browser.Date.now() - 70000;
+    const entry = sampleMotion(browser, Array.from({ length: 8 }, (_, i) => direction * i * 0.02), symbol, {}, start);
+    assert.equal(entry.signal, null);
+    assert.equal(entry.trend.kind, direction > 0 ? 'rise' : 'fall');
+    vm.runInContext(declaration(html, 'updateDocTitle'), browser);
+    browser.updateDocTitle();
+    assert.match(browser.document.title, direction > 0 ? /回升$/ : /回落$/);
+    assert.match(browser.document.title, /0.00% ¥2.9210/);
+    assert.doesNotMatch(browser.document.title, /低吸|高抛/);
+    assert.equal(browser.etfCurrentTradeSignal(), null);
+  }
+  const browser = motionBrowser();
+  browser.ETF_TRACK = { session: { trading: false } };
+  const entry = sampleMotion(browser, [0, -0.05, -0.10, -0.15, -0.18, -0.12, -0.06, 0], 'QQQ', {}, browser.Date.now() - 70000);
+  assert.equal(entry.signal, null);
+  assert.equal(entry.trend.kind, 'rebound');
+  assert.equal(browser.etfTitleStatus(), '外盘反弹');
+  browser.ETF_LOAD_ERR = 'ETF请求失败';
+  assert.equal(browser.etfTitleStatus(), '外盘反弹');
+  assert.equal(browser.etfMarketMotion('QQQ', browser.Date.now() + 60000, true), null);
+});
+
+test('停牌时指数方向分歧单独展示，过期报价和单点变化不冒充回升', () => {
+  const browser = motionBrowser();
+  const at = browser.Date.now();
+  browser.ETF_MARKET_MOTION.QQQ = { at, trend: { kind: 'rise' } };
+  browser.ETF_MARKET_MOTION.SSE = { at, trend: { kind: 'fall' } };
+  assert.equal(browser.etfTitleStatus(), '指数分歧');
+  browser.LAST_STALE = true;
+  assert.equal(browser.etfTitleStatus(), '观察');
+  const flat = motionBrowser();
+  const entry = sampleMotion(flat, [0, 0, 0, 0, 0, 0, 0.2, 0.2], 'QQQ', {}, at - 70000);
+  assert.equal(entry.trend, null);
+  assert.equal(flat.etfTitleStatus(), '平稳观察');
+});
+
+test('指数标题更新不等待ETF请求，下一轮采样仍按十秒调度', async () => {
+  let resolveETF;
+  const pending = new Promise(resolve => { resolveETF = resolve; });
+  const order = [];
+  const browser = vm.createContext({ LAST_MAP: {}, LAST_STALE: false, etfLastLoadTs: 0, timer: null,
+    fetchQuotes: async () => ({ map: { QQQ: {} }, stale: false }), etfSampleMarketMotion: () => order.push('sample'),
+    updateDocTitle: () => order.push('title'), currentRoute: () => ({ view: 'etf' }),
+    loadEtfTrack: () => { order.push('etf'); return pending; }, rerender: () => order.push('render'), clearTimeout() {},
+    setTimeout: (_, ms) => { order.push(ms); return 1; }, console });
+  vm.runInContext(declaration(html, 'pollLoop'), browser);
+  await browser.pollLoop();
+  assert.deepEqual(order, ['sample', 'title', 'etf', 'render', 10000]);
+  resolveETF(); await Promise.resolve();
+  assert.equal(order.at(-1), 'render');
 });

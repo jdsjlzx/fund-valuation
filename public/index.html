@@ -2756,7 +2756,7 @@ let ETF_ALERT_LOG = (() => {
 })();
 let ETF_ALERT_EXPAND = false;   // 当前提示：是否展开全部（默认只列 Top3）
 let ETF_ALERT_LOG_OPEN = false; // 「提示记录」是否展开
-let ETF_NEXT_PLAN_OPEN = false;
+let ETF_PLAN_OPEN = false;
 let ETF_BT_OPEN = new Set();    // 策略对比：已展开交易日期明细的策略（按下标）
 let ETF_RENDERED_DATE = null;   // 已整页渲染对应的交易日（跨日时整页重绘）
 let ETF_INTRADAY_VIEW = { date: null, offset: 0, follow: true };
@@ -3047,7 +3047,7 @@ function etfToggleNotify() {
   });
 }
 
-function etfDetectMarketMotion(points, symbol, extended = false) {
+function etfDetectMarketMotion(points, symbol, extended = false, trend = false) {
   if (points.length < 4) return null;
   const last = points[points.length - 1];
   const changes = points.filter((p, i) => i === 0 || p.price !== points[i - 1].price);
@@ -3055,7 +3055,8 @@ function etfDetectMarketMotion(points, symbol, extended = false) {
   const a = changes[changes.length - 3], b = changes[changes.length - 2], c = changes[changes.length - 1];
   const rising = a.price < b.price && b.price < c.price;
   const falling = a.price > b.price && b.price > c.price;
-  const thresholds = symbol === 'SSE' ? [0.20, 0.35, 0.50] : [0.25, 0.45, 0.65];
+  const thresholds = trend ? (symbol === 'SSE' ? [0.06, 0.12, 0.20] : [0.08, 0.16, 0.25])
+    : symbol === 'SSE' ? [0.20, 0.35, 0.50] : [0.25, 0.45, 0.65];
   const factor = extended ? 1.3 : 1;
   const recent = points.filter(p => last.at - p.at <= 300000);
   const low = recent.reduce((l, p) => p.price < l.price ? p : l, recent[0]);
@@ -3064,7 +3065,7 @@ function etfDetectMarketMotion(points, symbol, extended = false) {
   const rebound = (last.price / low.price - 1) * 100;
   const drawdown = (1 - low.price / peak) * 100;
   if (rising && last.at - low.at >= 20000 && drawdown >= thresholds[1] * factor && rebound >= thresholds[0] * factor) {
-    return { kind: 'rebound', label: '↑ 快速反弹', move: rebound, minutes: Math.max(1, Math.ceil((last.at - low.at) / 60000)), from: low.at };
+    return { kind: 'rebound', label: trend ? '↑ 反弹' : '↑ 快速反弹', move: rebound, minutes: Math.max(1, Math.ceil((last.at - low.at) / 60000)), from: low.at };
   }
   for (let i = 0; i < 3; i++) {
     const minutes = [1, 3, 5][i], target = last.at - minutes * 60000;
@@ -3072,7 +3073,8 @@ function etfDetectMarketMotion(points, symbol, extended = false) {
     if (!base || base.at - target > 15000) continue;
     const move = (last.price / base.price - 1) * 100;
     if (Math.abs(move) >= thresholds[i] * factor && (move > 0 ? rising : falling)) {
-      return { kind: move > 0 ? 'surge' : 'drop', label: move > 0 ? '↑ 急涨' : '↓ 急跌', move, minutes, from: base.at };
+      return { kind: trend ? (move > 0 ? 'rise' : 'fall') : (move > 0 ? 'surge' : 'drop'),
+        label: trend ? (move > 0 ? '↑ 回升' : '↓ 回落') : (move > 0 ? '↑ 急涨' : '↓ 急跌'), move, minutes, from: base.at };
     }
   }
   return null;
@@ -3099,22 +3101,24 @@ function etfSampleMarketMotion(map, stale, now = Date.now()) {
     const key = `${date}:${state}:${symbol === 'SSE' && minute >= 780 ? 'pm' : ''}:${q.overnightSource || ''}:${reference}`;
     let entry = ETF_MARKET_MOTION[symbol];
     if (!entry || entry.key !== key || now - entry.at > 45000 || now < entry.at) {
-      entry = ETF_MARKET_MOTION[symbol] = { key, points: [], at: now, candidate: null, signal: null };
+      entry = ETF_MARKET_MOTION[symbol] = { key, points: [], at: now, candidate: null, signal: null, trendCandidate: null, trend: null };
     }
     if (entry.points.length && now - entry.at < 8000) continue;
     entry.at = now;
     entry.points = entry.points.filter(p => now - p.at <= 315000);
     entry.points.push({ at: now, price: 1 + pct / 100 });
-    const signal = etfDetectMarketMotion(entry.points, symbol, state !== 'REGULAR');
-    if (!signal) { entry.candidate = null; entry.signal = null; continue; }
-    if (entry.candidate && entry.candidate.kind === signal.kind && now - entry.candidate.at >= 8000) entry.signal = signal;
-    else { entry.candidate = { kind: signal.kind, at: now }; entry.signal = null; }
+    for (const [field, candidate, trend] of [['signal', 'candidate', false], ['trend', 'trendCandidate', true]]) {
+      const signal = etfDetectMarketMotion(entry.points, symbol, state !== 'REGULAR', trend);
+      if (!signal) { entry[candidate] = null; entry[field] = null; continue; }
+      if (entry[candidate] && entry[candidate].kind === signal.kind && now - entry[candidate].at >= 8000) entry[field] = signal;
+      else { entry[candidate] = { kind: signal.kind, at: now }; entry[field] = null; }
+    }
   }
 }
 
-function etfMarketMotion(symbol, now = Date.now()) {
+function etfMarketMotion(symbol, now = Date.now(), includeTrend = false) {
   const entry = ETF_MARKET_MOTION[symbol];
-  return !LAST_STALE && entry && now >= entry.at && now - entry.at <= 45000 ? entry.signal : null;
+  return !LAST_STALE && entry && now >= entry.at && now - entry.at <= 45000 ? entry.signal || (includeTrend ? entry.trend : null) : null;
 }
 
 function etfMarketMotionBadgeHtml(symbol) {
@@ -3160,7 +3164,19 @@ function etfTitleStatus() {
     const { symbol, signal } = motions[0];
     return `${symbol === 'QQQ' ? '外盘' : '上证'}${signal.kind === 'rebound' ? '反弹' : '急拉'}`;
   }
-  return ETF_LOAD_ERR ? '数据过期' : '观察';
+  const trends = ['QQQ', 'SSE'].map(symbol => ({ symbol, signal: etfMarketMotion(symbol, Date.now(), true) })).filter(x => x.signal);
+  if (trends.length) {
+    const downward = trends.filter(x => x.signal.kind === 'fall');
+    if (downward.length && downward.length !== trends.length) return '指数分歧';
+    const { symbol, signal } = trends[0];
+    const direction = { rise: '回升', fall: '回落', rebound: '反弹' }[signal.kind];
+    return `${symbol === 'QQQ' ? '外盘' : '上证'}${direction}`;
+  }
+  const sampling = ['QQQ', 'SSE'].some(symbol => {
+    const entry = ETF_MARKET_MOTION[symbol];
+    return !LAST_STALE && entry && Date.now() - entry.at <= 45000;
+  });
+  return sampling ? '平稳观察' : ETF_LOAD_ERR ? '数据过期' : '观察';
 }
 
 function etfMarketLinkHtml() {
@@ -3657,17 +3673,15 @@ function etfPremarketHtml() {
   const t = ETF_TRACK || {};
   const p = t.premarket;
   const day = t.dayPlan;
+  const title = p && p.mode === 'next' ? '下个交易日 · 参考计划' : '盘前提示 · 参考计划';
+  const fold = body => `<details class="etf-plan-fold" ${ETF_PLAN_OPEN ? 'open' : ''} ontoggle="if(this.isConnected) ETF_PLAN_OPEN=this.open"><summary>${title}<span class="sub">展开／收起</span></summary>${body}</details>`;
   const dayReview = p && (p.mode === 'next' || p.mode === 'closed') ? `
     <div class="etf-premarket-sec">
       <div class="etf-premarket-sec-title">今日计划记录（${escHtml(t.today || '')}）</div>
       <div class="etf-alert info"><span class="etf-alert-text">${day ? `基准昨收 ${day.basePrevClose.toFixed(3)}；买档 ${day.buy.map(b => b.price.toFixed(3)).join(' / ')}；卖档 ${day.sell.map(s => s.price.toFixed(3)).join(' / ')}` : '今日未保存盘中计划，不能用次日计划补造今日触达记录。'}</span></div>
       ${day ? (day.touches || []).map(e => `<div class="etf-alert info"><span class="etf-alert-title">${escHtml(e.time)} · ${escHtml(e.key.toUpperCase())} 触达 · ${e.price.toFixed(3)}</span><span class="etf-alert-text">参考档位 ${e.target.toFixed(3)}，记录触达不代表已成交。</span></div>`).join('') : ''}
     </div>` : '';
-  if (!p) {
-    return `
-      <div class="etf-board-head"><span>盘前提示</span><span class="sub">T+0 日内高抛低吸</span></div>
-      <div class="etf-empty">数据加载中…</div>`;
-  }
+  if (!p) return fold('<div class="etf-empty">数据加载中…</div>');
   const modeBadge = p.mode === 'pre' ? '<span class="etf-badge pre">盘前</span>'
     : p.mode === 'live' ? '<span class="etf-badge live">盘中微调</span>'
     : p.mode === 'next' ? '<span class="etf-badge next">下个交易日</span>'
@@ -3675,12 +3689,7 @@ function etfPremarketHtml() {
   const genAt = p.generatedAt ? new Date(p.generatedAt) : null;
   const genStr = genAt ? `${String(genAt.getHours()).padStart(2,'0')}:${String(genAt.getMinutes()).padStart(2,'0')}` : '—';
 
-  // 没有有效外盘输入时才折叠
-  if (p.mode === 'closed') {
-    return `
-      <div class="etf-board-head"><span>盘前提示</span><span class="sub">T+0 日内高抛低吸 · ${modeBadge}</span></div>
-      <div class="etf-empty">等待美股收盘数据；收盘后自动生成下个交易日计划</div>${dayReview}`;
-  }
+  if (p.mode === 'closed') return fold(`<div class="etf-empty">等待美股收盘数据；收盘后自动生成下个交易日计划</div>${dayReview}`);
 
   const curPct = t.quote && t.quote.price != null && p.basePrevClose
     ? ((t.quote.price / p.basePrevClose - 1) * 100) : null;
@@ -3725,7 +3734,7 @@ function etfPremarketHtml() {
 
   const planBody = `
     <div class="etf-board-head">
-      <span>${p.mode === 'next' ? '下个交易日 · 参考计划' : '盘前／盘中 · 日内参考计划'}</span>
+      <span>参考计划详情</span>
       <span class="sub">${modeBadge} 生成于 ${genStr}${p.expectOpenPct != null ? ` · 预期开盘 ${p.expectOpenPct >= 0 ? '+' : ''}${p.expectOpenPct.toFixed(2)}%` : ''}</span>
     </div>
     <div class="etf-alert info">
@@ -3746,12 +3755,7 @@ function etfPremarketHtml() {
       <span class="etf-alert-text">${stopTxt}</span>
     </div>
     ${adjBlock}`;
-  if (p.mode === 'next') return `
-    <details class="etf-plan-fold" ${ETF_NEXT_PLAN_OPEN ? 'open' : ''} ontoggle="if(this.isConnected) ETF_NEXT_PLAN_OPEN=this.open">
-      <summary>下个交易日 · 参考计划<span class="sub">展开／收起</span></summary>
-      ${planBody}
-    </details>${dayReview}`;
-  return planBody + dayReview;
+  return fold(planBody + dayReview);
 }
 
 function etfIntradaySignalsHtml() {
@@ -4582,6 +4586,8 @@ function renderEtfView() {
     ${tabbarHtml('etf')}
     <div class="etf-board">
       <div class="etf-board-sec" id="etf-premarket">${etfPremarketHtml()}</div>
+    </div>
+    <div class="etf-board">
       <div class="etf-board-sec" id="etf-intraday">${etfIntradayHtml()}</div>
       <div class="etf-board-sec" id="etf-alerts">${etfAlertsHtml()}</div>
     </div>
@@ -5107,7 +5113,10 @@ async function pollLoop() {
     LAST_MAP = map;
     LAST_STALE = stale;
     etfSampleMarketMotion(map, stale);
+    updateDocTitle();
   } catch (e) {
+    LAST_STALE = true;
+    updateDocTitle();
     console.error('quotes poll failed:', e);
   }
   // 纳指科技ETF 跟踪数据：在视图内每轮刷新；其他 Tab 下最多 30 秒一次
@@ -5116,7 +5125,7 @@ async function pollLoop() {
     const onEtf = currentRoute().view === 'etf';
     if (onEtf || Date.now() - etfLastLoadTs > 30000) {
       etfLastLoadTs = Date.now();
-      await loadEtfTrack();
+      loadEtfTrack().then(rerender);
     }
   } catch (e) {
     console.error('etf-track poll failed:', e);
