@@ -6,7 +6,7 @@ const test = require('node:test');
 const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 const declaration = (source, name) => source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, 'm'))[0];
-const names = ['etfMinuteNumber', 'isEtfContinuousMinute', 'parseEtfMinuteData', 'getBasePrevClose', 'premarketMode', 'buildPremarketPlan', 'buildEtfIntradayBands', 'buildEtfIntradayGuide', 'buildEtfIntradaySignals', 'buildEtfAlerts'];
+const names = ['etfMinuteNumber', 'isEtfContinuousMinute', 'parseEtfMinuteData', 'getBasePrevClose', 'premarketMode', 'unpricedUsMove', 'buildPremarketPlan', 'buildEtfIntradayBands', 'buildEtfIntradayGuide', 'buildEtfIntradaySignals', 'buildEtfAlerts'];
 const context = vm.createContext({ PREMIUM_BUY: 18, PREMIUM_WATCH: 22, PREMIUM_ADD: 15, PREMIUM_DANGER: 27,
   premiumZone: () => ({ key: 'exit', label: '极高' }), premiumPriceLadder: () => null,
   buildPremarketHistoryReview: () => null });
@@ -50,6 +50,104 @@ test('盘中重复请求保留触达与已观察信号，次日计划独立生�
   assert.equal(next.basePrevClose, 2.93);
   assert.equal(next.touches.length, 0);
   assert.equal(JSON.stringify(day), snapshot);
+});
+
+test('正规盘暴跌不能被盘外小幅反弹掩盖，首档按累计跌幅下移', () => {
+  const fixture = { today: '2026-11-06', quote: { price: 2.921, prevClose: 2.921, premiumPct: 41 }, ind: {},
+    klineLast: { date: '2026-11-05', close: 2.921, open: 2.969, high: 3.008, low: 2.914 }, klinePrev: { date: '2026-11-04', close: 2.946 }, session: { trading: false } };
+  const plan = context.buildPremarketPlan(fixture, null, { debugTime: '2026-11-06T00:30:00Z', qqqRegPct: -6.49, qqqPrePct: 0.98, ixicRegPct: -5.52, ixicPrePct: 1.35 });
+  assert.ok(plan.expectOpenPct < -3);
+  assert.ok(plan.buy[0].pct < -3);
+  assert.match(plan.logic, /尚未消化的美股累计/);
+  assert.ok(plan.inputs.qqqUnpricedPct < -5);
+});
+
+test('ETF休市跨多日按基准日前美股收盘累计，不重复计算已消化收盘', () => {
+  const h = { dates: ['2026-11-04', '2026-11-05', '2026-11-06'], closes: [100, 95, 90] };
+  assert.ok(Math.abs(context.unpricedUsMove(h, '2026-11-05', -5.26, 1, null, 'pre') + 9.1) < 0.001);
+  assert.ok(Math.abs(context.unpricedUsMove(h, '2026-11-06', -5.26, 1, null, 'pre') - (90 / 95 * 1.01 - 1) * 100) < 0.001);
+  assert.equal(context.unpricedUsMove(h, '2026-11-09', -5.26, 1, null, 'next'), null);
+  assert.equal(context.unpricedUsMove(h, '2026-11-09', -5.26, 1, null, 'pre'), 1);
+});
+
+test('低开高抛档位基于实际开盘，低于昨收且两档分开', () => {
+  const fixture = input(rebound, { today: '2026-11-06', klineLast: { date: '2026-11-06', close: 2.804 }, klinePrev: { date: '2026-11-05', close: 2.921, open: 2.969, high: 3.008, low: 2.914 } });
+  fixture.quote = { ...fixture.quote, quoteDate: '2026-11-06', prevClose: 2.921, open: 2.81 };
+  const old = { buy: [], sell: [{ key: 's1', pct: 0.3 }, { key: 's2', pct: 0.3 }], touched: {}, inputs: {} };
+  const plan = context.buildPremarketPlan(fixture, old, { debugTime: '2026-11-06T03:00:00Z', qqqRegPct: -6.49, qqqPrePct: 1, ixicRegPct: -5.52, ixicPrePct: 1 });
+  assert.equal(plan.inputs.sellAnchor, '实际开盘');
+  assert.equal(plan.sell[0].price, 2.824);
+  assert.equal(plan.sell[1].price, 2.838);
+  assert.ok(plan.sell[1].pct > plan.sell[0].pct);
+  assert.ok(plan.sell.every(s => s.pct < 0));
+});
+
+test('未触达档位不会复用旧口径，已触达档位和记录仍保留', () => {
+  const fixture = input(rebound, { klineLast: { date: '2026-11-05', close: 2.9, open: 2.9, high: 3, low: 2.8 } });
+  const old = { buy: [{ key: 'b1', pct: -0.3 }, { key: 'b2', pct: -0.6 }], sell: [], touched: { b1: true }, touches: [{ key: 'b1', time: '13:00' }], inputs: {} };
+  const plan = context.buildPremarketPlan(fixture, old, { debugTime: '2026-11-05T05:04:00Z', qqqRegPct: -5, qqqPrePct: 1 });
+  assert.equal(plan.buy[0].pct, -0.3);
+  assert.ok(plan.buy[1].pct < -3);
+  assert.equal(plan.touches[0].time, '13:00');
+});
+
+test('旧高抛档位已触达时保留其价格，另一档仍有间距', () => {
+  const fixture = input(rebound); fixture.quote.open = 2.8;
+  const old = { buy: [], sell: [{ key: 's1', pct: 0.3 }, { key: 's2', pct: 0.3 }], touched: { s1: true }, inputs: {} };
+  const plan = context.buildPremarketPlan(fixture, old, { debugTime: '2026-11-05T05:04:00Z', qqqRegPct: -5 });
+  assert.equal(plan.sell[0].pct, 0.3);
+  assert.ok(plan.sell[1].pct >= 0.5);
+});
+
+test('高点高于均价带仍允许转弱减仓，不因偏离上沿错失高抛', () => {
+  const points = [point('14:00', 2.915, 2.93), point('14:01', 2.932, 2.93), point('14:02', 2.952, 2.93), point('14:03', 2.947, 2.93), point('14:04', 2.943, 2.93)];
+  const events = context.buildEtfIntradaySignals(input(points)).events;
+  assert.equal(events.find(e => e.side === 'sell').time, '14:04');
+});
+
+test('波动自适应均价带比固定1.2%窄，保持上下限', () => {
+  const narrow = context.buildEtfIntradayBands([point('13:00', 3), point('13:01', 3.003), point('13:02', 3.005)]).at(-1);
+  assert.equal(narrow.halfWidthPct, 0.15);
+  const wide = context.buildEtfIntradayBands([point('13:00', 3), point('13:01', 3.3), point('13:02', 3.1)]).at(-1);
+  assert.equal(wide.halfWidthPct, 0.6);
+});
+
+test('参考和确认信号共用30分钟窗口，早期低点退出后不算大反弹', () => {
+  const points = Array.from({ length: 33 }, (_, i) => point(`13:${String(i).padStart(2, '0')}`, i === 0 ? 2 : (i === 31 ? 3.001 : i === 32 ? 3.002 : 3), 3));
+  const fixture = input(points); fixture.session.trading = false;
+  const result = context.buildEtfIntradaySignals(fixture);
+  assert.ok(result.events.filter(e => e.time >= '13:30').every(e => e.side !== 'watch'));
+  assert.equal(result.bands.at(-1).low, 3);
+  assert.ok(result.bands.at(-1).reboundPct < 0.1);
+});
+
+test('状态说明给出尚缺反弹幅度和两分钟确认，而不是触带即买卖', () => {
+  const fixture = input([point('13:00', 2.94), point('13:01', 2.93), point('13:02', 2.92)]); fixture.quote.premiumPct = 17;
+  const guide = context.buildEtfIntradaySignals(fixture).guide;
+  assert.match(guide.buyNote, /反弹还差/);
+  assert.match(guide.buyNote, /两分钟回升/);
+  assert.match(guide.sellNote, /反弹幅度还差/);
+});
+
+test('相似历史回顾剔除当日未来收盘并按ETF交易日去重', () => {
+  const historyContext = vm.createContext({});
+  vm.runInContext(declaration(server, 'buildPremarketHistoryReview'), historyContext);
+  const rows = Array.from({ length: 65 }, (_, i) => ({ date: new Date(Date.UTC(2026, 6, 1 + i)).toISOString().slice(0, 10), close: 3, low: 2.9 }));
+  rows.push({ date: '2026-11-06', close: 2.8, low: 2.7 });
+  const indices = { qqq: { dates: ['2026-07-01', '2026-11-04', '2026-11-05'], ret: { '2026-07-01': -5, '2026-11-04': -5, '2026-11-05': -5 } } };
+  const beforeClose = historyContext.buildPremarketHistoryReview(rows, indices, -5, '2026-11-06');
+  assert.equal(beforeClose.count, 1);
+  const afterClose = historyContext.buildPremarketHistoryReview(rows, indices, -5);
+  assert.equal(afterClose.count, 2);
+});
+
+test('盘口无效输入不冒充正规盘涨跌或抵消已知大跌', () => {
+  assert.equal(context.unpricedUsMove(null, null, null, null, null, 'pre'), null);
+  assert.ok(Math.abs(context.unpricedUsMove(null, null, -5, null, null, 'pre') + 5) < 1e-10);
+  const fixture = input(rebound); fixture.session.trading = false;
+  const plan = context.buildPremarketPlan(fixture, null, { debugTime: '2026-11-05T00:30:00Z' });
+  assert.equal(plan.expectOpenPct, null);
+  assert.match(plan.inputs.sellAnchor, /预测输入缺失/);
 });
 
 test('无美股输入时收盘模式不把null误当有效输入', () => {
@@ -96,7 +194,7 @@ test('日内买入候选遵守QQQ作废与14:30截止', () => {
 });
 
 test('反弹转弱可在绿盘给已有仓位减仓候选，不要求翻红', () => {
-  const points = [point('14:00', 2.915, 2.962), point('14:01', 2.932, 2.962), point('14:02', 2.952, 2.962), point('14:03', 2.947, 2.962), point('14:04', 2.943, 2.962)];
+  const points = [point('14:00', 2.915, 2.955), point('14:01', 2.932, 2.955), point('14:02', 2.952, 2.955), point('14:03', 2.947, 2.955), point('14:04', 2.943, 2.955)];
   const result = context.buildEtfIntradaySignals(input(points));
   const sell = result.events.find(e => e.side === 'sell');
   assert.ok(sell);
@@ -207,7 +305,7 @@ test('高溢价和观察档只给低吸观察，不因进入参考区升级买�
 
 test('高抛参考区内仍等待转弱，强势超过参考区不自动卖', () => {
   const ctx = input([point('13:00', 2.95, 2.95), point('13:01', 2.95, 2.95), point('13:02', 2.95, 2.95)]);
-  assert.equal(context.buildEtfIntradaySignals(ctx).guide.sellState, '高抛区内 · 等转弱');
+  assert.equal(context.buildEtfIntradaySignals(ctx).guide.sellState, '反弹观察区内 · 等转弱');
   ctx.intraday.points[2].price = 2.98;
   assert.equal(context.buildEtfIntradaySignals(ctx).guide.sellState, '反弹持有观察');
 });
@@ -237,7 +335,7 @@ test('盘后参考区明确回看而不生成当前高抛或买入指令', () =>
   const ctx = input(rebound); ctx.session.trading = false;
   const guide = context.buildEtfIntradaySignals(ctx).guide;
   assert.equal(guide.buyState, '低吸仅观察');
-  assert.equal(guide.sellState, '高抛回看');
+  assert.equal(guide.sellState, '反弹观察区回看');
   assert.match(guide.buyNote, /非实时/);
 });
 
@@ -253,7 +351,7 @@ test('图表绘制动态参考带并隐藏零成交提示，不把参考带当�
   assert.match(rendered, /data-reference-zone="sell"/);
   assert.match(rendered, /低吸 2.920–2.929/);
   assert.match(rendered, /最新参考区/);
-  assert.match(rendered, /当时累计成交均价/);
+  assert.match(rendered, /累计成交均价附近的反弹观察区/);
   assert.match(rendered, /data-band-segment="buy"/);
   assert.match(rendered, /<th>低吸区<\/th>/);
   assert.doesNotMatch(rendered, /零成交时段未绘制|可能暂停交易或数据尚未到达/);
@@ -266,7 +364,7 @@ test('逐分钟参考带保持前缀一致，后续新低与均价不改写早�
   assert.deepEqual(plain(full.slice(0, 3)), plain(before));
   assert.equal(before[0].lowBand, null);
   assert.equal(before[2].lowBand.low, 2.98);
-  assert.equal(before[2].highBand.low, +(2.995 * 0.994).toFixed(3));
+  assert.equal(before[2].highBand.low, +(2.995 * (1 - before[2].halfWidthPct / 100)).toFixed(3));
   assert.equal(full[3].lowBand.low, 2.8);
 });
 

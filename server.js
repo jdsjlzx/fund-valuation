@@ -529,7 +529,7 @@ function yahooExtSnapshot(symbols) {
   const map = new Map();
   for (const s of symbols) {
     const c = yahooExtCache.get(s);
-    if (c && c.data) map.set(s, c.data);
+    if (c && c.data && Date.now() - c.ts < YAHOO_EXT_TTL) map.set(s, c.data);
   }
   return map;
 }
@@ -1187,20 +1187,24 @@ async function fetchSinaFutures(symbols = ['NQ', 'ES', 'YM']) {
   return map;
 }
 
-function getUSMarketState() {
-  const now = new Date();
-  const month = now.getUTCMonth();
-  const isDST = month > 2 && month < 10;
-  const etOffsetMin = isDST ? -240 : -300;
-  const et = new Date(now.getTime() + etOffsetMin * 60000);
-  const day = et.getUTCDay();
-  const minOfDay = et.getUTCHours() * 60 + et.getUTCMinutes();
-  if (day === 0 || day === 6) return 'CLOSED';
-  if (minOfDay >= 240 && minOfDay < 570) return 'PRE';
-  if (minOfDay >= 570 && minOfDay < 960) return 'REGULAR';
-  if (minOfDay >= 960 && minOfDay < 1200) return 'POST';
-  // 工作日 00:00-04:00 ET：夜盘（期货持续交易）
-  return 'OVERNIGHT';
+function usMarketClock(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now);
+  const fields = Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, Number(p.value)]));
+  const localMs = Date.UTC(fields.year, fields.month - 1, fields.day, fields.hour, fields.minute, fields.second);
+  return { localMs, offsetMs: localMs - Math.floor(now.getTime() / 1000) * 1000,
+    day: new Date(localMs).getUTCDay(), minute: fields.hour * 60 + fields.minute };
+}
+
+function getUSMarketState(now = new Date()) {
+  const { day, minute } = usMarketClock(now);
+  if (day === 6 || (day === 0 && minute < 1200) || (day === 5 && minute >= 1200)) return 'CLOSED';
+  if (day === 0 || minute < 240 || minute >= 1200) return 'OVERNIGHT';
+  if (minute < 570) return 'PRE';
+  if (minute < 960) return 'REGULAR';
+  return 'POST';
 }
 
 // 本轮美股夜盘（20:00-04:00 ET）的起点时间戳（毫秒）。
@@ -1211,17 +1215,10 @@ function getUSMarketState() {
 //       在个股上偏差极大（实测闪迪：真实 +1.89% vs 估算 -0.21%）。
 //       最后一条雪球推送仍是真实成交价，只滞后不失效，因此判据应为
 //       "时间戳落在本轮夜盘内"，而非"距今多久"。
-function usOvernightSessionStart() {
-  const now = new Date();
-  const isDST = now.getUTCMonth() > 2 && now.getUTCMonth() < 10;
-  const etOffsetMin = isDST ? -240 : -300;
-  const et = new Date(now.getTime() + etOffsetMin * 60000);
-  const minOfDay = et.getUTCHours() * 60 + et.getUTCMinutes();
-  // ET 当天 00:00 对应的 UTC 毫秒
-  const etMidnightUtc = Date.UTC(et.getUTCFullYear(), et.getUTCMonth(), et.getUTCDate()) - etOffsetMin * 60000;
-  // ET 20:00（1200 分）之前 → 本轮夜盘起于前一日 20:00
-  const dayShift = minOfDay < 1200 ? -1 : 0;
-  return etMidnightUtc + (1200 + dayShift * 1440) * 60000;
+function usOvernightSessionStart(now = new Date()) {
+  const { localMs, offsetMs, minute } = usMarketClock(now);
+  const midnightUtc = Math.floor(localMs / 86400_000) * 86400_000 - offsetMs;
+  return midnightUtc + (minute < 1200 ? -240 : 1200) * 60000;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1707,7 +1704,7 @@ app.get('/api/quotes', async (req, res) => {
   const symbols = raw.split(',').map((s) => s.trim()).filter(Boolean);
   const cacheKey = [...symbols].sort().join(',');
   const cached = quoteCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < QUOTE_TTL) {
+  if (cached && cached.usState === getUSMarketState() && Date.now() - cached.ts < QUOTE_TTL) {
     return res.json({ success: true, data: cached.data, cached: true });
   }
 
@@ -1907,14 +1904,15 @@ app.get('/api/quotes', async (req, res) => {
         // 雅虎链路（直连→代理→Vercel）的 fullday 价为真实盘前价，优先采用
         if (usState === 'PRE') {
           const yhPre = yhExtData && yhExtData.get(em.symbol);
-          if (yhPre && isFinite(yhPre.fulldayPrice)) {
+          if (yhPre && yhPre.fulldayPrice > 0 && yhPre.regularMarketPrice > 0) {
+            const preChange = (yhPre.fulldayPrice / yhPre.regularMarketPrice - 1) * 100;
             return {
               ...em,
               regularMarketPrice: yhPre.fulldayPrice,
-              regularMarketChangePercent: yhPre.fulldayChangePercent,
-              preMarketChangePercent: yhPre.fulldayChangePercent,
-              closePrice: yhPre.previousClose,
-              regularMarketPreviousClose: yhPre.previousClose,
+              regularMarketChangePercent: preChange,
+              preMarketChangePercent: preChange,
+              closePrice: yhPre.regularMarketPrice,
+              regularMarketPreviousClose: yhPre.regularMarketPrice,
               postMarketChangePercent: sina.postMarketChangePercent || 0,
               afterHoursPrice: sina.afterHoursPrice || null,
             };
@@ -1997,7 +1995,7 @@ app.get('/api/quotes', async (req, res) => {
     ];
     for (const q of data) rememberClosedQuote(q);
     if (data.length === 0) throw new Error('No quotes returned');
-    quoteCache.set(cacheKey, { data, ts: Date.now() });
+    quoteCache.set(cacheKey, { data, ts: Date.now(), usState });
     if (diag) {
       // 诊断模式：GET /api/quotes?symbols=SNDK&diag=1
       // 用于确认各上游数据源谁真正返回了数据（例如 eastmoney 是否可达）
@@ -4765,7 +4763,23 @@ function premarketMode(ctx, nowOverride, opts = {}) {
   return hasUsCloseInput ? 'next' : 'closed';
 }
 
-function buildPremarketHistoryReview(klines, usIdx, qqqMovePct) {
+function unpricedUsMove(history, anchorDate, regular, extended, cumulative, mode) {
+  const compound = (a, b) => ((1 + a / 100) * (1 + b / 100) - 1) * 100;
+  if (history && history.dates && history.closes && anchorDate) {
+    const last = history.dates.length - 1;
+    let base = -1;
+    for (let i = 0; i <= last && history.dates[i] < anchorDate; i++) base = i;
+    if (last >= 0 && history.dates[last] < anchorDate) return mode === 'next' ? null : extended;
+    if (base >= 0 && history.closes[base] > 0 && history.closes[last] > 0) {
+      const move = (history.closes[last] / history.closes[base] - 1) * 100;
+      return compound(move, extended == null ? 0 : extended);
+    }
+  }
+  if (regular != null) return compound(regular, extended == null ? 0 : extended);
+  return cumulative != null ? cumulative : extended;
+}
+
+function buildPremarketHistoryReview(klines, usIdx, qqqMovePct, beforeDate) {
   if (!Array.isArray(klines) || klines.length < 60 || !usIdx || !usIdx.qqq || qqqMovePct == null || !isFinite(qqqMovePct) || qqqMovePct >= 0) return null;
   const q = usIdx.qqq;
   if (!Array.isArray(q.dates) || !q.ret) return null;
@@ -4788,10 +4802,11 @@ function buildPremarketHistoryReview(klines, usIdx, qqqMovePct) {
     const move = q.ret[d];
     if (move == null || move < lo || move > hi) continue;
     const i = nextEtfAfter(d);
-    if (i < 1 || klines[i].date > lastEtfDate) continue;
+    if (i < 1 || klines[i].date > lastEtfDate || (beforeDate && klines[i].date >= beforeDate)) continue;
     const prevClose = klines[i - 1].close;
     const row = klines[i];
     if (!(prevClose > 0) || !(row.close > 0) || !(row.low > 0)) continue;
+    if (rows.some(r => r.etfDate === row.date)) continue;
     rows.push({
       qqqDate: d,
       qqqMove: move,
@@ -4832,10 +4847,6 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
   const BETA = 0.7;
   const qqqPct = opts.qqqPct != null && isFinite(opts.qqqPct) ? opts.qqqPct : null;
   const ixicPct = opts.ixicPct != null && isFinite(opts.ixicPct) ? opts.ixicPct : null;
-  // 新增分段口径（2026-10-15）：
-  //   regPct = 昨日盘中（昨前收 → 昨收），prePct = 今日盘前段（昨收 → 当前盘前/夜盘价）
-  //   分开展示，不叠加。预期开盘用 prePct（最贴近今日动量）；
-  //   双段同向下跌触发"二次探底"买点压深（见步骤 3）。
   const qqqRegPct = opts.qqqRegPct != null && isFinite(opts.qqqRegPct) ? opts.qqqRegPct : null;
   const qqqPrePct = opts.qqqPrePct != null && isFinite(opts.qqqPrePct) ? opts.qqqPrePct : null;
   const ixicRegPct = opts.ixicRegPct != null && isFinite(opts.ixicRegPct) ? opts.ixicRegPct : null;
@@ -4849,17 +4860,15 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
   // ── 1. 预期开盘涨跌幅（β折算）──
 
   const mix = (a, b) => (a != null && b != null) ? 0.6 * a + 0.4 * b : (a != null ? a : (b != null ? b : null));
-  // 预期开盘主驱动：盘前/盘中用盘前段；美股收盘后的下个交易日计划用整日累计跌幅，缺失时退回正规盘跌幅。
-  let usPct = mode === 'next' ? mix(qqqPct, ixicPct) : mix(qqqPrePct, ixicPrePct);
-  if (mode === 'next' && usPct == null) usPct = mix(qqqRegPct, ixicRegPct);
-  if (usPct == null) usPct = mix(qqqPrePct, ixicPrePct);
-  if (usPct == null) usPct = mix(qqqPct, ixicPct);
-  if (usPct == null) usPct = mix(qqqRegPct, ixicRegPct);
-  if (usPct == null) usPct = 0;
-  // 昨日盘中（用于恐慌二次探底判定；缺失时不参与）
+  const anchorK = mode === 'live' && klineLast && klineLast.date === ctx.today ? ctx.klinePrev : klineLast;
+  const anchorDate = anchorK && anchorK.date;
+  const qqqUnpricedPct = unpricedUsMove(ctx.usIdx && ctx.usIdx.qqq, anchorDate, qqqRegPct, qqqPrePct, qqqPct, mode);
+  const ixicUnpricedPct = unpricedUsMove(ctx.usIdx && ctx.usIdx.ixic, anchorDate, ixicRegPct, ixicPrePct, ixicPct, mode);
+  const usPct = mix(qqqUnpricedPct, ixicUnpricedPct);
+  const usPrePct = mix(qqqPrePct, ixicPrePct);
   const usRegPct = mix(qqqRegPct, ixicRegPct);
-  const historyReview = buildPremarketHistoryReview(ctx.klines || [], ctx.usIdx, qqqRegPct);
-  const expectOpenPct = Math.max(-5, Math.min(5, usPct * BETA));
+  const historyReview = buildPremarketHistoryReview(ctx.klines || [], ctx.usIdx, qqqRegPct, mode === 'next' ? null : ctx.today);
+  const expectOpenPct = usPct == null ? 0 : Math.max(-5, Math.min(5, usPct * BETA));
 
   // ── 2. 技术锚点（换算成相对 P0 的涨跌幅）──
   const toPct = (v) => (isFinite(v) && v > 0) ? (v / P0 - 1) * 100 : null;
@@ -4920,19 +4929,20 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
     }
     buyReasons.push(`昨日 开${yOpenPct.toFixed(2)}% / 低${yLowPct.toFixed(2)}% / 高${yHighPct.toFixed(2)}% / 振幅${((yH - yL) / yO * 100).toFixed(1)}%`);
   } else {
-    b1 = -1.0; b2 = -2.0; b3 = -3.5; b4 = -4.5; b5 = -5.5;
+    b1 = usPct == null ? -1 : clip(expectOpenPct - 0.4, -9, -0.3);
+    b2 = b1 - 1; b3 = b2 - 1.5; b4 = b3 - 1; b5 = b4 - 1;
   }
-  // 修正①：美股恐慌 → 整组下移（基于今日盘前段）
-  if (usPct <= -2.5) { b1 -= 1; b2 -= 1; b3 -= 1; b4 -= 1; b5 -= 1; buyReasons.push(`美股盘前 ${usPct.toFixed(2)}% ≤-2.5%，买点下移 1%`); }
+  // 盘外继续急跌时保留额外深水缓冲，正规盘跌幅已计入开盘基准。
+  if (usPrePct != null && usPrePct <= -2.5) { b1 -= 1; b2 -= 1; b3 -= 1; b4 -= 1; b5 -= 1; buyReasons.push(`美股盘外 ${usPrePct.toFixed(2)}% ≤-2.5%，买点下移 1%`); }
   // 修正②：双段同向下跌（昨日盘中 + 今日盘前都跌）→ 二次探底压深
   //   场景：昨日盘中跌 X%、今日盘前继续跌 Y%，说明抛压在延续，今日可能击穿昨日最低
   //   压深幅度 = |昨日盘中跌幅| × 30%（昨日跌得越多，今日探底越深）
   //   例：昨日 -1.93% / 盘前 -0.95% → 压深 0.58%
   //       昨日 -3.50% / 盘前 -1.20% → 压深 1.05%
-  if (usRegPct != null && usRegPct <= -0.5 && usPct <= -0.5) {
+  if (usRegPct != null && usRegPct <= -0.5 && usPrePct != null && usPrePct <= -0.5) {
     const deepen = Math.abs(usRegPct) * 0.3;
     b1 -= deepen; b2 -= deepen; b3 -= deepen; b4 -= deepen; b5 -= deepen;
-    buyReasons.push(`昨日盘中 ${usRegPct.toFixed(2)}% + 今日盘前 ${usPct.toFixed(2)}% 双段同向下跌，二次探底买点下移 ${deepen.toFixed(2)}%`);
+    buyReasons.push(`昨日盘中 ${usRegPct.toFixed(2)}% + 今日盘外 ${usPrePct.toFixed(2)}% 双段同向下跌，二次探底买点下移 ${deepen.toFixed(2)}%`);
   }
   if (historyReview && historyReview.count >= 5 && historyReview.low) {
     const hMed = historyReview.low.median;
@@ -4978,23 +4988,16 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
     { key: 'b5', pct: +b5.toFixed(2), pos: scaledPos[4], reason: buyLabels[4] },
   ];
 
-  // ── 4. 高抛目标（2 档，正数）──
-  //  思路：昨日实际涨到过 yHighPct，今日反弹目标就在那附近
-  //  s1 = 预期开盘 + 0.5%（小幅反弹，落袋一半）
-  //  s2 = 昨日最高点位置（昨日已示范过这个高度）
-  //  上限 +3%（日内罕见）
-  let s1, s2;
-  if (hasYesterday) {
-    s1 = clip(expectOpenPct + 0.5, +0.4, +3.0);
-    // s2 用昨日高点，但至少要给 s1 + 0.4% 空间
-    s2 = clip(Math.max(yHighPct, s1 + 0.4), s1 + 0.3, +3.0);
-  } else {
-    s1 = 0.8; s2 = 1.6;
-  }
+  const actualOpenPct = mode === 'live' && quote && quote.quoteDate === ctx.today && quote.open > 0
+    ? (quote.open / P0 - 1) * 100 : null;
+  const sellAnchorPct = actualOpenPct == null ? expectOpenPct : actualOpenPct;
+  const sellAnchor = actualOpenPct != null ? '实际开盘' : usPct == null ? '基准昨收（预测输入缺失）' : '预期开盘';
+  const s1 = clip((1 + sellAnchorPct / 100) * 1.005 * 100 - 100, -9, 9);
+  const s2 = clip((1 + sellAnchorPct / 100) * 1.01 * 100 - 100, s1 + 0.2, 9.5);
   const held = !!(ctx.pos && ctx.pos.shares > 0);
   const sell = [
-    { key: 's1', pct: +s1.toFixed(2), pos: 50,  reason: hasYesterday ? `预期开盘 + 0.5%` : '固定档位' },
-    { key: 's2', pct: +s2.toFixed(2), pos: 100, reason: hasYesterday ? `昨日最高（${yHighPct.toFixed(2)}%）` : '固定档位' },
+    { key: 's1', pct: +s1.toFixed(2), pos: 50, reason: `${sellAnchor}价反弹 0.5%，仅为减仓观察价` },
+    { key: 's2', pct: +s2.toFixed(2), pos: 100, reason: `${sellAnchor}价反弹 1.0%，仍需转弱确认` },
   ];
 
   // ── 5. 失效条件（日内 T+0，不含溢价项）──
@@ -5004,46 +5007,30 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
     note: '14:30 后不再开新仓',
   };
 
-  // ── 6. 盘中微调（live 模式）──
-  // 思路：lastPlan.buy/sell 已含历史调整与锁定，作为基准；本次只叠加「新增触发」。
-  // 不在 live 模式下重算理论档位（否则会覆盖历史调整），直接用 lastPlan 的档位作为基础。
   const adjustments = (lastPlan && Array.isArray(lastPlan.adjustments)) ? [...lastPlan.adjustments] : [];
   const touched = (lastPlan && lastPlan.touched) ? { ...lastPlan.touched } : {};
   if (mode === 'live' && lastPlan && Array.isArray(lastPlan.buy) && Array.isArray(lastPlan.sell)) {
-    // 用 lastPlan 的档位（已含历史调整）覆盖本次新算的
     for (const b of buy) {
       const orig = lastPlan.buy.find(x => x.key === b.key);
-      if (orig) b.pct = orig.pct;
+      if (orig && touched[b.key]) b.pct = orig.pct;
     }
     for (const s of sell) {
       const orig = lastPlan.sell.find(x => x.key === s.key);
-      if (orig) s.pct = orig.pct;
+      if (orig && touched[s.key]) s.pct = orig.pct;
     }
-
-    // 触发 1：开盘偏离（仅首次进入 live 时记录一次）
-    if (!touched._openDevLogged) {
-      const open = quote && isFinite(quote.open) ? quote.open : null;
-      if (open && lastPlan.expectOpenPct != null) {
-        const openPct = (open / P0 - 1) * 100;
-        const dev = openPct - lastPlan.expectOpenPct;
-        if (Math.abs(dev) >= 1.5) {
-          const shift = dev * 0.6;
-          for (const b of buy) if (!touched[b.key]) {
-            // 买点不上移成正数：低开日 b1 最多移到 -0.3%（仍要是回踩）
-            b.pct = Math.min(-0.3, +(b.pct + shift).toFixed(2));
-          }
-          for (const s of sell) if (!touched[s.key]) {
-            // 卖点不下移成负数：低吸日 s1 至少保持 +0.3% 的止盈目标
-            s.pct = Math.max(0.3, +(s.pct + shift).toFixed(2));
-          }
-          adjustments.push({ at: generatedAt, trigger: `开盘偏离 ${dev >= 0 ? '+' : ''}${dev.toFixed(2)}%`, delta: `档位平移 ${shift >= 0 ? '+' : ''}${shift.toFixed(2)}%` });
-        }
-        touched._openDevLogged = true;   // 无论是否调整都只记一次
-      }
+  }
+  if (actualOpenPct != null && usPct != null) {
+    const dev = actualOpenPct - expectOpenPct;
+    if (Math.abs(dev) >= 1.5) {
+      const shift = dev * 0.6;
+      for (const b of buy) if (!touched[b.key]) b.pct = Math.max(-10, Math.min(-0.3, +(b.pct + shift).toFixed(2)));
+      if (!touched._openDevLogged) adjustments.push({ at: generatedAt, trigger: `开盘偏离 ${dev >= 0 ? '+' : ''}${dev.toFixed(2)}%`, delta: `未触达买档校准 ${shift >= 0 ? '+' : ''}${shift.toFixed(2)}%，卖档以实际开盘为基准` });
     }
-
+    touched._openDevLogged = true;
   }
 
+  if (!touched.s2) sell[1].pct = +Math.max(sell[1].pct, sell[0].pct + 0.2).toFixed(2);
+  if (!touched.s1 && touched.s2) sell[0].pct = +Math.min(sell[0].pct, sell[1].pct - 0.2).toFixed(2);
   stop.pricePct = +(buy[buy.length - 1].pct - 1).toFixed(2);
   const touches = lastPlan && Array.isArray(lastPlan.touches) ? [...lastPlan.touches] : [];
   const quoteMinute = quote && (quote.quoteTime || '').slice(11, 16);
@@ -5080,7 +5067,7 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
       seg.push(`IXIC 昨日盘中 ${fmtPct(ixicRegPct)} / 今日盘前 ${fmtPct(ixicPrePct)}`);
     }
     logicParts.push(seg.join(' · '));
-    logicParts.push(`${mode === 'next' ? '美股收盘累计' : '盘前段混合'} ${fmtPct(usPct)} × β${BETA} → 预期开盘 ${fmtPct(expectOpenPct)}`);
+    logicParts.push(`相对 ETF 基准日 ${anchorDate || '未知'} 尚未消化的美股累计 ${fmtPct(usPct)} × β${BETA} → 预期开盘 ${fmtPct(expectOpenPct)}`);
   } else if (qqqPct != null || ixicPct != null) {
     logicParts.push(`昨夜 QQQ ${fmtPct(qqqPct)} / IXIC ${fmtPct(ixicPct)} × β${BETA} → 预期开盘 ${fmtPct(expectOpenPct)}`);
   } else if (qqqRegPct != null || ixicRegPct != null) {
@@ -5088,6 +5075,9 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
   } else {
     logicParts.push('美股数据缺失，按预期开盘 0% 处理');
   }
+  logicParts.push(`${sellAnchor} ${fmtPct(sellAnchorPct)} → 反弹减仓参考档位，不要求回到昨收`);
+  if (historyReview && historyReview.count < 5) logicParts.push(`相似历史仅 ${historyReview.count} 个独立 ETF 交易日，样本不足，不按历史均值自动校准`);
+  if (usPct == null) logicParts.push('缺少未消化美股输入，开盘0%仅为数据缺失占位，不是中性预测');
   if (premium != null) logicParts.push(`当前溢价 ${premium.toFixed(1)}%（${zone.label}）`);
   if (buyReasons.length) logicParts.push(buyReasons.join('；'));
   const logic = logicParts.join(' · ');
@@ -5096,8 +5086,9 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
     mode,
     generatedAt,
     basePrevClose: +P0.toFixed(3),
-    expectOpenPct: +expectOpenPct.toFixed(2),
+    expectOpenPct: usPct == null ? null : +expectOpenPct.toFixed(2),
     inputs: {
+      anchorDate, qqqUnpricedPct, ixicUnpricedPct, sellAnchorPct, sellAnchor,
       qqqPct: qqqPct != null ? +qqqPct.toFixed(2) : null,
       ixicPct: ixicPct != null ? +ixicPct.toFixed(2) : null,
       // 分段口径：昨日盘中 vs 今日盘前，分开展示不叠加
@@ -5127,10 +5118,19 @@ function buildEtfIntradayBands(points) {
     if (recent.length && etfMinuteNumber(p.t) - etfMinuteNumber(recent[recent.length - 1].t) !== 1) recent.length = 0;
     recent.push(p);
     if (recent.length > 30) recent.shift();
-    const low = Math.min(...recent.map(r => r.price));
-    return { time: p.t, from: recent[0].t,
-      lowBand: recent.length >= 3 ? { low: round(low), high: round(low * 1.003) } : null,
-      highBand: recent.length >= 3 && p.avg > 0 ? { low: round(p.avg * 0.994), high: round(p.avg * 1.006) } : null };
+    const lowIndex = recent.reduce((best, r, i) => r.price <= recent[best].price ? i : best, 0);
+    const low = recent[lowIndex];
+    const high = recent.slice(lowIndex).reduce((best, r) => r.price >= best.price ? r : best, low);
+    const windowRange = (Math.max(...recent.map(r => r.price)) / low.price - 1) * 100;
+    const halfWidthPct = Math.max(0.15, Math.min(0.6, windowRange * 0.25));
+    const prev = recent[recent.length - 2], prev2 = recent[recent.length - 3];
+    return { time: p.t, from: recent[0].t, low: low.price, lowTime: low.t, high: high.price, highTime: high.t,
+      reboundPct: (p.price / low.price - 1) * 100, swingPct: (high.price / low.price - 1) * 100,
+      pullbackPct: (high.price / p.price - 1) * 100, halfWidthPct,
+      rising: !!(prev2 && p.price > prev.price && prev.price > prev2.price),
+      falling: !!(prev2 && p.price < prev.price && prev.price < prev2.price),
+      lowBand: recent.length >= 3 ? { low: round(low.price), high: round(low.price * 1.003) } : null,
+      highBand: recent.length >= 3 && p.avg > 0 ? { low: round(p.avg * (1 - halfWidthPct / 100)), high: round(p.avg * (1 + halfWidthPct / 100)) } : null };
   });
 }
 
@@ -5155,14 +5155,27 @@ function buildEtfIntradayGuide(ctx, points, events, actionable, bands) {
   if (buyBlock) { buyState = '低吸仅观察'; buyNote = buyBlock; }
   else if (latest && latest.side === 'buy') { buyState = '止跌确认 · 小仓候选'; buyNote = `确认分钟 ${latest.time}，仍按总仓位上限分批执行，不追涨。`; }
   else if (last.price <= lowBand.high) { buyState = '低吸区内 · 等止跌'; buyNote = '已接近近30个连续分钟低位，还需两分钟回升与至少0.3%反弹确认；继续创新低时不接飞刀。'; }
-  let sellState = '等待反弹', sellNote = '已有仓位等反弹接近分时均价；反弹至少0.6%后，回落0.25%且连续两分钟转弱才提示高抛。';
-  if (!actionable) { sellState = '高抛回看'; sellNote = '已收盘或行情不实时，仅展示参考区；历史卖点不补发通知。'; }
+  const buyMissing = [];
+  const weak = (quote.prevClose > 0 && reference.low <= quote.prevClose * 0.995) || (last.avg > 0 && reference.low <= last.avg * 0.997);
+  if (!weak) buyMissing.push('需先出现有效回踩');
+  if (reference.reboundPct < 0.3) buyMissing.push(`反弹还差 ${(0.3 - reference.reboundPct).toFixed(2)}%`);
+  if (!reference.rising) buyMissing.push('尚未连续两分钟回升');
+  if (!buyBlock && !(latest && latest.side === 'buy') && buyMissing.length) buyNote = buyMissing.join('；') + '。触区不直接买入。';
+  const sellMissing = [];
+  if (reference.swingPct < 0.6) sellMissing.push(`反弹幅度还差 ${(0.6 - reference.swingPct).toFixed(2)}%`);
+  if (reference.pullbackPct < 0.25) sellMissing.push(`从高点回落还差 ${(0.25 - reference.pullbackPct).toFixed(2)}%`);
+  if (!reference.falling) sellMissing.push('尚未连续两分钟转弱');
+  if (highBand && reference.high < highBand.low) sellMissing.push('反弹高点尚未到均价观察区');
+  let sellState = '等待反弹', sellNote = '已有仓位等反弹接近分时均价；近30分钟反弹至少0.6%后，回落0.25%且连续两分钟转弱才提示减仓。';
+  if (!actionable) { sellState = '反弹观察区回看'; sellNote = '已收盘或行情不实时，仅展示参考区；历史卖点不补发通知。'; }
   else if (!highBand) { sellState = '均价待确认'; sellNote = '分时均价不可用，暂不判断高抛参考区。'; }
   else if (latest && latest.side === 'sell') { sellState = '反弹转弱 · 减仓候选'; sellNote = `确认分钟 ${latest.time}；仅适用于已有仓位，不等于必须卖出或已成交。`; }
-  else if (last.price >= highBand.low && last.price <= highBand.high) { sellState = '高抛区内 · 等转弱'; sellNote = '已接近分时均价，反弹仍强时不提前卖；等待回落幅度和连续两分钟转弱确认。'; }
+  else if (last.price >= highBand.low && last.price <= highBand.high) { sellState = '反弹观察区内 · 等转弱'; sellNote = '已接近分时均价，反弹仍强时不提前卖；等待回落幅度和连续两分钟转弱确认。'; }
   else if (last.price > highBand.high) { sellState = '反弹持有观察'; sellNote = '价格已高于均价参考区，暂未出现新的转弱确认；不因触区自动卖出。'; }
+  if (actionable && highBand && !(latest && latest.side === 'sell') && sellMissing.length) sellNote = sellMissing.join('；') + '。仅供已有仓位分批减仓参考。';
   return { asOf: last.t, from: reference.from, lowBand, highBand, buyState, buyNote, sellState, sellNote,
-    note: '红带为每分钟当时近30个连续分钟低位至其上方0.3%；绿带为当时累计成交均价±0.6%。历史参考不等于买卖确认或实际成交。' };
+    buyMissing, sellMissing, halfWidthPct: reference.halfWidthPct,
+    note: '参考带与信号统一使用近30个连续分钟；绿带是累计成交均价附近的反弹观察区，半宽为近30分钟振幅的1/4（0.15%–0.6%）。触带不等于买卖确认，未扣交易费用。' };
 }
 
 function buildEtfIntradaySignals(ctx) {
@@ -5175,23 +5188,19 @@ function buildEtfIntradaySignals(ctx) {
   result.asOf = points.length ? points[points.length - 1].t : null;
   result.actionable = !!(ctx.session && ctx.session.trading && quote.quoteDate === ctx.today && isEtfContinuousMinute(time) && result.asOf && Math.abs(etfMinuteNumber(time) - etfMinuteNumber(result.asOf)) <= 2);
   result.note = '仅按已闭合分钟确认，所标时间为确认分钟，下一分钟才能实时提示；低吸需止跌，高抛需反弹转弱。回放不代表实际成交，历史溢价未知时不追认买入。';
-  let low = null, high = null, prev = null, prev2 = null, reboundArmed = true, lastReboundMin = -Infinity, lastSellMin = -Infinity;
+  result.bands = buildEtfIntradayBands(points);
+  let reboundArmed = true, priorLowTime = null, lastReboundMin = -Infinity, lastSellMin = -Infinity;
   const premium = Number.isFinite(quote.premiumPct) ? quote.premiumPct : null;
-  for (const p of points) {
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i], reference = result.bands[i];
     const min = etfMinuteNumber(p.t);
-    if (!prev || min - etfMinuteNumber(prev.t) !== 1) {
-      low = p; high = p; prev = p; prev2 = null; reboundArmed = true;
-      continue;
-    }
-    if (p.price < low.price) { low = p; high = p; reboundArmed = true; }
-    if (p.price >= high.price) high = p;
-    const rising = prev2 && p.price > prev.price && prev.price > prev2.price;
-    const falling = prev2 && p.price < prev.price && prev.price < prev2.price;
-    const offLow = (p.price / low.price - 1) * 100;
-    const offHigh = (high.price / p.price - 1) * 100;
-    const range = (high.price / low.price - 1) * 100;
-    const weak = (quote.prevClose > 0 && low.price <= quote.prevClose * 0.995) || (p.avg > 0 && low.price <= p.avg * 0.997);
-    const nearAvg = p.avg > 0 && Math.abs(high.price / p.avg - 1) <= 0.006;
+    if (reference.lowTime !== priorLowTime) reboundArmed = true;
+    priorLowTime = reference.lowTime;
+    if (!reference.lowBand) continue;
+    const { rising, falling } = reference;
+    const offLow = reference.reboundPct, offHigh = reference.pullbackPct, range = reference.swingPct;
+    const weak = (quote.prevClose > 0 && reference.low <= quote.prevClose * 0.995) || (p.avg > 0 && reference.low <= p.avg * 0.997);
+    const nearAvg = reference.highBand && reference.high >= reference.highBand.low;
     if (reboundArmed && min - lastReboundMin >= 10 && rising && weak && offLow >= 0.3 && p.t < '14:30') {
       const liveSignal = result.actionable && min >= etfMinuteNumber(time) - 2;
       const buyAllowed = liveSignal && time < '14:30' && premium != null && premium <= PREMIUM_BUY
@@ -5200,17 +5209,15 @@ function buildEtfIntradaySignals(ctx) {
         && !(ctx.premarket && quote.prevClose > 0 && (p.price / quote.prevClose - 1) * 100 <= ctx.premarket.stop.pricePct);
       result.events.push({ key: `intraday_rebound_${d.date}_${p.t}`, time: p.t, price: p.price, side: buyAllowed ? 'buy' : 'watch',
         level: buyAllowed ? 'good' : 'info', title: buyAllowed ? '日内止跌 · 小仓候选' : '日内止跌观察 · 不自动买入',
-        text: `自已知低位 ${low.price.toFixed(3)} 反弹 ${offLow.toFixed(2)}%，连续两分钟回升。${buyAllowed ? '溢价与风控允许，仍按总仓位上限执行，不追涨。' : liveSignal && premium != null && premium > PREMIUM_BUY ? `当前溢价 ${premium.toFixed(2)}%，不新增仓位；已有仓位等待反弹减仓。` : '仅作走势观察，历史溢价或实时风控未确认，不追认买入。'}` });
+        text: `自近30分钟低位 ${reference.low.toFixed(3)} 反弹 ${offLow.toFixed(2)}%，连续两分钟回升。${buyAllowed ? '溢价与风控允许，仍按总仓位上限执行，不追涨。' : liveSignal && premium != null && premium > PREMIUM_BUY ? `当前溢价 ${premium.toFixed(2)}%，不新增仓位；已有仓位等待反弹减仓。` : '仅作走势观察，历史溢价或实时风控未确认，不追认买入。'}` });
       lastReboundMin = min; reboundArmed = false;
-    } else if (min - lastSellMin >= 10 && falling && range >= 0.6 && offHigh >= 0.25 && nearAvg && high.t > low.t) {
+    } else if (min - lastSellMin >= 10 && falling && range >= 0.6 && offHigh >= 0.25 && nearAvg && reference.highTime > reference.lowTime) {
       result.events.push({ key: `intraday_pullback_${d.date}_${p.t}`, time: p.t, price: p.price, side: 'sell', level: 'warn',
         title: '反弹转弱 · 已有仓位减仓候选',
-        text: `已知反弹幅度 ${range.toFixed(2)}%，从阶段高位 ${high.price.toFixed(3)} 回落 ${offHigh.toFixed(2)}%，连续两分钟转弱且接近分时均价 ${p.avg.toFixed(3)}。卖点不要求相对昨收翻红；仅供已有仓位分批减仓参考。` });
-      lastSellMin = min; high = p; low = p; reboundArmed = true;
+        text: `已知反弹幅度 ${range.toFixed(2)}%，从近30分钟反弹高位 ${reference.high.toFixed(3)} 回落 ${offHigh.toFixed(2)}%，连续两分钟转弱且接近分时均价 ${p.avg.toFixed(3)}。卖点不要求相对昨收翻红；仅供已有仓位分批减仓参考。` });
+      lastSellMin = min; reboundArmed = true;
     }
-    prev2 = prev; prev = p;
   }
-  result.bands = buildEtfIntradayBands(points);
   result.guide = buildEtfIntradayGuide(ctx, points, result.events, result.actionable, result.bands);
   return result;
 }
@@ -5644,9 +5651,8 @@ app.get('/api/etf-track', async (req, res) => {
         if (!q) return { regPct: null, prePct: null };
         const s = q.marketState;
         const regPct = isFinite(q.regularMarketChangePercent) ? q.regularMarketChangePercent : 0;
-        if (s === 'REGULAR' || s === 'PRE' || s === 'PREPRE') {
-          return { regPct, prePct: regPct };
-        }
+        if (s === 'PRE' || s === 'PREPRE') return { regPct: null, prePct: regPct };
+        if (s === 'REGULAR') return { regPct, prePct: null };
         let prePct = null;
         if (s === 'OVERNIGHT') {
           prePct = isFinite(q.overnightChangePercent) ? q.overnightChangePercent : null;

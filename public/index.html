@@ -1644,6 +1644,10 @@
     .etf-intraday-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
     .etf-intraday-scroll > svg { max-width: none; }
     .etf-intraday-axis { position: absolute; left: 0; top: 0; pointer-events: none; }
+    .etf-cycle-form, .etf-trade-form.etf-cycle-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 7px 0; }
+    .etf-cycle-form label { display: flex; flex-direction: column; min-width: 0; font-size: 10px; color: var(--text-secondary); }
+    .etf-cycle-form .etf-inp { width: 100%; min-width: 0; box-sizing: border-box; flex: none; }
+    #etf-t-cycle .etf-alert { font-size: 10px; line-height: 1.6; margin-top: 6px; }
     .etf-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 5px; font-size: 9.5px; color: var(--text-muted); }
     .etf-legend i { display: inline-block; width: 12px; height: 2px; vertical-align: middle; margin-right: 3px; border-radius: 1px; }
     .etf-legend b { font-variant-numeric: tabular-nums; }
@@ -1953,6 +1957,7 @@
 <body>
 <div id="app"><div class="center-msg"><div class="spinner"></div><span>加载持仓数据…</span></div></div>
 
+<script src="/etf-t-strategy.js"></script>
 <script>
 // Fallback Chinese names (used when eastmoney didn't provide one)
 const CN_NAME = {
@@ -2040,13 +2045,9 @@ function allSymbols() {
 }
 
 // 夜盘成交时间戳（毫秒）→ "HH:MM ET"
-// DST 规则与后端 getUSMarketState 保持一致（3-9 月为 -4，其余 -5）
 function fmtEtHm(ms) {
   if (!ms) return '';
-  const m = new Date(ms).getUTCMonth();
-  const off = (m > 2 && m < 10) ? -4 : -5;
-  const et = new Date(ms + off * 3600000);
-  return `${String(et.getUTCHours()).padStart(2, '0')}:${String(et.getUTCMinutes()).padStart(2, '0')} ET`;
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms)) + ' ET';
 }
 
 // mode: 'default' (homepage) — REGULAR shows realtime, all other states show last reg only
@@ -2760,6 +2761,11 @@ let ETF_PLAN_OPEN = false;
 let ETF_BT_OPEN = new Set();    // 策略对比：已展开交易日期明细的策略（按下标）
 let ETF_RENDERED_DATE = null;   // 已整页渲染对应的交易日（跨日时整页重绘）
 let ETF_INTRADAY_VIEW = { date: null, offset: 0, follow: true };
+const ETF_T_RULES_KEY = 'etf-159509-t-rules';
+const ETF_T_SAMPLES_KEY = 'etf-159509-t-samples';
+let ETF_T_RULES = (() => { try { return { ...EtfTStrategy.defaults, ...JSON.parse(localStorage.getItem(ETF_T_RULES_KEY) || '{}'), fraction: 0.2 }; } catch { return { ...EtfTStrategy.defaults }; } })();
+let ETF_T_SAMPLES = (() => { try { const v = JSON.parse(localStorage.getItem(ETF_T_SAMPLES_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } })();
+let ETF_T_FORM = { action: 'sell', cycleId: '', date: '', time: '', price: '', shares: '', fee: '' };
 let etfLastLoadTs = 0;
 let ETF_PREMIUM_RANGE = (localStorage.getItem('etf-premium-range') === 'all') ? 'all' : 'recent';   // 溢价率走势：recent=近120日 / all=全历史
 let ETF_SIGCHART_RANGE = (localStorage.getItem('etf-sigchart-range') === 'all') ? 'all' : 'recent'; // 仓位阶梯图：recent=近60日 / all=近120日
@@ -2789,7 +2795,7 @@ function etfAlertLogToday() {
 function etfRecordAlert(a, time, first) {
   const date = etfAlertLogToday();
   const text = a.text || '';
-  if ((first || a.key.startsWith('intraday_')) && ETF_ALERT_LOG.some(e => e && e.date === date && e.key === a.key)) return false;
+  if ((first || a.key.startsWith('intraday_') || a.key.startsWith('tcycle_')) && ETF_ALERT_LOG.some(e => e && e.date === date && e.key === a.key)) return false;
   ETF_ALERT_LOG.unshift({ ...a, time, date, first });
   if (ETF_ALERT_LOG.length > 80) ETF_ALERT_LOG.length = 80;
   etfSaveAlertLog();
@@ -2816,24 +2822,7 @@ function etfChartWidth(extra = 0) {
 
 // 移动加权平均成本（AVCO）：买入累加成本，卖出按当时均价结转已实现盈亏
 function etfPosition() {
-  const list = [...ETF_TRADES].sort((a, b) => (String(a.date) + String(a.id)).localeCompare(String(b.date) + String(b.id)));
-  let shares = 0, cost = 0, realized = 0;
-  for (const t of list) {
-    const q = Number(t.shares) || 0;
-    const p = Number(t.price) || 0;
-    if (q <= 0 || p <= 0) continue;
-    if (t.side === 'buy') {
-      cost += p * q;
-      shares += q;
-    } else {
-      const avg = shares > 0 ? cost / shares : 0;
-      const qty = Math.min(q, shares);
-      realized += (p - avg) * qty;
-      cost -= avg * qty;
-      shares -= qty;
-    }
-  }
-  return { shares, cost, avgCost: shares > 0 ? cost / shares : 0, realized };
+  return EtfTStrategy.position(ETF_TRADES);
 }
 
 const DOC_TITLE_DEFAULT = '美股基金估值';
@@ -2867,17 +2856,14 @@ async function loadEtfTrack() {
     // - regPct：昨日盘中（昨前收 → 昨收），即 regularMarketChangePercent
     // - prePct：今日盘前段（昨收 → 当前盘前/盘后/夜盘价），24h 口径下的盘外增量
     // 分开展示：不叠加（用户视角 "昨日跌 1.93% + 今日盘前再跌 0.95%" 是两个独立信号）
-    // 后端逻辑：预期开盘用 prePct（最贴近今日动量）；
-    //          昨日盘中 + 今日盘前同向下跌 → 恐慌二次探底，买点再压深
+    // 后端按ETF基准交易日计算尚未消化的累计变化，两个时段只用于明细展示。
     const qqq = LAST_MAP && LAST_MAP['QQQ'];
     const ixic = LAST_MAP && LAST_MAP['IXIC'];
     const split = (q) => {
       if (!q) return { regPct: null, prePct: null };
       const s = q.marketState;
-      // 盘中/盘前：current=盘前实时价，reg 已是相对昨收；prePct 单段等同 regPct
-      if (s === 'REGULAR' || s === 'PRE' || s === 'PREPRE') {
-        return { regPct: q.regularMarketChangePercent ?? 0, prePct: q.regularMarketChangePercent ?? 0 };
-      }
+      if (s === 'PRE' || s === 'PREPRE') return { regPct: null, prePct: q.regularMarketChangePercent ?? null };
+      if (s === 'REGULAR') return { regPct: q.regularMarketChangePercent ?? null, prePct: null };
       // 盘后/夜盘/已收盘：regPct=昨日盘中，prePct=盘外增量
       const regPct = q.regularMarketChangePercent ?? 0;
       let prePct = null;
@@ -2895,17 +2881,17 @@ async function loadEtfTrack() {
     };
     const { regPct: qqqRegPct, prePct: qqqPrePct } = split(qqq);
     const { regPct: ixicRegPct, prePct: ixicPrePct } = split(ixic);
-    if (isFinite(qqqRegPct)) params.push(`qqqRegPct=${qqqRegPct.toFixed(3)}`);
-    if (isFinite(qqqPrePct)) params.push(`qqqPrePct=${qqqPrePct.toFixed(3)}`);
-    if (isFinite(ixicRegPct)) params.push(`ixicRegPct=${ixicRegPct.toFixed(3)}`);
-    if (isFinite(ixicPrePct)) params.push(`ixicPrePct=${ixicPrePct.toFixed(3)}`);
+    if (qqqRegPct != null && isFinite(qqqRegPct)) params.push(`qqqRegPct=${qqqRegPct.toFixed(3)}`);
+    if (qqqPrePct != null && isFinite(qqqPrePct)) params.push(`qqqPrePct=${qqqPrePct.toFixed(3)}`);
+    if (ixicRegPct != null && isFinite(ixicRegPct)) params.push(`ixicRegPct=${ixicRegPct.toFixed(3)}`);
+    if (ixicPrePct != null && isFinite(ixicPrePct)) params.push(`ixicPrePct=${ixicPrePct.toFixed(3)}`);
     // 累计口径（兼容旧字段，后端 fallback 用）
-    const qqqPct = (isFinite(qqqRegPct) && isFinite(qqqPrePct))
+    const qqqPct = (qqqRegPct != null && qqqPrePct != null && isFinite(qqqRegPct) && isFinite(qqqPrePct))
       ? ((1 + qqqRegPct / 100) * (1 + qqqPrePct / 100) - 1) * 100 : null;
-    const ixicPct = (isFinite(ixicRegPct) && isFinite(ixicPrePct))
+    const ixicPct = (ixicRegPct != null && ixicPrePct != null && isFinite(ixicRegPct) && isFinite(ixicPrePct))
       ? ((1 + ixicRegPct / 100) * (1 + ixicPrePct / 100) - 1) * 100 : null;
-    if (isFinite(qqqPct)) params.push(`qqqPct=${qqqPct.toFixed(3)}`);
-    if (isFinite(ixicPct)) params.push(`ixicPct=${ixicPct.toFixed(3)}`);
+    if (qqqPct != null && isFinite(qqqPct)) params.push(`qqqPct=${qqqPct.toFixed(3)}`);
+    if (ixicPct != null && isFinite(ixicPct)) params.push(`ixicPct=${ixicPct.toFixed(3)}`);
     const qs = params.length ? '?' + params.join('&') : '';
     const r = await fetch('/api/etf-track' + qs);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -2914,6 +2900,7 @@ async function loadEtfTrack() {
     ETF_TRACK = json;
     ETF_LOAD_ERR = null;
     processEtfAlerts(json.alerts || []);
+    etfTUpdate();
     updateDocTitle();
   } catch (e) {
     ETF_LOAD_ERR = e.message;
@@ -2923,7 +2910,7 @@ async function loadEtfTrack() {
 }
 
 // 「该出手了」类提示：首次打开页面也要弹（否则开盘时条件已满足就静默错过）
-const ETF_ALERT_URGENT = /^(buy_opportunity|buy_probe|premium_cross_dn|macd_flip_pos|macd_flip_neg|break_ma21|intraday_level|intraday_rebound|intraday_pullback)/;
+const ETF_ALERT_URGENT = /^(buy_opportunity|buy_probe|premium_cross_dn|macd_flip_pos|macd_flip_neg|break_ma21|intraday_level|intraday_rebound|intraday_pullback|tcycle_)/;
 
 // 新提示 → 浮层 + 提示音 +（可选）桌面通知
 // 首次加载只登记；但「买入机会 / 减仓信号 / 穿越买入线」这类会照常弹出
@@ -3643,11 +3630,11 @@ function etfPremarketHistoryHtml(p) {
   const pct = v => (v == null || !isFinite(v)) ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
   if (!h) return '';
   const range = h.range ? `${pct(h.range.lo)} ~ ${pct(h.range.hi)}` : '—';
-  if (!h.count) {
+  if (h.count < 5) {
     return `
       <div class="etf-premarket-sec">
         <div class="etf-premarket-sec-title">历史跌幅回顾（${escHtml(h.period || '近2年')} QQQ 正规盘 ${pct(h.target)}，±30% 区间 ${range}）</div>
-        <div class="etf-alert info"><span class="etf-alert-title">样本不足</span><span class="etf-alert-text">历史上没有匹配到足够相近的 QQQ 跌幅，仍按上方模型买点参考。</span></div>
+        <div class="etf-alert info"><span class="etf-alert-title">样本不足</span><span class="etf-alert-text">匹配到 ${h.count} 个独立 ETF 交易日，未达5个样本；不据此自动校准买点，也不能估计可靠胜率。</span></div>
       </div>`;
   }
   const samples = (h.samples || []).map(x => `<span class="etf-history-sample">${escHtml(x.qqqDate)} QQQ ${pct(x.qqqMove)} → ETF ${escHtml(x.etfDate)} 收 ${pct(x.closePct)} / 最低 ${pct(x.lowPct)}</span>`).join('');
@@ -3735,7 +3722,7 @@ function etfPremarketHtml() {
   const planBody = `
     <div class="etf-board-head">
       <span>参考计划详情</span>
-      <span class="sub">${modeBadge} 生成于 ${genStr}${p.expectOpenPct != null ? ` · 预期开盘 ${p.expectOpenPct >= 0 ? '+' : ''}${p.expectOpenPct.toFixed(2)}%` : ''}</span>
+      <span class="sub">${modeBadge} 生成于 ${genStr}${p.expectOpenPct != null ? ` · 预期开盘 ${p.expectOpenPct >= 0 ? '+' : ''}${p.expectOpenPct.toFixed(2)}%` : ' · 开盘预测待有效美股输入'}</span>
     </div>
     <div class="etf-alert info">
       <span class="etf-alert-title">生成逻辑</span>
@@ -3889,7 +3876,7 @@ function etfIntradayHtml() {
   const bandHistory = t.intradaySignals && t.intradaySignals.bands || [];
   const guideBands = [
     { key: 'buy', field: 'lowBand', label: '低吸参考', color: 'var(--up)' },
-    { key: 'sell', field: 'highBand', label: '高抛参考', color: 'var(--down)' },
+    { key: 'sell', field: 'highBand', label: '反弹观察', color: 'var(--down)' },
   ];
   const bandsAt = new Map(bandHistory.map(r => [r.time, r]));
   const viewportWidth = etfChartWidth(24), H = 190, PL = 36, PR = 44, PT = 24, PB = 22;
@@ -3982,9 +3969,9 @@ function etfIntradayHtml() {
   const bandRange = band => band ? `${band.low.toFixed(3)}–${band.high.toFixed(3)}` : '—';
   const hoverPoints = pts.map((p, i) => {
     const reference = bandsAt.get(p.t);
-    return `<circle cx="${X(i).toFixed(1)}" cy="${Y(p.price).toFixed(1)}" r="6" fill="transparent"><title>${escHtml(p.t)} 价格 ${p.price.toFixed(3)} · 均价 ${p.avg == null ? '—' : p.avg.toFixed(3)} · 当时低吸 ${bandRange(reference && reference.lowBand)} · 当时高抛 ${bandRange(reference && reference.highBand)}</title></circle>`;
+    return `<circle cx="${X(i).toFixed(1)}" cy="${Y(p.price).toFixed(1)}" r="6" fill="transparent"><title>${escHtml(p.t)} 价格 ${p.price.toFixed(3)} · 均价 ${p.avg == null ? '—' : p.avg.toFixed(3)} · 当时低吸 ${bandRange(reference && reference.lowBand)} · 当时反弹观察 ${bandRange(reference && reference.highBand)}</title></circle>`;
   }).join('');
-  const minuteTable = `<details><summary class="etf-panic-note">查看分钟数据与信号（${pts.length} 点）</summary><div style="max-height:220px;overflow:auto"><table style="width:100%;font-size:10px"><thead><tr><th>时间</th><th>价格</th><th>均价</th><th>低吸区</th><th>高抛区</th><th>信号</th></tr></thead><tbody>${pts.map(p => `<tr><td>${escHtml(p.t)}</td><td>${p.price.toFixed(3)}</td><td>${p.avg == null ? '—' : p.avg.toFixed(3)}</td><td>${bandRange(bandsAt.get(p.t) && bandsAt.get(p.t).lowBand)}</td><td>${bandRange(bandsAt.get(p.t) && bandsAt.get(p.t).highBand)}</td><td>${signalEvents.filter(e => e.time === p.t).map(e => escHtml(e.title)).join('；') || '—'}</td></tr>`).join('')}</tbody></table></div></details>`;
+  const minuteTable = `<details><summary class="etf-panic-note">查看分钟数据与信号（${pts.length} 点）</summary><div style="max-height:220px;overflow:auto"><table style="width:100%;font-size:10px"><thead><tr><th>时间</th><th>价格</th><th>均价</th><th>低吸区</th><th>反弹观察区</th><th>信号</th></tr></thead><tbody>${pts.map(p => `<tr><td>${escHtml(p.t)}</td><td>${p.price.toFixed(3)}</td><td>${p.avg == null ? '—' : p.avg.toFixed(3)}</td><td>${bandRange(bandsAt.get(p.t) && bandsAt.get(p.t).lowBand)}</td><td>${bandRange(bandsAt.get(p.t) && bandsAt.get(p.t).highBand)}</td><td>${signalEvents.filter(e => e.time === p.t).map(e => escHtml(e.title)).join('；') || '—'}</td></tr>`).join('')}</tbody></table></div></details>`;
   const bandMarks = guideBands.map(x => {
     const segments = []; let segment = [];
     for (const row of bandHistory) {
@@ -4005,7 +3992,7 @@ function etfIntradayHtml() {
   }).join('');
   const guideHtml = guide ? `<div class="etf-intraday-guide" data-intraday-guide>
     <div class="etf-guide-card buy"><b>低吸 ${guide.lowBand.low.toFixed(3)}–${guide.lowBand.high.toFixed(3)}</b><b>${escHtml(guide.buyState)}</b><span>${escHtml(guide.buyNote)}</span></div>
-    <div class="etf-guide-card sell"><b>高抛 ${guide.highBand ? guide.highBand.low.toFixed(3) + '–' + guide.highBand.high.toFixed(3) : '均价待确认'}</b><b>${escHtml(guide.sellState)}</b><span>${escHtml(guide.sellNote)}</span></div>
+    <div class="etf-guide-card sell"><b>反弹观察 ${guide.highBand ? guide.highBand.low.toFixed(3) + '–' + guide.highBand.high.toFixed(3) : '均价待确认'}</b><b>${escHtml(guide.sellState)}</b><span>${escHtml(guide.sellNote)}</span></div>
   </div><div class="etf-panic-note">最新参考区 · 截至 ${escHtml(guide.asOf)}。${escHtml(guide.note)}</div>` : '<div class="etf-panic-note">当前连续分时不足，暂无最新参考区；历史参考带仍可回看。</div>';
   const chgFromPrev = ((lastP / prevClose - 1) * 100);
   return `
@@ -4041,7 +4028,7 @@ function etfIntradayHtml() {
       <span><i style="background:var(--etf-avg-line)"></i>均价</span>
       <span><i style="background:var(--text-muted)"></i>昨收</span>
       <span><i style="background:var(--up)"></i>红带：当时低吸参考</span>
-      <span><i style="background:var(--down)"></i>绿带：当时高抛参考</span>
+      <span><i style="background:var(--down)"></i>绿带：当时反弹观察区</span>
       <span>○ 观察：止跌但不买</span>
       <span><i style="background:var(--up)"></i>▲ 买：小仓候选</span>
       <span><i style="background:var(--down)"></i>▼ 卖：已有仓位减仓候选</span>
@@ -4487,6 +4474,142 @@ function etfMetricsHtml() {
     </div>`).join('')}</div>`;
 }
 
+function etfTMarket() {
+  const t = ETF_TRACK || {}, q = t.quote || {};
+  const now = Date.now();
+  const at = q.quoteTime ? Date.parse(q.quoteTime.replace(' ', 'T') + '+08:00') : NaN;
+  const plan = t.dayPlan || t.premarket;
+  return { date: t.today || todayLocalStr(), quote: q,
+    live: !ETF_LOAD_ERR && etfAlertsActive(now) && t.intradaySignals && t.intradaySignals.actionable && Number.isFinite(at) && now - at <= 90000 && at <= now + 5000,
+    tier: t.positionPlan && t.positionPlan.tier, events: t.intradaySignals && t.intradaySignals.events || [],
+    abort: !!(plan && plan.stop && ((q.prevClose > 0 && (q.price / q.prevClose - 1) * 100 <= plan.stop.pricePct)
+      || (plan.inputs && Number.isFinite(plan.inputs.qqqPrePct) && plan.inputs.qqqPrePct <= plan.stop.qqqAbort))) };
+}
+
+function etfTUpdate() {
+  const market = etfTMarket();
+  const state = EtfTStrategy.evaluate(ETF_TRADES, market, ETF_T_RULES);
+  if (market.live) {
+    for (const c of state.cycles) {
+      if (c.sale.date > market.date) continue;
+      c.sale.tMarks = c.sale.tMarks || [];
+      const time = market.date + ' ' + market.quote.quoteTime.slice(11, 16);
+      if (c.relativeHolding != null && !c.sale.tMarks.some(m => m.time === time)) c.sale.tMarks.push({ time, delta: c.relativeHolding });
+      if (c.fly) c.sale.tFly = true;
+    }
+    if (state.cycles.length) etfSaveTrades();
+    const q = market.quote, time = q.quoteTime.slice(11, 16);
+    if (!ETF_T_SAMPLES.some(s => s.date === market.date && s.time === time)) {
+      const minute = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+      const events = market.events.filter(e => { const age = minute(time) - minute(e.time); return age >= 1 && age <= 2; });
+      ETF_T_SAMPLES.push({ date: market.date, time, price: q.price, premium: q.premiumPct, tier: market.tier, abort: market.abort, live: true,
+        sell: events.some(e => e.side === 'sell'), rebound: events.some(e => e.side === 'buy' || e.side === 'watch') });
+      ETF_T_SAMPLES = ETF_T_SAMPLES.slice(-5000);
+      try { localStorage.setItem(ETF_T_SAMPLES_KEY, JSON.stringify(ETF_T_SAMPLES)); } catch {}
+    }
+    if (state.action) {
+      const cycle = state.round && state.round.id || market.date;
+      processEtfAlerts([...(ETF_TRACK.alerts || []), { key: `tcycle_${cycle}_${state.action}_${state.round ? state.action === 'exit' ? state.round.held : state.round.pending : state.cap}`, level: state.action === 'buy' ? 'good' : 'warn',
+        side: state.action === 'buy' ? 'buy' : 'sell', price: market.quote.price, title: state.state, text: state.note, time: market.quote.quoteTime.slice(11, 16) }]);
+    }
+  }
+  const el = document.getElementById('etf-t-cycle');
+  if (el && !el.contains(document.activeElement)) el.innerHTML = etfTHtml();
+}
+
+function etfTSaveRules() {
+  const read = key => Number(document.getElementById(`etf-t-rule-${key}`).value);
+  const rules = { fraction: 0.2, rate: read('rate') / 10000, minFee: read('minFee'), slippage: read('slippage'), gap: read('gap') / 100, stop: read('stop') / 100, fly: read('fly') / 100 };
+  if (Object.values(rules).some(v => !Number.isFinite(v) || v < 0) || rules.gap <= 0 || rules.gap > 0.1 || rules.stop <= 0 || rules.stop > 0.1 || rules.fly <= 0 || rules.fly > 0.2 || rules.rate > 0.01 || rules.slippage > 0.1 || rules.minFee > 100) {
+    etfToast({ level: 'warn', title: '参数无效', text: '请使用合理的费用、滑点和正数百分比。' }); return;
+  }
+  try { localStorage.setItem(ETF_T_RULES_KEY, JSON.stringify(rules)); } catch { etfToast({ level: 'warn', title: '无法保存参数', text: '浏览器存储不可用，请启用后再记录交易。' }); return; }
+  ETF_T_RULES = rules;
+  document.getElementById('etf-t-cycle').innerHTML = etfTHtml();
+}
+
+function etfTPrepare(action, cycleId = '') {
+  const state = EtfTStrategy.evaluate(ETF_TRADES, etfTMarket(), ETF_T_RULES);
+  const c = state.cycles.find(c => String(c.id) === String(cycleId));
+  ETF_T_FORM = { action, cycleId: String(cycleId), date: todayLocalStr(), time: nowStr().slice(0, 5), price: '', fee: '', shares: action === 'sell' ? String(state.remainingQuota) : c ? String(action === 'buy' ? c.pending : c.held) : '' };
+  const el = document.getElementById('etf-t-cycle'); if (el) el.innerHTML = etfTHtml();
+}
+
+function etfTRecordFill() {
+  const t = { id: Date.now(), date: (document.getElementById('etf-cycle-date') || {}).value, time: ETF_T_FORM.time,
+    side: ETF_T_FORM.action === 'buy' ? 'buy' : 'sell', price: Number(ETF_T_FORM.price), shares: Number(ETF_T_FORM.shares),
+    fee: ETF_T_FORM.fee === '' ? NaN : Number(ETF_T_FORM.fee), tAction: ETF_T_FORM.action, tCycleId: ETF_T_FORM.cycleId };
+  if (t.tAction === 'sell') {
+    const earlier = ETF_TRADES.filter(r => `${r.date} ${r.time || '00:00'}` <= `${t.date} ${t.time}`);
+    t.tBase = EtfTStrategy.position(earlier).shares;
+    t.tCap = Math.floor(t.tBase * 0.2 / 100) * 100;
+    t.tRules = { ...ETF_T_RULES };
+  }
+  if (t.date > todayLocalStr() || t.date === todayLocalStr() && t.time > nowStr().slice(0, 5)) { etfToast({ level: 'warn', title: '无法记录未来成交', text: '只可录入已经发生的实际成交。' }); return; }
+  const error = EtfTStrategy.validateFill(ETF_TRADES, t);
+  if (error) { etfToast({ level: 'warn', title: '无法记录做T成交', text: error }); return; }
+  const prospective = [...ETF_TRADES, t];
+  try { localStorage.setItem(ETF_TRADES_KEY, JSON.stringify(prospective)); } catch { etfToast({ level: 'warn', title: '保存失败', text: '成交未记录，请检查浏览器存储权限。' }); return; }
+  ETF_TRADES = prospective;
+  ETF_T_FORM = { action: 'sell', cycleId: '', date: '', time: '', price: '', shares: '', fee: '' };
+  renderEtfPosition(); etfTUpdate();
+  loadEtfTrack().then(() => updateEtfLive());
+}
+
+function etfTEndCycle(id) {
+  const t = ETF_TRADES.find(t => String(t.id) === String(id));
+  if (!t || !confirm('结束等待接回？已记录成交保留，未接回份额保持减仓，不自动追买。')) return;
+  const next = ETF_TRADES.map(r => r === t ? { ...r, tAbandoned: true } : r);
+  try { localStorage.setItem(ETF_TRADES_KEY, JSON.stringify(next)); } catch { etfToast({ level: 'warn', title: '保存失败', text: '未改变本轮状态。' }); return; }
+  ETF_TRADES = next; etfTUpdate();
+}
+
+function etfTHtml() {
+  const m = etfTMarket(), state = EtfTStrategy.evaluate(ETF_TRADES, m, ETF_T_RULES);
+  const num = v => v == null ? '—' : v.toFixed(2);
+  const form = ETF_T_FORM;
+  const cycles = state.cycles.slice(-10).reverse().map(c => `<div class="etf-alert info">
+    <b>${escHtml(c.sale.date)} ${escHtml(c.sale.time)} · 实卖 ${c.sale.price.toFixed(3)} × ${c.sale.shares}</b>
+    <div>已接回 ${c.bought} / 待接回 ${c.pending} / 回补仓剩余 ${c.held}；${c.abandoned ? '已停止接回' : c.complete ? '已配对' : '未闭合'}</div>
+    <div>已配对净价差 ¥${num(c.pairedNet)}；回补仓浮盈亏 ¥${num(c.returnFloat)}；相对一直持有 ¥${num(c.relativeHolding)}</div>
+    <div>接回参考上限 ${c.target == null ? '—' : c.target.toFixed(3)}；止损参考 ${c.stopPrice == null ? '—' : c.stopPrice.toFixed(3)}；${c.sale.tFly || c.fly ? '曾出现卖飞风险' : '无已记录卖飞'}</div>
+    ${c.matches.map(x => `<div>${escHtml(x.date)} ${escHtml(x.time)} 接回 ${x.price.toFixed(3)} × ${x.shares} → 净价差 ¥${num(x.net)}</div>`).join('')}
+    <div>回补仓退出盈亏 ¥${num(c.exitPnl)}；采样最大回撤 ¥${num(c.observedDrawdown)}</div>
+    <button class="etf-btn" onclick="etfTPrepare('buy','${c.id}')" ${!c.pending ? 'disabled' : ''}>记录实际接回</button>
+    <button class="etf-btn" onclick="etfTPrepare('exit','${c.id}')" ${!c.held ? 'disabled' : ''}>记录回补仓退出</button>
+    ${c.pending && !c.abandoned ? `<button class="etf-btn" onclick="etfTEndCycle('${c.id}')">停止等待接回</button>` : ''}
+  </div>`).join('');
+  const recordedDays = state.stats.days.map(d => `<div>${escHtml(d.date)} 卖出轮次 · 当前相对持有差额 ¥${num(d.net)}</div>`).join('');
+  const dates = [...new Set(ETF_T_SAMPLES.map(s => s.date))].slice(-10);
+  const replay = dates.map(date => {
+    const samples = ETF_T_SAMPLES.filter(s => s.date === date);
+    const result = EtfTStrategy.replay(samples, 10000, ETF_T_RULES);
+    return `<div>${escHtml(date)} · 留存 ${samples.length} 个采样 · 1万份底仓、20%做T：${result.trades.length}笔，配对净价差 ¥${num(result.pairedNet)}，相对持有 ¥${num(result.relativeHolding)}，采样回撤 ¥${num(result.drawdown)}，卖飞风险 ${result.flyCount || 0} 次</div>`;
+  }).join('');
+  const param = (key, label, value, step) => `<label>${label}<input id="etf-t-rule-${key}" class="etf-inp" type="number" step="${step}" min="0" value="${value}"></label>`;
+  const input = (key, label, type, value, step = '') => `<label>${label}<input id="etf-cycle-${key}" class="etf-inp" type="${type}" ${step ? `step="${step}"` : ''} value="${escHtml(value)}" oninput="ETF_T_FORM.${key}=this.value"></label>`;
+  return `<div class="etf-alert info"><b>${escHtml(state.state)}</b><div>${escHtml(state.note)}</div><div>今日额度 ${state.cap} 份；成交和采样仅存本浏览器，清理站点数据会丢失，请保留券商成交记录。提示不自动下单。原有高溢价/趋势风控照常适用，做T不保证盈利。</div></div>
+    <div class="etf-panic-note">固定每天最多一轮、底仓20%；净价差默认≥${(ETF_T_RULES.gap * 100).toFixed(2)}%，14:30后不接回；回补仓跌${(ETF_T_RULES.stop * 100).toFixed(2)}%提示退出，卖后涨${(ETF_T_RULES.fly * 100).toFixed(2)}%不追。</div>
+    <button class="etf-btn" onclick="etfTPrepare('sell')">记录实际做T卖出</button>
+    <div class="etf-trade-form etf-cycle-form">
+      <label>成交日期<input id="etf-cycle-date" class="etf-inp" type="date" value="${escHtml(form.date || todayLocalStr())}" oninput="ETF_T_FORM.date=this.value"></label>
+      ${input('time', '成交时间', 'time', form.time)}
+      ${input('price', '实际成交价', 'number', form.price, '0.001')}
+      ${input('shares', '实际份额', 'number', form.shares, '100')}
+      ${input('fee', '该笔实际费用', 'number', form.fee, '0.01')}
+      <span>${form.action === 'sell' ? '做T卖出' : form.action === 'buy' ? '接回（如实记账不代表策略批准）' : '回补仓退出'} ${form.cycleId ? '· 已绑定轮次' : ''}</span>
+      <button class="etf-btn primary" onclick="etfTRecordFill()">保存实际成交</button>
+    </div>
+    <details class="etf-plan-fold"><summary>做T费用和风险参数</summary><div class="etf-cycle-form">
+      ${param('rate', '佣金：万分之', ETF_T_RULES.rate * 10000, '0.1')}${param('minFee', '每笔最低费用¥', ETF_T_RULES.minFee, '0.01')}${param('slippage', '单边滑点¥/份', ETF_T_RULES.slippage, '0.001')}${param('gap', '最低净价差%', ETF_T_RULES.gap * 100, '0.1')}${param('stop', '回补仓止损%', ETF_T_RULES.stop * 100, '0.1')}${param('fly', '卖飞观察涨幅%', ETF_T_RULES.fly * 100, '0.1')}
+      <button class="etf-btn" onclick="etfTSaveRules()">保存参数（只影响新轮次）</button></div></details>
+    <div class="etf-panic-note">已记录 ${state.stats.rounds} 轮，完整配对 ${state.stats.closed} 轮；配对净价差 ¥${num(state.stats.pairedNet)}；退出回补仓盈亏 ¥${num(state.stats.exitPnl)}；相对一直持有 ¥${num(state.stats.relativeHolding)}；相对持有单轮最差 ¥${num(state.stats.worstRound)}；按卖出日分组最差 ¥${num(state.stats.worstDay)}；已记录卖飞 ${state.stats.flyCount} 次；单轮观测回撤 ¥${num(state.stats.drawdown)}。做T净价差不等于整个账户收益。</div>
+    ${recordedDays}
+    <div class="etf-panic-note">按卖出日分组的差额以当前市价计算，并非当日结算净收益；采样回撤仅页面在线期间，不包含未观测波动。旧普通交易未录费用按0计。</div>
+    ${cycles || '<div class="etf-empty">暂无做T实际成交。先在“我的持仓”记录真实底仓。</div>'}
+    <details class="etf-plan-fold"><summary>本页实时采样回放（非完整历史回测）</summary>${replay || '<div>无历史实时风控采样，不会拿收盘数据伪造全天买入条件。</div>'}<div class="etf-panic-note">每次用下一连续分钟模拟成交，含费用和滑点；只覆盖页面打开时的采样，空档不交易，缺历史溢价/趋势不追认买入。累计结果仅这些采样，不是策略稳定收益率。</div></details>`;
+}
+
 // ── 我的持仓 ──
 function etfPositionHtml() {
   const pos = etfPosition();
@@ -4498,10 +4621,10 @@ function etfPositionHtml() {
   const f = (v, d = 2) => (v != null && isFinite(v) ? v.toFixed(d) : '—');
   const rows = [...ETF_TRADES].sort((a, b) => (String(b.date) + String(b.id)).localeCompare(String(a.date) + String(a.id))).map(tr => `
     <div class="etf-trade-row">
-      <span class="etf-trade-date">${tr.date}</span>
-      <span class="etf-trade-side ${tr.side}">${tr.side === 'buy' ? '买入' : '卖出'}</span>
+      <span class="etf-trade-date">${escHtml(tr.date)}${tr.time ? ' ' + escHtml(tr.time) : ''}</span>
+      <span class="etf-trade-side ${tr.side}">${tr.tAction ? '做T ' : ''}${tr.side === 'buy' ? '买入' : '卖出'}</span>
       <span>${Number(tr.price).toFixed(3)} × ${Number(tr.shares)}</span>
-      <span style="color:var(--text-muted)">¥${(Number(tr.price) * Number(tr.shares)).toFixed(0)}</span>
+      <span style="color:var(--text-muted)">¥${(Number(tr.price) * Number(tr.shares)).toFixed(0)}${tr.fee != null ? ' / 费' + Number(tr.fee).toFixed(2) : ''}</span>
       <span class="etf-trade-del" onclick="etfDelTrade(${JSON.stringify(tr.id)})">×</span>
     </div>`).join('');
   return `
@@ -4553,10 +4676,12 @@ function etfAddTrade() {
   const date = ((document.getElementById('etf-t-date') || {}).value || '').trim() || todayLocalStr();
   const price = parseFloat((document.getElementById('etf-t-price') || {}).value);
   const shares = parseFloat((document.getElementById('etf-t-shares') || {}).value);
-  if (!isFinite(price) || price <= 0 || !isFinite(shares) || shares <= 0) {
+  if (!isFinite(price) || price <= 0 || !Number.isInteger(shares) || shares <= 0) {
     etfToast({ level: 'warn', title: '无法记录', text: '请填写有效的价格与份额（均为正数）', time: nowStr() });
     return;
   }
+  const earlier = ETF_TRADES.filter(t => t.date <= date);
+  if (side === 'sell' && shares > EtfTStrategy.position(earlier).shares) { etfToast({ level: 'warn', title: '无法记录卖出', text: '卖出超过该日已记录的持仓，请先补录真实底仓。' }); return; }
   ETF_TRADES.push({ id: Date.now(), date, side, price, shares });
   etfSaveTrades();
   const pi = document.getElementById('etf-t-price');
@@ -4568,9 +4693,16 @@ function etfAddTrade() {
 }
 
 function etfDelTrade(id) {
-  ETF_TRADES = ETF_TRADES.filter(t => String(t.id) !== String(id));
+  if (ETF_TRADES.some(t => String(t.tCycleId) === String(id))) { etfToast({ level: 'warn', title: '不能删除本轮卖出', text: '先删除绑定的接回与退出记录，避免破坏配对。' }); return; }
+  const candidate = ETF_TRADES.filter(t => String(t.id) !== String(id));
+  for (const t of EtfTStrategy.order(candidate)) {
+    const earlier = candidate.filter(r => r.id !== t.id && (`${r.date} ${r.time || '00:00'}` < `${t.date} ${t.time || '00:00'}` || `${r.date} ${r.time || '00:00'}` === `${t.date} ${t.time || '00:00'}` && Number(r.id) < Number(t.id)));
+    if (t.side === 'sell' && t.shares > EtfTStrategy.position(earlier).shares) { etfToast({ level: 'warn', title: '不能删除', text: '删除后会导致后续卖出超过真实持仓。' }); return; }
+    if (t.tAction && EtfTStrategy.validateFill(earlier, t)) { etfToast({ level: 'warn', title: '不能删除', text: '删除后会破坏后续做T额度、配对或退出份额。' }); return; }
+  }
+  ETF_TRADES = candidate;
   etfSaveTrades();
-  renderEtfPosition();
+  renderEtfPosition(); etfTUpdate();
   loadEtfTrack().then(() => { updateEtfLive(); });
 }
 
@@ -4617,6 +4749,10 @@ function renderEtfView() {
       <div id="etf-zones">${etfPremiumZonesHtml()}</div>
     </div>
     <div class="etf-section">
+      <div class="etf-sec-title"><span>已有底仓做T · 实际成交配对</span><span class="sub">固定20% · 先卖后接 · 不保证盈利</span></div>
+      <div id="etf-t-cycle">${etfTHtml()}</div>
+    </div>
+    <div class="etf-section">
       <div class="etf-sec-title"><span>我的持仓</span><span class="sub">仅存本机浏览器</span></div>
       <div id="etf-position">${etfPositionHtml()}</div>
     </div>
@@ -4637,6 +4773,7 @@ function updateEtfLive() {
   set('etf-alerts', etfAlertsHtml());
   set('etf-intraday', etfIntradayHtml());
   etfInitIntradayScroll();
+  etfTUpdate();
   set('etf-macd', etfMacdHtml());         // 盘中最后一根柱会随实时价变化
 }
 
