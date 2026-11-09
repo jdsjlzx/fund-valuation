@@ -25,9 +25,9 @@ app.use(express.static(path.join(__dirname, 'public'), {
   etag: true,
   lastModified: true,
   setHeaders: (res, filePath) => {
-    // HTML 文件缓存缩短到 5 分钟，确保更新及时
+    // HTML 每次校验（配 etag 命中就走 304），避免改了前端却仍加载旧页面
     if (filePath.endsWith('.html')) {
-      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.setHeader('Cache-Control', 'no-cache');
     }
   }
 }));
@@ -4516,7 +4516,7 @@ function buildEtfHistoryReview(klines, navMap, signals) {
 
 // 用当前价估算「今日这根 MACD 柱」，用于盘中翻红/翻绿提示
 function etfIntradayBar(klines, price, todayStr) {
-  if (!klines.length || !isFinite(price)) return null;
+  if (klines.length < 35 || !Number.isFinite(price) || price <= 0 || klines[klines.length - 1].date > todayStr) return null;
   const k = klines.map(x => ({ date: x.date, close: x.close }));
   const last = k[k.length - 1];
   if (last.date === todayStr) last.close = price;
@@ -4532,8 +4532,25 @@ function etfIntradayBar(klines, price, todayStr) {
     prevBar: (dif[n - 1] - dea[n - 1]) * 2,
     dif: dif[n],
     dea: dea[n],
-    isToday: last.date === todayStr,
+    date: k[n].date, close: price,
+    isToday: k[n].date === todayStr,
   };
+}
+
+function etfLiveMacdBars(data, klines, today, now = new Date()) {
+  const quote = data.quote;
+  const last = klines[klines.length - 1];
+  const minute = now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour12: false }).slice(0, 5);
+  const provisional = minute < '15:00';
+  const useQuote = data.session.realtime && quote && quote.quoteDate === today && quote.volume > 0
+    && last && (provisional || last.date < today);
+  const todayBar = useQuote ? etfIntradayBar(klines, quote.price, today) : null;
+  if (!todayBar) return { bars: data.bars, todayBar: null };
+  const entry = { date: today, close: todayBar.close, dif: todayBar.dif, dea: todayBar.dea, bar: todayBar.bar,
+    signal: null, intraday: provisional, estimated: true };
+  const bars = data.bars.filter(b => b.date !== today);
+  bars.push(entry);
+  return { bars: bars.slice(-60), todayBar };
 }
 
 // 每日操作建议：溢价率档位（一级决策变量）× 技术面 × 持仓
@@ -5169,13 +5186,121 @@ function buildEtfIntradayGuide(ctx, points, events, actionable, bands) {
   let sellState = '等待反弹', sellNote = '已有仓位等反弹接近分时均价；近30分钟反弹至少0.6%后，回落0.25%且连续两分钟转弱才提示减仓。';
   if (!actionable) { sellState = '反弹观察区回看'; sellNote = '已收盘或行情不实时，仅展示参考区；历史卖点不补发通知。'; }
   else if (!highBand) { sellState = '均价待确认'; sellNote = '分时均价不可用，暂不判断高抛参考区。'; }
-  else if (latest && latest.side === 'sell') { sellState = '反弹转弱 · 减仓候选'; sellNote = `确认分钟 ${latest.time}；仅适用于已有仓位，不等于必须卖出或已成交。`; }
+  else if (latest && latest.side === 'sell') { sellState = latest.risk ? '持续走弱 · 减仓预警' : '反弹转弱 · 减仓候选'; sellNote = `确认分钟 ${latest.time}；仅适用于已有仓位，不等于必须卖出或已成交。`; }
   else if (last.price >= highBand.low && last.price <= highBand.high) { sellState = '反弹观察区内 · 等转弱'; sellNote = '已接近分时均价，反弹仍强时不提前卖；等待回落幅度和连续两分钟转弱确认。'; }
   else if (last.price > highBand.high) { sellState = '反弹持有观察'; sellNote = '价格已高于均价参考区，暂未出现新的转弱确认；不因触区自动卖出。'; }
   if (actionable && highBand && !(latest && latest.side === 'sell') && sellMissing.length) sellNote = sellMissing.join('；') + '。仅供已有仓位分批减仓参考。';
   return { asOf: last.t, from: reference.from, lowBand, highBand, buyState, buyNote, sellState, sellNote,
     buyMissing, sellMissing, halfWidthPct: reference.halfWidthPct,
     note: '参考带与信号统一使用近30个连续分钟；绿带是累计成交均价附近的反弹观察区，半宽为近30分钟振幅的1/4（0.15%–0.6%）。触带不等于买卖确认，未扣交易费用。' };
+}
+
+function buildEtfIntradayStrength(points, date) {
+  const recent = [], history = [], events = [];
+  let lastAlert = -Infinity, lastLevel = 0, armed = true;
+  for (const p of points) {
+    if (recent.length && etfMinuteNumber(p.t) - etfMinuteNumber(recent[recent.length - 1].t) !== 1) {
+      recent.length = 0; armed = true; lastLevel = 0;
+    }
+    recent.push(p);
+    if (recent.length > 12) recent.shift();
+    const tail = recent.slice(-3);
+    const enough = recent.length >= 5 && recent.slice(-5).every(r => r.avg > 0);
+    const move = enough ? (p.price / recent[recent.length - 5].price - 1) * 100 : null;
+    const under = enough && tail.every(r => r.price <= r.avg * 0.997);
+    const above = enough && tail.every(r => r.price >= r.avg * 1.001);
+    const avgGap = p.avg > 0 ? (p.price / p.avg - 1) * 100 : null;
+    const supportRows = recent.slice(0, -2);
+    const support = supportRows.length >= 5 ? Math.min(...supportRows.map(r => r.price)) : null;
+    const brokenSupport = under && support != null && tail.slice(-2).every(r => r.price < support * 0.999);
+    const broken = under && (move <= -0.8 || brokenSupport);
+    const weakening = under && move <= -0.3;
+    const kind = !enough ? 'insufficient' : broken ? 'broken' : under ? 'weak' : above && move >= 0.15 ? 'strong' : 'neutral';
+    const label = { insufficient: '待连续数据', broken: '破位 · 禁止追涨', weak: '偏弱 · 禁止追涨', strong: '偏强 · 等回踩', neutral: '震荡 · 不追涨' }[kind];
+    history.push({ time: p.t, price: p.price, kind, label, move4: move, avgGap, support });
+    if (enough && tail.every(r => r.price >= r.avg)) { armed = true; lastLevel = 0; }
+    const level = broken ? 2 : weakening ? 1 : 0;
+    const minute = etfMinuteNumber(p.t);
+    if (level && (armed || level > lastLevel) && (minute - lastAlert >= 10 || level > lastLevel)) {
+      events.push({ key: `intraday_weak_${date}_${p.t}_${level}`, time: p.t, price: p.price, side: 'sell', risk: kind,
+        level: broken ? 'danger' : 'warn', title: broken ? 'ETF 破位 · 已有仓位减仓预警' : 'ETF 持续走弱 · 已有仓位减仓预警',
+        text: `连续3分钟低于各自分时均价至少0.3%，近4分钟 ${move.toFixed(2)}%${brokenSupport ? `；连续2分钟跌破此前支撑 ${support.toFixed(3)}` : ''}。无需先反弹才预警；停止追买，已有仓位考虑分批减仓。所标 ${p.price.toFixed(3)} 为确认分钟价，下一分钟才可提示，不保证成交或避免亏损。` });
+      lastAlert = minute; lastLevel = level; armed = false;
+    }
+  }
+  return { current: history[history.length - 1] || null, history, events,
+    note: '偏强只表示ETF短线走势，不代表允许追买；均价下方持续走弱或支撑破位独立预警，阈值未经盈利验证。' };
+}
+
+// ── 追涨闸门：把「现在这个价能不能追」变成一句可执行的结论 ──
+//  回测依据（159509，2026-09-04~11-09，41 个交易日、5 分钟粒度、逐 bar 判定）：
+//    同时满足「开盘涨幅 ≤ 0.8% + 现价站上分时均价 + 偏离均价 ≤ 0.6%」的时点，
+//    追入后持有到收盘平均 +0.40%、胜率 63%（331 个样本 bar / 26 天）；
+//    被其中任一条否决的时点平均 -0.09%、胜率 46%（1046 个样本 bar / 41 天）。
+//    单独用「高开幅度」判定区分度很弱（允许 0.11% vs 拦截 -0.09%），
+//    「距日内高点回落」作为拦截条件甚至是负贡献（+0.30%），所以都不单独使用。
+//  这里只判盘中结构，溢价/趋势风控已在 guide 与 chase 文案里，避免长期高溢价把结论钉死成永远不能买。
+function buildEtfChaseGate(ctx, points, current, actionable) {
+  const quote = ctx.quote || {};
+  const last = points[points.length - 1];
+  const prevClose = quote.prevClose > 0 ? quote.prevClose : null;
+  const open = quote.open > 0 ? quote.open : points[0].price;
+  const openPct = prevClose ? (open / prevClose - 1) * 100 : null;
+  const avgGap = last.avg > 0 ? (last.price / last.avg - 1) * 100 : null;
+  const span = etfMinuteNumber(last.t) - etfMinuteNumber(points[0].t);
+  const premium = Number.isFinite(quote.premiumPct) ? quote.premiumPct : null;
+  const kind = current && current.kind;
+  const metrics = { open, openPct, avg: last.avg, price: last.price, avgGap, span, premium, premiumLine: PREMIUM_BUY, kind: kind || null };
+  const gate = (level, label, reason, fix) => ({ level, label, reason, fix, metrics, asOf: last.t });
+  if (!actionable) {
+    // 收盘/非实时：不产生当前指令，但把当日复盘结论留在这里，避免卡片变成一句空话。
+    // 回放口径与盘中闸门一致（高开≤0.8% + 站上均价 + 偏离≤0.6%），只是逐分钟数一遍。
+    let firstAllow = null, allowMinutes = 0;
+    const baseMin = etfMinuteNumber(points[0].t);
+    for (const p of points) {
+      if (!(p.avg > 0) || p.t >= '14:30') continue;
+      if (etfMinuteNumber(p.t) - baseMin < 15) continue;
+      const gap = (p.price / p.avg - 1) * 100;
+      if ((openPct != null && openPct > 0.8) || gap < 0 || gap > 0.6) continue;
+      allowMinutes++;
+      if (!firstAllow) firstAllow = { t: p.t, price: p.price };
+    }
+    const openToClose = open > 0 ? (last.price / open - 1) * 100 : null;
+    const tail = openToClose == null ? '' : `开盘买入持有到收盘 ${openToClose >= 0 ? '+' : ''}${openToClose.toFixed(2)}%。`;
+    if (!firstAllow) {
+      const why = openPct != null && openPct > 0.8
+        ? `今天开盘高开 +${openPct.toFixed(2)}%，超过 0.8% 追涨上限，全天没有出现可追时点。`
+        : '今天现价全天没站稳分时均价上方，或偏离均价过远，没有出现可追时点。';
+      return gate('closed', '今天全天不该追', why + tail, '下一个交易日开盘满 15 分钟后再看这张卡。');
+    }
+    const after = firstAllow.price > 0 ? (last.price / firstAllow.price - 1) * 100 : null;
+    return gate('closed', '今天出现过可追时点',
+      `全天 ${allowMinutes} 分钟符合条件，最早在 ${firstAllow.t}（${firstAllow.price.toFixed(3)}），从该时点持有到收盘 ${after == null ? '—' : (after >= 0 ? '+' : '') + after.toFixed(2) + '%'}。`,
+      '收盘后仅供复盘，不构成当前指令。');
+  }
+  if (last.t >= '14:30') return gate('block', '现在不能追', '14:30 后停止新增仓位，尾盘追入要承担隔夜缺口。', '等下一个交易日开盘 15 分钟的结构确认。');
+  if (openPct != null && openPct > 0.8) {
+    return gate('block', '现在不能追', `今天开盘已高开 +${openPct.toFixed(2)}%（超过 0.8%），此刻追入是在替隔夜盘抬轿。`,
+      `等回落到分时均价 ${last.avg.toFixed(3)} 附近重新站稳再评估。`);
+  }
+  if (['weak', 'broken'].includes(kind)) {
+    return gate('block', '现在不能追', `ETF 自身${kind === 'broken' ? '破位' : '持续偏弱'}，走势与美股隔夜涨跌无关。`,
+      '等连续几分钟站回分时均价、强弱翻正再看。');
+  }
+  if (avgGap != null && avgGap < 0) {
+    return gate('block', '现在不能追', `现价 ${last.price.toFixed(3)} 已低于分时均价 ${last.avg.toFixed(3)}（${avgGap.toFixed(2)}%），今天买入的人整体在浮亏。`,
+      '等重新站上分时均价，不在均价下方接。');
+  }
+  if (avgGap != null && avgGap > 0.6) {
+    return gate('block', '现在不能追', `现价已高出分时均价 ${avgGap.toFixed(2)}%，追进去的成本明显高于今天平均水平。`,
+      `等回踩均价 ${last.avg.toFixed(3)} 附近、且回踩不破再考虑。`);
+  }
+  if (span < 15) {
+    return gate('wait', '观察 · 先别追', `开盘才 ${Math.max(0, span)} 分钟，分时结构还没成形。`,
+      '等开盘满 15 分钟：不高开、站上均价、未过度偏离再决定。');
+  }
+  return gate('allow', '结构允许 · 小仓试', `高开 ${openPct == null ? '—' : '+' + openPct.toFixed(2) + '%'}，现价站上均价 ${last.avg.toFixed(3)}（${avgGap.toFixed(2)}%）。`,
+    '仍按总仓位上限分批，跌破分时均价立刻退出。');
 }
 
 function buildEtfIntradaySignals(ctx) {
@@ -5186,9 +5311,14 @@ function buildEtfIntradaySignals(ctx) {
   const time = (quote.quoteTime || '').slice(11, 16);
   const points = d.points.filter(p => isEtfContinuousMinute(p.t) && p.t <= time && (!(ctx.session && ctx.session.trading) || p.t < time) && p.price > 0 && p.volume > 0);
   result.asOf = points.length ? points[points.length - 1].t : null;
-  result.actionable = !!(ctx.session && ctx.session.trading && quote.quoteDate === ctx.today && isEtfContinuousMinute(time) && result.asOf && Math.abs(etfMinuteNumber(time) - etfMinuteNumber(result.asOf)) <= 2);
+  const quoteAt = Date.parse((quote.quoteTime || '').replace(' ', 'T') + '+08:00');
+  const now = ctx.now == null ? Date.now() : ctx.now;
+  result.actionable = !!(!ctx.stale && ctx.session && ctx.session.trading && quote.quoteDate === ctx.today && isEtfContinuousMinute(time)
+    && Number.isFinite(quoteAt) && now - quoteAt <= 90000 && quoteAt <= now + 5000
+    && result.asOf && Math.abs(etfMinuteNumber(time) - etfMinuteNumber(result.asOf)) <= 2);
   result.note = '仅按已闭合分钟确认，所标时间为确认分钟，下一分钟才能实时提示；低吸需止跌，高抛需反弹转弱。回放不代表实际成交，历史溢价未知时不追认买入。';
   result.bands = buildEtfIntradayBands(points);
+  result.strength = buildEtfIntradayStrength(points, d.date);
   let reboundArmed = true, priorLowTime = null, lastReboundMin = -Infinity, lastSellMin = -Infinity;
   const premium = Number.isFinite(quote.premiumPct) ? quote.premiumPct : null;
   for (let i = 0; i < points.length; i++) {
@@ -5203,7 +5333,8 @@ function buildEtfIntradaySignals(ctx) {
     const nearAvg = reference.highBand && reference.high >= reference.highBand.low;
     if (reboundArmed && min - lastReboundMin >= 10 && rising && weak && offLow >= 0.3 && p.t < '14:30') {
       const liveSignal = result.actionable && min >= etfMinuteNumber(time) - 2;
-      const buyAllowed = liveSignal && time < '14:30' && premium != null && premium <= PREMIUM_BUY
+      const weakNow = ['weak', 'broken'].includes(result.strength.history[i].kind);
+      const buyAllowed = liveSignal && !weakNow && time < '14:30' && premium != null && premium <= PREMIUM_BUY
         && ctx.positionPlan && ['heavy', 'try'].includes(ctx.positionPlan.tier)
         && !(ctx.premarket && ctx.premarket.inputs.qqqPrePct != null && ctx.premarket.inputs.qqqPrePct <= ctx.premarket.stop.qqqAbort)
         && !(ctx.premarket && quote.prevClose > 0 && (p.price / quote.prevClose - 1) * 100 <= ctx.premarket.stop.pricePct);
@@ -5218,7 +5349,22 @@ function buildEtfIntradaySignals(ctx) {
       lastSellMin = min; reboundArmed = true;
     }
   }
+  result.events.push(...result.strength.events);
+  result.events.sort((a, b) => a.time.localeCompare(b.time));
   result.guide = buildEtfIntradayGuide(ctx, points, result.events, result.actionable, result.bands);
+  result.chaseGate = buildEtfChaseGate(ctx, points, result.strength.current, result.actionable);
+  const strength = result.strength.current;
+  if (result.guide && strength) {
+    if (result.actionable && ['weak', 'broken'].includes(strength.kind)) {
+      result.guide.buyState = '走弱 · 禁止追买';
+      result.guide.buyNote = strength.label + '，不因外盘上涨接跌或追涨；等ETF自身恢复再检查溢价和趋势。';
+    }
+    result.strength.chase = !result.actionable ? '非实时 · 仅回看' : premium == null ? '溢价缺失 · 不能判断买入'
+      : premium > PREMIUM_BUY ? `溢价 ${premium.toFixed(2)}% · 不新增仓位`
+      : time >= '14:30' ? '14:30 后不新增仓位'
+      : !ctx.positionPlan || !['heavy', 'try'].includes(ctx.positionPlan.tier) ? '趋势风控不允许新增买入'
+      : strength.kind === 'strong' ? '偏强也不直接追涨，等回踩确认' : '未确认强势 · 不追涨';
+  }
   return result;
 }
 
@@ -5246,7 +5392,9 @@ function buildEtfAlerts(ctx) {
     for (const event of ctx.intradaySignals.events) {
       const age = nowMin - etfMinuteNumber(event.time);
       if (age >= 0 && age <= 2) {
+        const currentStrength = ctx.intradaySignals.strength && ctx.intradaySignals.strength.current;
         const buyBlocked = event.side === 'buy' && (!Number.isFinite(pz) || pz > PREMIUM_BUY || nowMin >= 870
+          || currentStrength && ['weak', 'broken'].includes(currentStrength.kind)
           || !ctx.positionPlan || !['heavy', 'try'].includes(ctx.positionPlan.tier));
         out.push(buyBlocked ? { ...event, side: 'watch', level: 'info', title: '止跌信号已出现 · 当前风控禁止买入', text: `${event.text} 当前溢价、时间或趋势已不满足买入条件，不按之前候选加仓。`, pri: -3 } : { ...event, pri: -3 });
       }
@@ -5578,10 +5726,7 @@ app.get('/api/etf-track', async (req, res) => {
       };
     }
 
-    // 盘中 MACD 柱估算（仅 A 股交易时段有意义）
-    const todayBar = data.session.trading
-      ? etfIntradayBar(ETF_KLINES, data.quote ? data.quote.price : null, todayStr)
-      : null;
+    const { bars: displayBars, todayBar } = etfLiveMacdBars(data, ETF_KLINES, todayStr);
 
     // 盘中溢价穿越检测：对比上一次请求的溢价率，判断是否跌破买入线 / 加仓线
     const curPrem = data.quote ? data.quote.premiumPct : null;
@@ -5611,6 +5756,7 @@ app.get('/api/etf-track', async (req, res) => {
       premCross,
       session: data.session,
       today: todayStr,
+      stale: !!data.stale,
       intraday: data.intraday,
       positionPlan: data.positionPlan,
       klines: ETF_KLINES,
@@ -5737,7 +5883,7 @@ app.get('/api/etf-track', async (req, res) => {
     const alerts = isAShareTradingTime() && data.session.trading ? buildEtfAlerts(ctx) : [];
 
     const { usIdx: _usIdx, ...publicData } = data;
-    const payload = { success: true, ...publicData, pos, advice, alerts, todayBar, premCross, premarket, dayPlan: LAST_PREMARKET_PLAN, intradaySignals };
+    const payload = { success: true, ...publicData, bars: displayBars, pos, advice, alerts, todayBar, premCross, premarket, dayPlan: LAST_PREMARKET_PLAN, intradaySignals };
     if (req.query.diag === '1') {
       payload.diag = {
         klineCount: ETF_KLINES.length,

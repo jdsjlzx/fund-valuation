@@ -6,7 +6,7 @@ const test = require('node:test');
 const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 const declaration = (source, name) => source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^\\}`, 'm'))[0];
-const names = ['etfMinuteNumber', 'isEtfContinuousMinute', 'parseEtfMinuteData', 'getBasePrevClose', 'premarketMode', 'unpricedUsMove', 'buildPremarketPlan', 'buildEtfIntradayBands', 'buildEtfIntradayGuide', 'buildEtfIntradaySignals', 'buildEtfAlerts'];
+const names = ['etfMinuteNumber', 'isEtfContinuousMinute', 'parseEtfMinuteData', 'getBasePrevClose', 'premarketMode', 'unpricedUsMove', 'buildPremarketPlan', 'buildEtfIntradayBands', 'buildEtfIntradayGuide', 'buildEtfIntradayStrength', 'buildEtfChaseGate', 'buildEtfIntradaySignals', 'buildEtfAlerts'];
 const context = vm.createContext({ PREMIUM_BUY: 18, PREMIUM_WATCH: 22, PREMIUM_ADD: 15, PREMIUM_DANGER: 27,
   premiumZone: () => ({ key: 'exit', label: '极高' }), premiumPriceLadder: () => null,
   buildPremarketHistoryReview: () => null });
@@ -16,6 +16,7 @@ const point = (t, price, avg = 2.95) => ({ t, price, avg, volume: 100 });
 function input(points, overrides = {}) {
   const last = points[points.length - 1];
   return { today: '2026-11-05', quote: { quoteDate: '2026-11-05', quoteTime: `2026-11-05 ${last.t.slice(0, 3)}${String(Number(last.t.slice(3)) + 1).padStart(2, '0')}`, price: last.price, prevClose: 2.98, premiumPct: 37 },
+    now: Date.parse(`2026-11-05T${last.t}:00+08:00`) + 60000,
     session: { trading: true }, intraday: { date: '2026-11-05', points: points.map(p => ({ ...p })) }, ind: {}, signals: [], positionPlan: { tier: 'try' }, ...overrides };
 }
 const rebound = [point('13:00', 2.94), point('13:01', 2.92), point('13:02', 2.925), point('13:03', 2.931)];
@@ -345,7 +346,7 @@ test('图表绘制动态参考带并隐藏零成交提示，不把参考带当�
   fixture.intraday.inactiveRange = '09:30–10:30';
   const result = context.buildEtfIntradaySignals(fixture);
   const browser = vm.createContext({ ETF_TRACK: { ...fixture, intradaySignals: result }, etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
-  vm.runInContext(declaration(html, 'etfIntradayOffset') + '\n' + declaration(html, 'etfIntradayHtml'), browser);
+  vm.runInContext([declaration(html, 'etfIntradayOffset'), declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
   const rendered = browser.etfIntradayHtml();
   assert.match(rendered, /data-reference-zone="buy"/);
   assert.match(rendered, /data-reference-zone="sell"/);
@@ -395,7 +396,7 @@ test('午休缺失断开动态带，缺均价仅缺高抛带', () => {
   const fixture = input(points); fixture.session.trading = false;
   const result = context.buildEtfIntradaySignals(fixture);
   const browser = vm.createContext({ ETF_TRACK: { ...fixture, intradaySignals: result }, etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
-  vm.runInContext(declaration(html, 'etfIntradayOffset') + '\n' + declaration(html, 'etfIntradayHtml'), browser);
+  vm.runInContext([declaration(html, 'etfIntradayOffset'), declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
   const rendered = browser.etfIntradayHtml();
   assert.equal((rendered.match(/data-band-segment="buy"/g) || []).length, 2);
   assert.equal((rendered.match(/data-band-segment="sell"/g) || []).length, 1);
@@ -455,7 +456,7 @@ test('图表用中文区分观察和买卖候选，不把观察标为买', () =>
   const browser = vm.createContext({ ETF_TRACK: { intraday: { points: [point('13:00', 2.94), point('13:01', 2.92)] }, quote: { prevClose: 2.98 },
     intradaySignals: { events: [{ time: '13:00', price: 2.94, side: 'watch', title: '观察' }, { time: '13:01', price: 2.92, side: 'buy', title: '买入候选' }, { time: '13:01', price: 2.92, side: 'sell', title: '减仓候选' }] } },
     etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
-  vm.runInContext(declaration(html, 'etfIntradayOffset') + '\n' + declaration(html, 'etfIntradayHtml'), browser);
+  vm.runInContext([declaration(html, 'etfIntradayOffset'), declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
   const rendered = browser.etfIntradayHtml();
   assert.match(rendered, /data-intraday-side="watch"/);
   assert.match(rendered, />观察<\/text>/);
@@ -498,12 +499,12 @@ test('分时默认最近一小时，手动查看和切换上午下午刷新后�
   browser.etfInitIntradayScroll(); assert.equal(el.scrollLeft, 0);
 });
 
-test('全天缩放到一屏，保留买卖标记，返回最近一小时恢复宽图', () => {
+test('全天缩放到一屏，保留买卖标记，返回30分钟视窗恢复宽图', () => {
   const el = { dataset: { date: '2026-11-05', scale: '5', latestX: '1264' }, clientWidth: 380, scrollLeft: 928, innerHTML: '' };
   const browser = vm.createContext({ ETF_INTRADAY_VIEW: { date: '2026-11-05', offset: 0, follow: true },
     ETF_TRACK: { intraday: { date: '2026-11-05', points: [point('10:31', 2.99), point('15:00', 2.92)] }, quote: {}, intradaySignals: { events: [] } },
     document: { getElementById: () => el }, etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
-  vm.runInContext(['etfIntradayOffset', 'etfIntradayScroll', 'etfInitIntradayScroll', 'etfPanIntraday', 'etfIntradayHtml'].map(n => declaration(html, n)).join('\n'), browser);
+  vm.runInContext(['etfIntradayOffset', 'etfIntradayScroll', 'etfInitIntradayScroll', 'etfPanIntraday', 'etfChaseGateHtml', 'etfIntradayHtml'].map(n => declaration(html, n)).join('\n'), browser);
   browser.etfPanIntraday('all');
   assert.equal(browser.ETF_INTRADAY_VIEW.all, true);
   assert.equal(el.scrollLeft, 0);
@@ -515,7 +516,7 @@ test('全天缩放到一屏，保留买卖标记，返回最近一小时恢复�
   browser.etfPanIntraday('latest');
   assert.equal(browser.ETF_INTRADAY_VIEW.all, false);
   assert.equal(browser.ETF_INTRADAY_VIEW.follow, true);
-  assert.match(browser.etfIntradayHtml(), /<svg width="1228" height="190"/);
+  assert.match(browser.etfIntradayHtml(), /<svg width="2348" height="190"/);
 });
 
 test('前端日内事件同日同key只记录一次，刷新或条件解除后不重复弹', () => {
@@ -626,7 +627,7 @@ test('分时行情头展示现价涨跌幅溢价和指数，不展示ETF名称�
 test('分时数据缺失时仍保留行情头，独立顶部行情区域不再渲染或刷新', () => {
   const browser = vm.createContext({ ETF_TRACK: { quote: { price: 2.921 } },
     etfHeroHtml: time => `<div class="etf-hero">${time}</div>`, etfSessionQuoteHtml: () => '<div class="etf-session-quote"></div>', escHtml: String, etfQuoteInlineHtml: () => '' });
-  vm.runInContext(declaration(html, 'etfIntradayHtml'), browser);
+  vm.runInContext([declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
   assert.match(browser.etfIntradayHtml(), /etf-hero/);
   assert.match(browser.etfIntradayHtml(), /分时数据不可用/);
   assert.doesNotMatch(declaration(html, 'renderEtfView'), /id="etf-hero"/);
