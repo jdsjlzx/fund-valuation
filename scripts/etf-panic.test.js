@@ -56,7 +56,8 @@ test('外盘与ETF急跌共振，高溢价仍不隐藏预警', () => {
   const output = render(result, 39.6);
   assert.match(output, /市场恐慌预警/);
   assert.match(output, /ETF 买入信号/);
-  assert.match(output, /高溢价 · 暂停买入/);
+  assert.match(output, /买入条件不足/);
+  assert.doesNotMatch(output, /高溢价 · 暂停买入/);
   assert.match(output, /39\.60%/);
 });
 
@@ -82,7 +83,7 @@ test('外盘缺失明确标注，ETF急跌仍可单独预警', () => {
 });
 
 test('4分只是候选买点，不开启原有5分窗口', () => {
-  const { result } = fixture({ external: false, oversold: true, premium: 10 });
+  const { result } = fixture({ oversold: true, premium: 10 });
   assert.equal(result.current.score, 4);
   assert.equal(result.active.size, 0);
   assert.match(render(result, 10), /接近买点 · 仅关注/);
@@ -90,34 +91,57 @@ test('4分只是候选买点，不开启原有5分窗口', () => {
 });
 
 test('达到原有5分门槛后仍按实际仓位而非固定65%执行', () => {
-  const { result } = fixture({ oversold: true, premium: 10 });
+  const { result } = fixture({ stress: true, oversold: true, premium: 10, external: false });
   assert.equal(result.current.score, 5);
   assert.ok(result.active.size > 0);
-  const output = render(result, 10, { panic: true, posPct: 35, action: '恐慌试仓 · 35%', headline: '未站回MA21' });
+  const output = render(result, 10, { panic: true, posPct: 20, action: '恐慌试仓 · 20%', headline: '未站回MA21' });
   assert.match(output, /窗口中 · 按仓位执行/);
-  assert.match(output, /恐慌试仓 · 35%/);
+  assert.match(output, /恐慌试仓 · 20%/);
+  // 2026-11-10：卡片改为「标签 + 一句」短行排版，「窗口内：」变成左侧标签，文案本身不变
+  assert.match(output, /未获价格确认只按 20% 试仓档/);
   assert.doesNotMatch(output, /触发后仓位下限抬到/);
 });
 
-test('即使窗口已触发，高溢价或未知溢价仍阻止买入提示', () => {
+test('窗口已触发时高溢价或未知溢价都按实际仓位展示', () => {
   const { result } = fixture({ stress: true, oversold: true });
   assert.equal(result.current.score, 6);
-  const plan = { panic: true, posPct: 5, action: '防守', headline: '高溢价' };
-  assert.match(render(result, 40, plan), /高溢价 · 暂停买入/);
-  assert.match(render(result, null, plan), /溢价待确认/);
-  assert.doesNotMatch(render(result, null, plan), /窗口中 · 按仓位执行/);
+  const plan = { panic: true, posPct: 20, action: '恐慌试仓 · 20%', headline: '未站回MA21' };
+  for (const premium of [40, null]) {
+    const output = render(result, premium, plan);
+    assert.match(output, /窗口中 · 按仓位执行/);
+    assert.match(output, /恐慌试仓 · 20%/);
+    assert.match(output, /不限制买卖或仓位/);
+    assert.doesNotMatch(output, /高溢价 · 暂停买入|溢价待确认/);
+  }
+  assert.match(render(result, null, plan), /数据缺失/);
 });
 
-test('22%溢价边界与已失效窗口仍按实际防守仓位展示', () => {
-  const { result } = fixture({ oversold: true, premium: 10 });
+test('原22%溢价边界不影响失效窗口的防守仓位展示', () => {
+  const { result } = fixture({ stress: true, oversold: true, premium: 10 });
   const plan = { panic: true, posPct: 20, action: '抄底未确认 · 撤回 20%', headline: '10天未确认，撤回防守' };
-  assert.match(render(result, 22, plan), /抄底未确认 · 撤回 20%/);
-  assert.doesNotMatch(render(result, 22, plan), /高溢价 · 暂停买入/);
-  assert.match(render(result, 22.01, plan), /高溢价 · 暂停买入/);
+  for (const premium of [22, 22.01, 40, null]) {
+    const output = render(result, premium, plan);
+    assert.match(output, /抄底未确认 · 撤回 20%/);
+    assert.doesNotMatch(output, /高溢价 · 暂停买入/);
+  }
+});
+
+test('取消溢价评分但不降低技术窗口门槛', () => {
+  const low = fixture({ oversold: true, premium: 10 }).result;
+  const high = fixture({ oversold: true, premium: 40 }).result;
+  assert.equal(low.current.score, high.current.score);
+  assert.equal(low.current.score, 4);
+  assert.equal(low.current.checks.length, 6);
+  assert.equal(low.current.checks.some(c => c.key === '溢价'), false);
+  assert.equal(low.config.trigger, 5);
+  assert.equal(low.config.premiumLimit, undefined);
+  assert.equal(low.active.size, 0);
+  assert.equal(high.active.size, 0);
+  assert.match(render(low, 10), /4<small>\/6 项/);
 });
 
 test('最新外盘预览达标不冒充已开启的交易窗口', () => {
-  const { result } = fixture({ oversold: true, premium: 10 });
+  const { result } = fixture({ stress: true, oversold: true, premium: 10 });
   const output = render(result, 10);
   assert.match(output, /共振达标 · 等窗口确认/);
   assert.match(output, /最新外盘预览不自动开启/);

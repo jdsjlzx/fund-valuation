@@ -16,14 +16,22 @@ module.exports = async (req, res) => {
     try {
       const url =
         `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}` +
-        `?interval=1d&range=1d&includePrePost=true`;
+        `?interval=1m&range=1d&includePrePost=true`;
       const r = await fetch(url, {
         headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
       });
       if (!r.ok) { lastErr = `yahoo ${r.status}`; continue; }
       const j = await r.json();
-      const meta = j && j.chart && j.chart.result && j.chart.result[0] && j.chart.result[0].meta;
+      const result = j && j.chart && j.chart.result && j.chart.result[0];
+      const meta = result && result.meta;
       if (!meta) { lastErr = 'empty result'; continue; }
+      const times = result.timestamp || [], closes = result.indicators?.quote?.[0]?.close || [];
+      let extendedPrice = null, extendedTime = null;
+      for (let i = times.length - 1; i >= 0; i--) {
+        if (Number.isFinite(closes[i]) && closes[i] > 0 && times[i] > meta.regularMarketTime) {
+          extendedPrice = closes[i]; extendedTime = times[i]; break;
+        }
+      }
       if (!meta.hasPrePostMarketData) {
         // 当前没有盘前/盘后/夜盘活动，fulldayPrice 不可用
         return res.status(200).json({ symbol, noPrePost: true });
@@ -31,6 +39,8 @@ module.exports = async (req, res) => {
       return res.status(200).json({
         symbol,
         fulldayPrice: meta.fulldayPrice,
+        extendedPrice,
+        extendedTime,
         fulldayChange: meta.fulldayChange,
         fulldayChangePercent: meta.fulldayChangePercent,
         previousClose: meta.chartPreviousClose || meta.previousClose,

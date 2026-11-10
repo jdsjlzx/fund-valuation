@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const test = require('node:test');
 const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const declaration = (source, name) => source.match(new RegExp(`^function ${name}\\([^]*?^\\}`, 'm'))[0];
-const context = vm.createContext({ PREMIUM_BUY: 18 });
+const context = vm.createContext({});
 vm.runInContext(['etfMinuteNumber', 'buildEtfChaseGate'].map(n => declaration(server, n)).join('\n'), context);
 
 const pt = (t, price, avg) => ({ t, price, avg, volume: 100 });
@@ -83,18 +83,23 @@ test('收盘复盘：全天高开超限时明确说没有可追时点', () => {
   assert.match(g.reason, /高开 \+1\.92%/);
 });
 
-test('溢价线随服务端常量下发，供前端单独警示', () => {
+test('高溢价和缺失溢价不限制追涨结构，数值只供参考', () => {
   const points = series(631, 20, () => 2.812, () => 2.808);
-  const g = context.buildEtfChaseGate(ctxOf(points), points, { kind: 'strong' }, true);
-  assert.equal(g.metrics.premiumLine, 18);
-  assert.equal(g.metrics.premium, 30);
+  for (const premiumPct of [30, null]) {
+    const ctx = ctxOf(points);
+    ctx.quote.premiumPct = premiumPct;
+    const g = context.buildEtfChaseGate(ctx, points, { kind: 'strong' }, true);
+    assert.equal(g.level, 'allow');
+    assert.equal(g.metrics.premiumLine, undefined);
+    assert.equal(g.metrics.premium, premiumPct);
+  }
 });
 
-// ── 前端渲染：结论要摆到分时图正上方，溢价另起一行警示 ──
+// ── 前端渲染 ──
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-test('闸门卡片渲染 level、理由和溢价警示', () => {
+test('闸门卡片渲染 level、理由和仅供参考的溢价', () => {
   const browser = vm.createContext({
-    ETF_TRACK: { intradaySignals: { chaseGate: { level: 'block', label: '现在不能追', reason: '今天开盘已高开 +1.92%（超过 0.8%），此刻追入是在替隔夜盘抬轿。', fix: '等回落到分时均价 2.822 附近重新站稳再评估。', asOf: '10:45', metrics: { premium: 38.73, premiumLine: 18 } } } },
+    ETF_TRACK: { intradaySignals: { chaseGate: { level: 'block', label: '现在不能追', reason: '今天开盘已高开 +1.92%（超过 0.8%），此刻追入是在替隔夜盘抬轿。', fix: '等回落到分时均价 2.822 附近重新站稳再评估。', asOf: '10:45', metrics: { premium: 38.73 } } } },
     escHtml: v => String(v),
   });
   vm.runInContext(declaration(html, 'etfChaseGateHtml'), browser);
@@ -103,7 +108,55 @@ test('闸门卡片渲染 level、理由和溢价警示', () => {
   assert.match(out, /不能追/);
   assert.match(out, /高开 \+1\.92%/);
   assert.match(out, /溢价 38\.73%/);
+  assert.match(out, /仅供参考，不限制买卖或仓位/);
+  assert.doesNotMatch(out, /买入线|不建议加仓/);
 });
+test('结构允许时高溢价和缺失溢价不在页面另行禁止买入', () => {
+  for (const premium of [40, null]) {
+    const browser = vm.createContext({
+      ETF_TRACK: { intradaySignals: { chaseGate: { level: 'allow', label: '结构允许 · 小仓试', reason: '现价站上均价', metrics: { premium } } } },
+      escHtml: String,
+    });
+    vm.runInContext(declaration(html, 'etfChaseGateHtml'), browser);
+    const out = browser.etfChaseGateHtml();
+    assert.match(out, /data-chase-gate="allow"/);
+    assert.match(out, /可以小仓/);
+    assert.match(out, /仅供参考，不限制买卖或仓位/);
+    assert.doesNotMatch(out, /买入线|不建议加仓/);
+  }
+});
+test('买点确认仅统计技术过滤，溢价高低和缺失不改变结论', () => {
+  for (const premium of [10, 40, null]) {
+    const browser = vm.createContext({
+      ETF_TRACK: { premium: { current: premium }, advice: { confirm: {
+        filters: [{ label: '威廉%R ≤ -60', value: '-70', ok: true }, { label: '价格 < MA21', value: '2.8 vs 2.9', ok: true }],
+        hitCount: 2, level: 'good', note: '回调形态命中',
+      } } },
+    });
+    vm.runInContext(declaration(html, 'etfConfirmHtml'), browser);
+    const out = browser.etfConfirmHtml();
+    assert.match(out, /过滤命中 2\/2/);
+    assert.match(out, /溢价（仅参考）/);
+    assert.equal((out.match(/class="etf-confirm-item /g) || []).length, 2);
+    assert.doesNotMatch(out, /溢价未达标|溢价达标|溢价 ≤/);
+  }
+});
+
+test('溢价档位和折算价仅供参考，不显示加减仓指令', () => {
+  const browser = vm.createContext({
+    ETF_TRACK: { quote: { price: 2.8 }, premium: {
+      current: 40, rules: { add: 15, buy: 18, watch: 22, danger: 27 }, band: { key: 'exit' },
+      prices: { add: { pct: 15, price: 2.3 }, buy: { pct: 18, price: 2.36 }, watch: { pct: 22, price: 2.44 }, cut: { pct: 27, price: 2.54 } },
+    } },
+  });
+  vm.runInContext(declaration(html, 'etfPremiumZonesHtml'), browser);
+  const out = browser.etfPremiumZonesHtml();
+  assert.match(out, /当前 40\.00%/);
+  assert.match(out, /较低溢价参考/);
+  assert.match(out, /溢价仅供参考，不限制买卖或仓位/);
+  assert.doesNotMatch(out, /加仓价|买入价|减仓价|只减不加|可多买|可买入|需跌/);
+});
+
 test('没有闸门数据时不渲染空卡片', () => {
   const browser = vm.createContext({ ETF_TRACK: { intradaySignals: {} }, escHtml: String });
   vm.runInContext(declaration(html, 'etfChaseGateHtml'), browser);

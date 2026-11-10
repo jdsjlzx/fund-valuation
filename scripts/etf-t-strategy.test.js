@@ -48,15 +48,17 @@ test('接回上限覆盖实际卖出费、最低买入费、滑点与最低净�
   assert.ok(S.targetPrice(sale, 100) < target);
 });
 
-test('目标到达仍需实时止跌与原溢价风控', () => {
+test('高溢价与溢价缺失不阻止接回，仍需实时止跌与趋势风控', () => {
   assert.equal(S.evaluate([base, sale], market()).action, 'buy');
-  const high = market(); high.quote.premiumPct = 40;
-  assert.equal(S.evaluate([base, sale], high).action, null);
-  assert.match(S.evaluate([base, sale], high).state, /禁止接回/);
-  assert.equal(S.evaluate([base, sale], market({ events: [] })).action, null);
-  assert.equal(S.evaluate([base, sale], market({ live: false })).action, null);
-  assert.equal(S.evaluate([base, sale], market({ tier: 'run' })).action, null);
-  assert.equal(S.evaluate([base, sale], market({ abort: true })).action, null);
+  for (const premium of [40, null, undefined, NaN]) {
+    const m = market(); m.quote.premiumPct = premium;
+    assert.equal(S.evaluate([base, sale], m).action, 'buy');
+    assert.equal(S.evaluate([base, sale], { ...m, events: [] }).action, null);
+    assert.equal(S.evaluate([base, sale], { ...m, live: false }).action, null);
+    assert.equal(S.evaluate([base, sale], { ...m, tier: 'run' }).action, null);
+    assert.equal(S.evaluate([base, sale], { ...m, tier: 'watch' }).action, null);
+    assert.equal(S.evaluate([base, sale], { ...m, abort: true }).action, null);
+  }
 });
 
 test('卖后上涨不追、14:30截止且不跨日接回', () => {
@@ -101,15 +103,16 @@ test('时间顺序、未来绑定、负费用和非整数份额不能破坏配�
   assert.match(S.validateFill([base, sale], fill({ side: 'sell' })), /方向/);
 });
 
-test('回放不使用信号当分钟价，下一分钟成交且过滤高溢价买入', () => {
+test('回放下一分钟成交，高溢价与溢价缺失不阻止接回', () => {
   const sample = (time, price, more = {}) => ({ date: sale.date, time, price, premium: 17, live: true, tier: 'try', ...more });
   const samples = [sample('10:34', 2.9, { sell: true }), sample('10:35', 2.89), sample('10:36', 2.865, { rebound: true }), sample('10:37', 2.86), sample('10:38', 2.86)];
   const r = S.replay(samples, 10000);
   assert.equal(r.trades[0].time, '10:35'); assert.ok(Math.abs(r.trades[0].price - 2.889) < 1e-10);
   assert.equal(r.trades[1].time, '10:37');
   assert.ok(r.pairedNet > 0);
-  const high = samples.map(s => ({ ...s, premium: 40 }));
-  assert.equal(S.replay(high, 10000).trades.filter(t => t.side === 'buy').length, 0);
+  for (const premium of [40, null, undefined, NaN]) {
+    assert.deepEqual(S.replay(samples.map(s => ({ ...s, premium })), 10000).trades, r.trades);
+  }
 });
 
 test('回放断档不补造成交，尾部信号不从未来取价格', () => {
@@ -165,10 +168,16 @@ test('百份低额度没有足够净价差时不会追买回，放弃轮次可�
   assert.equal(S.validateFill([base, small], fill({ shares: 100 })), '');
 });
 
-test('回放下一分钟溢价缺失时不得模拟买入', () => {
-  const sample = (time, price, more = {}) => ({ date: sale.date, time, price, premium: 17, live: true, tier: 'try', ...more });
+test('回放溢价缺失可接回，但信号与成交分钟均须通过趋势和失效风控', () => {
+  const sample = (time, price, more = {}) => ({ date: sale.date, time, price, premium: 40, live: true, tier: 'try', ...more });
   const samples = [sample('10:34', 2.9, { sell: true }), sample('10:35', 2.89), sample('10:36', 2.865, { rebound: true }), sample('10:37', 2.86, { premium: null })];
-  assert.equal(S.replay(samples, 10000).trades.filter(t => t.side === 'buy').length, 0);
+  assert.equal(S.replay(samples, 10000).trades.filter(t => t.side === 'buy').length, 1);
+  for (const index of [2, 3]) {
+    for (const change of [{ tier: 'run' }, { tier: 'watch' }, { abort: true }, { live: false }]) {
+      const blocked = samples.map((s, i) => i === index ? { ...s, ...change } : s);
+      assert.equal(S.replay(blocked, 10000).trades.filter(t => t.side === 'buy').length, 0);
+    }
+  }
 });
 
 test('混合多日采样不自动跨日接回，卖飞统计不是利润', () => {
@@ -184,6 +193,48 @@ test('普通卖出已无持仓时做T不得再提示卖出', () => {
   const ordinary={id:4,date:sale.date,time:'11:10',side:'sell',shares:10000,price:2.85};
   const m=market();m.quote.price=2.8;
   assert.equal(S.evaluate([base,sale,fill(),ordinary],m).action,null);
+});
+
+test('风险减仓不作为做T高抛，混合信号优先提示风险', () => {
+  const risk = { time: '11:04', side: 'sell', risk: 'weak', title: '持续走弱' };
+  const m = market({ events: [risk] });
+  const v = S.evaluate([base], m);
+  assert.equal(v.action, null);
+  assert.match(v.state, /非高抛/);
+  assert.equal(v.risk.title, '持续走弱');
+  assert.equal(S.evaluate([base], market({ events: [risk, { time: '11:04', side: 'sell' }] })).action, null);
+  assert.equal(S.evaluate([base], market({ events: [{ time: '11:04', side: 'sell' }] })).action, 'sell');
+  assert.equal(S.evaluate([base], market({ events: [risk], live: false })).risk, null);
+});
+
+test('接回确认必须在实际卖出之后，卖出前信号不复用', () => {
+  const laterSale = { ...sale, time: '11:05' };
+  assert.equal(S.evaluate([base, laterSale], market()).action, null);
+  assert.match(S.evaluate([base, laterSale], market()).state, /等止跌/);
+  const m = market(); m.quote.quoteTime = '2026-11-06 11:06'; m.events = [{ time: '11:05', side: 'watch' }];
+  assert.equal(S.evaluate([base, laterSale], m).action, 'buy');
+});
+
+test('做T状态明确区分价差不足、价格达标和实时风控阻止', () => {
+  const m = market(); m.quote.price = 2.89;
+  const v = S.evaluate([base, sale], m);
+  assert.match(v.state, /价差不足/);
+  assert.equal(v.buyTarget, S.targetPrice(sale, 2000));
+  assert.equal(v.active.id, sale.id);
+  assert.equal(S.evaluate([base, sale], market({ events: [] })).reboundConfirmed, false);
+  const weak = market({ abort: true, events: [{ time: '11:04', side: 'watch' }, { time: '11:04', side: 'sell', risk: 'broken' }] });
+  const blocked = S.evaluate([base, sale], weak);
+  assert.equal(blocked.action, null);
+  assert.ok(blocked.risk);
+  assert.match(blocked.state, /禁止接回/);
+});
+
+test('部分接回和普通交易后接回上限按真实可恢复份额计算', () => {
+  const partial = fill({ shares: 1000 });
+  const v = S.evaluate([base, sale, partial], market());
+  assert.equal(v.buyTarget, S.targetPrice(sale, 1000));
+  const restored = { ...base, id: 4, date: sale.date, time: '11:00', shares: 2000 };
+  assert.equal(S.evaluate([base, sale, restored], market()).buyTarget, null);
 });
 
 test('普通历史记录份额是字符串时仍按数字计算', () => {

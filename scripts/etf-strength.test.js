@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const EtfTStrategy = require('../public/etf-t-strategy.js');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
@@ -58,9 +59,11 @@ test('偏强显示等回踩，不通过外盘上涨升级成买入', () => {
   const result = context.buildEtfIntradaySignals(market(points));
   assert.equal(result.strength.current.kind, 'strong');
   assert.equal(result.events.filter(e => e.side === 'buy').length, 0);
-  assert.match(result.strength.chase, /不新增仓位/);
-  const lowPremium = market(points); lowPremium.quote.premiumPct = 10;
-  assert.match(context.buildEtfIntradaySignals(lowPremium).strength.chase, /不直接追涨/);
+  assert.match(result.strength.chase, /不直接追涨/);
+  for (const premium of [10, 20, 40, null]) {
+    const ctx = market(points); ctx.quote.premiumPct = premium;
+    assert.equal(context.buildEtfIntradaySignals(ctx).strength.chase, result.strength.chase);
+  }
 });
 
 test('午休断档或均价缺失不能拼接走弱确认', () => {
@@ -135,8 +138,9 @@ test('走弱事件使已存买入信号即时降为观察而非继续提示买�
 
 test('图表显示强弱和减仓价格，偏弱仍保留回放标记而非当前买入', () => {
   const ctx = market(weakPoints); ctx.session.trading = false; ctx.intradaySignals = context.buildEtfIntradaySignals(ctx);
-  const browser = vm.createContext({ ETF_TRACK: ctx, etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
-  vm.runInContext(['etfIntradayOffset', 'etfChaseGateHtml', 'etfIntradayHtml'].map(n => declaration(html, n)).join('\n'), browser);
+  const browser = vm.createContext({ EtfTStrategy, ETF_TRADES: [], ETF_T_RULES: EtfTStrategy.defaults,
+    etfTMarket: () => ({ date: ctx.today, quote: ctx.quote, live: false }), ETF_TRACK: ctx, etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
+  vm.runInContext(['etfIntradayOffset', 'etfChaseGateHtml', 'etfTIntradayHtml', 'etfTReferenceAt', 'etfIntradayHtml'].map(n => declaration(html, n)).join('\n'), browser);
   const rendered = browser.etfIntradayHtml();
   assert.match(rendered, /data-etf-strength/);
   assert.match(rendered, /偏弱 · 禁止追涨/);

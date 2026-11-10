@@ -443,6 +443,16 @@ async function fetchYahooQuote(symbol) {
 //   解决新浪 fields[21] 滞后一日的问题，与富途/各行情终端一致。
 //   限流友好：60s 缓存 + 5 并发。
 // ──────────────────────────────────────────
+function yahooExtendedTick(result) {
+  const times = result?.timestamp || [], closes = result?.indicators?.quote?.[0]?.close || [];
+  for (let i = times.length - 1; i >= 0; i--) {
+    if (Number.isFinite(closes[i]) && closes[i] > 0 && times[i] > result.meta.regularMarketTime) {
+      return { extendedPrice: closes[i], extendedTime: times[i] };
+    }
+  }
+  return { extendedPrice: null, extendedTime: null };
+}
+
 async function fetchYahooFulldayOne(symbol) {
   const cached = yahooExtCache.get(symbol);
   if (cached) {
@@ -453,7 +463,7 @@ async function fetchYahooFulldayOne(symbol) {
 
   const url =
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
-    `?interval=1d&range=1d&includePrePost=true`;
+    `?interval=1m&range=1d&includePrePost=true`;
   let text = null;
   try {
     text = await httpGetWithStatus(url, { Accept: 'application/json' });
@@ -478,6 +488,9 @@ async function fetchYahooFulldayOne(symbol) {
       if (j && isFinite(j.fulldayPrice)) {
         const data = {
           fulldayPrice: j.fulldayPrice,
+          extendedPrice: j.extendedPrice,
+          extendedTime: j.extendedTime,
+          stale: !!j.stale,
           fulldayChange: j.fulldayChange,
           fulldayChangePercent: j.fulldayChangePercent,
           previousClose: j.previousClose,
@@ -512,6 +525,7 @@ async function fetchYahooFulldayOne(symbol) {
   }
   const data = {
     fulldayPrice: meta.fulldayPrice,
+    ...yahooExtendedTick(result),
     fulldayChange: meta.fulldayChange,
     fulldayChangePercent: meta.fulldayChangePercent,
     previousClose: meta.chartPreviousClose || meta.previousClose,
@@ -988,11 +1002,12 @@ const xueqiuQuoteCache = new Map();
 let xqCircuitOpenUntil = 0;    // 雪球熔断截止时间（整批失败/被限流时暂停调用）
 let xqConsecutiveFails = 0;
 const XUEQIU_QUOTE_TTL = 30_000;  // 30 秒：夜盘成交稀疏，且全量标的每轮刷新的调用量很大（高频会触发雪球限流）
-const XUEQIU_ETF_MAX_LAG_MS = 5 * 60_000;
-
-// 注：雪球夜盘数据不做"距今多少分钟"式的过期判定。
-// 夜盘尾声（约 03:30 ET 后）成交稀少，推送间隔会自然拉长，但最后一条仍是
-// 真实成交价。改用"时间戳是否落在本轮夜盘内"判定，见 usOvernightSessionStart()。
+// 雪球夜盘推送是 ~20 分钟一批刷新 timestampNight（实测 08:10→08:30 批次），
+// ETF 若只容忍 5 分钟新鲜度，会在大部分时间里被误判过期而退到期货 β 估算
+// （实测偏差：QQQ 期货 -0.32% vs 雪球真实 -0.21%，SPY +0.08% vs +0.20%）。
+// 「最近成交价」即使滞后 20+ 分钟也远比期货估算接近真实盘口，且前端已有
+// 「数据时间 X 分钟前」标注兜底；无期货映射的 ETF（IWM/SMH 等）更是只有雪球这一条路。
+const XUEQIU_ETF_MAX_LAG_MS = 30 * 60_000;
 
 function fetchXueqiuRaw(url, extraHeaders = {}, depth = 0) {
   return new Promise((resolve, reject) => {
@@ -1101,6 +1116,7 @@ async function fetchXueqiuViaProxy(symbol) {
     timestampNight: j.timestampNight,
     currentExt: j.currentExt,
     percentExt: j.percentExt,
+    timestampExt: j.timestampExt,
     current: j.current,
   };
 }
@@ -1181,9 +1197,11 @@ async function fetchSinaFutures(symbols = ['NQ', 'ES', 'YM']) {
     const prevSettle = parseFloat(f[8]);
     if (!isFinite(price) || !isFinite(prevSettle) || prevSettle <= 0) continue;
     const chgPct = ((price - prevSettle) / prevSettle) * 100;
-    map[sym] = { price, prevSettle, chgPct, time: f[6] || '' };
+    const sourceTimeMs = Date.parse(`${f[12]}T${f[6]}+08:00`);
+    map[sym] = { price, prevSettle, chgPct, time: f[6] || '', sourceTimeMs: Number.isFinite(sourceTimeMs) ? sourceTimeMs : null };
   }
   SINA_FUTURES_CACHE.set(cacheKey, { data: map, ts: now });
+  recordFuturesHist(map);
   return map;
 }
 
@@ -1207,14 +1225,6 @@ function getUSMarketState(now = new Date()) {
   return 'POST';
 }
 
-// 本轮美股夜盘（20:00-04:00 ET）的起点时间戳（毫秒）。
-// 用途：判断雪球夜盘数据是否属于"当前这一轮夜盘"。
-// 背景：夜盘尾声（约 03:30 ET 之后）Blue Ocean 通道成交稀少，雪球的推送间隔
-//       会从几分钟拉长到几十分钟甚至更久。若按"距今多少分钟"判定，
-//       会把它误判为"数据源停更"而回退到 β 模型估算 —— 而那个估算
-//       在个股上偏差极大（实测闪迪：真实 +1.89% vs 估算 -0.21%）。
-//       最后一条雪球推送仍是真实成交价，只滞后不失效，因此判据应为
-//       "时间戳落在本轮夜盘内"，而非"距今多久"。
 function usOvernightSessionStart(now = new Date()) {
   const { localMs, offsetMs, minute } = usMarketClock(now);
   const midnightUtc = Math.floor(localMs / 86400_000) * 86400_000 - offsetMs;
@@ -1357,6 +1367,8 @@ const EM_STATIC = {            // 指数/ETF → eastmoney secid
   QQQ:  '105.QQQ',
   SPY:  '107.SPY',
   VIXY: '107.VIXY',
+  IWM:  '107.IWM',             // 罗素2000 ETF（NYSE Arca→107）
+  SMH:  '105.SMH',             // 半导体 ETF（NASDAQ→105）
 };
 function emSecid(sym) {
   if (EM_STATIC[sym]) return EM_STATIC[sym];
@@ -1595,7 +1607,7 @@ function stockFuturesProxy(sym) {
 //
 //  口径：以「正股收盘价」为基准（富途/长桥/雪球 percent_night_session 同款）。
 //        切勿再用「昨收」做基准，否则会把正股当日涨跌叠加进来，数值系统性偏大。
-//  优先级：新鲜雪球夜盘 > Yahoo fullday > 外盘期货代理 > β 近似估算
+//  本轮真实报价择新，过期后回退有时效校验的期货估算或标记旧成交
 //  返回 { overnightChangePercent, overnightPrice, overnightSource,
 //         overnightEstimated, overnightAsOf }
 // ─────────────────────────────────────────────────────────────
@@ -1610,91 +1622,86 @@ function computeOvernightQuote({
   esDelta,
   nqDelta,
 }) {
-  // Yahoo fullday 只有在「确实比正股收盘 / 盘后价更新」时才采信：
-  // 若其值等于收盘价或盘后价，说明它并不覆盖隔夜盘，直接跳过，
-  // 避免拿盘后价冒充夜盘价。
-  const yahooFullday = yahoo && isFinite(yahoo.fulldayPrice) ? yahoo.fulldayPrice : null;
-  const yahooCoversOvernight =
-    yahooFullday != null &&
-    isFinite(yahoo.fulldayChangePercent) &&
-    Math.abs(yahooFullday - (closeForOvernight || 0)) > 1e-6 &&
-    // 相对容差 0.1%：Yahoo 的 fullday 价经常只是盘后价多保留了几位小数
-    // （实测 MKSI：286.569 vs 盘后 286.5685，差 0.0005 绝对容差拦不住），
-    // 差异小于 0.1% 视为"未覆盖夜盘"，避免拿盘后价冒充夜盘价
-    (!sina?.afterHoursPrice || Math.abs(yahooFullday - sina.afterHoursPrice) / sina.afterHoursPrice > 0.001);
-
-  // 雪球夜盘（富途同款 Blue Ocean 通道）是否可用：
-  //   判定标准 = 时间戳落在"本轮夜盘"内（xqInSession），不按"距今多少分钟"。
-  //   夜盘尾声（约 03:30 ET 之后）成交稀疏，雪球的推送间隔会拉到几十分钟，
-  //   但最后一条仍是真实成交价（富途夜盘同源），按距今判定会把 ETF 误切到期货代理，
-  //   而 NQ/ES 与 QQQ/SPY 之间存在基差（实测：雪球 +0.31% vs NQ +0.23%），
-  //   期货代理在夜盘中后段会持续偏离真实 ETF 价。
-  const xqTs = xq && xq.timestampNight != null ? xq.timestampNight : null;
-  const xqInSession = xqTs != null && xqTs >= overnightSessionStart - 30 * 60000;
-  const xqPrice = xq && xq.currentNight != null ? xq.currentNight : null;
-
-  let chg = null;
-  let price = null;
-  let source = null;
-
-  // 雪球扩展行情（current_ext/percent_ext）的时效性校验：
-  //   实测 QQQ 在雪球上盘后/夜盘 tick 可能数天没更新（xqNightLatestTs 停在 10/9），
-  //   而 percent_ext 字段仍在返回该陈旧值。若不加时效校验直接采用，会跳过后续
-  //   更准的 NQ/ES 期货代理分支，导致 QQQ 等 ETF 在 OVERNIGHT 时段显示几天前的涨幅。
-  const xqExtTs = xq && xq.timestampExt != null ? xq.timestampExt : null;
-  const xqExtAge = xqExtTs ? Date.now() - xqExtTs : Infinity;
-  // 个股容忍度放宽（30 分钟）：尾盘成交稀疏时 ext 数分钟不更新也正常；
-  // ETF 有连续期货代理，过期则优先期货。
-  const extMaxLag = etfFut ? XUEQIU_ETF_MAX_LAG_MS : 30 * 60_000;
-  const xqExtFresh = xqExtTs != null && xqExtAge <= extMaxLag;
-
-  if (xqInSession && xqPrice != null && closeForOvernight > 0) {
-    // 雪球自带的 percent_night_session 即"相对正股收盘价"的夜盘涨跌幅，
-    // 与富途 App 完全同口径，优先直接采用，避免自行换算再引入偏差。
-    chg = isFinite(xq.percentNight)
-      ? xq.percentNight
-      : ((xqPrice - closeForOvernight) / closeForOvernight) * 100;
-    price = xqPrice;
-    source = 'xueqiu';
-  } else if (xqExtFresh && xq && xq.currentExt != null && isFinite(xq.percentExt)) {
-    // 夜盘 tick 尚未刷新（本轮夜盘还没成交推送）时，退而用雪球扩展行情
-    // current_ext/percent_ext——盘后+夜盘连续的最新成交价，同样以正股收盘为基准
-    // （实测 MKSI：ext 282.48/+1.19% vs 收盘 279.15；盘后 tape 的 286.57/+2.66%
-    //  是坏 print，富途夜盘 279.96/+0.29% —— ext 介于两者之间且随成交滚动）
-    chg = xq.percentExt;
-    price = xq.currentExt;
-    source = 'xueqiu-ext';
-  } else if (yahooCoversOvernight) {
-    chg = closeForOvernight > 0 ? ((yahooFullday - closeForOvernight) / closeForOvernight) * 100 : yahoo.fulldayChangePercent;
-    price = yahooFullday;
-    source = 'yahoo';
-  } else if (etfFut) {
-    // 指数 ETF：外盘期货代理（NQ/ES）
-    chg = etfFut.chgPct;
-    price = closeForOvernight ? closeForOvernight * (1 + etfFut.chgPct / 100) : null;
-    source = 'futures';
-  } else {
-    // 个股：盘后涨跌 + β × 期货增量（近似估算）
+  const now = Date.now();
+  const isEtf = !!FUTURES_PROXY[symbol];
+  const maxLag = isEtf ? XUEQIU_ETF_MAX_LAG_MS : 30 * 60_000;
+  const inSession = at => Number.isFinite(at) && at >= overnightSessionStart && at <= now + 5000;
+  const candidates = [];
+  const add = (source, price, at, percent) => {
+    if (!(Number.isFinite(price) && price > 0 && closeForOvernight > 0 && inSession(at))) return;
+    candidates.push({ source, price, at, chg: Number.isFinite(percent) ? percent : (price / closeForOvernight - 1) * 100 });
+  };
+  add('xueqiu', xq?.currentNight, xq?.timestampNight, xq?.percentNight);
+  add('xueqiu-ext', xq?.currentExt, xq?.timestampExt, xq?.percentExt);
+  // 只采信分钟价与其配对时间，不能把不带时间的 fulldayPrice 与日K时间拼接。
+  const yahooAt = Number.isFinite(yahoo?.extendedTime) ? yahoo.extendedTime * 1000 : null;
+  if (!yahoo?.stale) add('yahoo', yahoo?.extendedPrice, yahooAt);
+  candidates.sort((a, b) => b.at - a.at);
+  const latest = candidates[0];
+  let selected = latest && now - latest.at <= maxLag ? latest : null;
+  let stale = false;
+  // 雪球夜盘 ~20 分钟一批推送，锚点成交价会滞后于真实盘口；
+  // 用「锚点之后的期货增量」修正（QQQ/SPY 与 NQ/ES β≈1；增量口径自洽，
+  // 不受新浪期货昨结基准与富途显示差异影响）。找不到锚点期货值时维持纯锚定价。
+  if (selected && isEtf && now - selected.at > DRIFT_MIN_MS
+    && etfFut && Number.isFinite(etfFut.chgPct) && inSession(etfFut.sourceTimeMs)) {
+    const hist = SINA_FUTURES_HIST.get(FUTURES_PROXY[symbol]) || [];
+    let anchor = null;
+    for (let i = hist.length - 1; i >= 0; i--) {
+      if (hist[i].ts <= selected.at) { anchor = hist[i]; break; }
+    }
+    if (anchor && Number.isFinite(anchor.chgPct)) {
+      const chg = selected.chg + (etfFut.chgPct - anchor.chgPct);
+      selected = { source: 'xueqiu-drift', chg,
+        price: closeForOvernight > 0 ? closeForOvernight * (1 + chg / 100) : null, at: now };
+      stale = false;
+    }
+  }
+  if (!selected && etfFut && Number.isFinite(etfFut.chgPct) && inSession(etfFut.sourceTimeMs)
+    && now - etfFut.sourceTimeMs <= XUEQIU_ETF_MAX_LAG_MS) {
+    selected = { source: 'futures', chg: etfFut.chgPct,
+      price: closeForOvernight > 0 ? closeForOvernight * (1 + etfFut.chgPct / 100) : null, at: etfFut.sourceTimeMs };
+  }
+  if (!selected && latest) { selected = latest; stale = true; }
+  if (!selected && !isEtf) {
     const post20 = sina?.postMarketChangePercent ?? 0;
     const { beta, futSym } = stockFuturesProxy(symbol);
     const delta = futSym === 'ES' ? esDelta : nqDelta;
-    const extra = isFinite(delta) && delta != null ? beta * delta : 0;
-    chg = post20 + extra;
-    price = closeForOvernight ? closeForOvernight * (1 + chg / 100) : (sina?.afterHoursPrice ?? null);
-    source = 'proxy';
+    const extra = Number.isFinite(delta) ? beta * delta : 0;
+    const chg = post20 + extra;
+    selected = { source: 'proxy', chg, price: closeForOvernight > 0 ? closeForOvernight * (1 + chg / 100) : null, at: null };
+    stale = !Number.isFinite(delta);
   }
-  if (!isFinite(chg)) chg = 0;
-
-  // 实测值（xueqiu/yahoo）即便略有滞后也不加"≈"——它是真实成交价；
-  // 只有 futures/proxy 这类模型推算值才需要标注为估算。
+  const { source, price, chg, at } = selected || { source: 'unavailable', price: null, chg: null, at: null };
   return {
     overnightChangePercent: chg,
     overnightPrice: price,
     overnightSource: source,
-    overnightEstimated: source !== 'xueqiu' && source !== 'xueqiu-ext' && source !== 'yahoo',
-    overnightAsOf: source === 'xueqiu' ? (xqTs ?? null) : null,
-    overnightLagMin: source === 'xueqiu' && xqTs ? Math.max(0, Math.round((Date.now() - xqTs) / 60000)) : null,
+    overnightEstimated: source === 'futures' || source === 'proxy' || source === 'xueqiu-drift',
+    overnightStale: stale || source === 'unavailable',
+    overnightAsOf: at,
+    overnightLagMin: at != null ? Math.max(0, Math.floor((now - at) / 60000)) : null,
   };
+}
+
+// ── 期货历史快照（雪球锚点漂移用）──
+// 雪球夜盘 timestampNight 是 ~20 分钟一批推送，批次间隔内夜盘价在动；
+// 每次取到新浪期货报价都记录 {报价时间, 相对昨结涨跌}，漂移时取锚点时刻的
+// 期货值算增量。增量口径自洽，新浪与富途昨结基准不同不影响差值。
+const SINA_FUTURES_HIST = new Map();   // sym → [{ ts, chgPct }]（ts = 新浪报价时间）
+const DRIFT_MIN_MS = 5 * 60_000;       // 锚点滞后超过 5 分钟才启用漂移
+const FUT_HIST_TTL_MS = 90 * 60_000;
+function recordFuturesHist(map) {
+  const now = Date.now();
+  for (const [sym, f] of Object.entries(map || {})) {
+    if (!f || !Number.isFinite(f.chgPct)) continue;
+    const arr = SINA_FUTURES_HIST.get(sym) || [];
+    const ts = Number.isFinite(f.sourceTimeMs) ? f.sourceTimeMs : now;
+    if (arr.length && arr[arr.length - 1].ts === ts) arr[arr.length - 1].chgPct = f.chgPct;
+    else arr.push({ ts, chgPct: f.chgPct });
+    while (arr.length && now - arr[0].ts > FUT_HIST_TTL_MS) arr.shift();
+    SINA_FUTURES_HIST.set(sym, arr);
+  }
 }
 
 app.get('/api/quotes', async (req, res) => {
@@ -2111,7 +2118,7 @@ app.get('/api/night', async (req, res) => {
   if (!/^[A-Za-z0-9_\-]{1,10}$/.test(symbol)) return res.status(400).json({ error: 'bad symbol' });
   res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
   const d = await fetchXueqiuQuote(symbol, { allowProxy: false });
-  if (!d || d.currentNight == null) return res.status(404).json({ error: 'no night data' });
+  if (!d || (d.currentNight == null && d.currentExt == null)) return res.status(404).json({ error: 'no night data' });
   res.json({
     symbol,
     currentNight: d.currentNight,
@@ -2137,10 +2144,11 @@ app.get('/api/fullday', async (req, res) => {
   try {
     const url =
       `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}` +
-      `?interval=1d&range=1d&includePrePost=true`;
+      `?interval=1m&range=1d&includePrePost=true`;
     const text = await httpGetWithStatus(url, { Accept: 'application/json' });
     const j = JSON.parse(text);
-    const meta = j && j.chart && j.chart.result && j.chart.result[0] && j.chart.result[0].meta;
+    const result = j && j.chart && j.chart.result && j.chart.result[0];
+    const meta = result && result.meta;
     if (!meta) return res.status(502).json({ error: 'empty result' });
     if (!meta.hasPrePostMarketData) {
       const out = { symbol, noPrePost: true };
@@ -2150,6 +2158,7 @@ app.get('/api/fullday', async (req, res) => {
     const out = {
       symbol,
       fulldayPrice: meta.fulldayPrice,
+      ...yahooExtendedTick(result),
       fulldayChange: meta.fulldayChange,
       fulldayChangePercent: meta.fulldayChangePercent,
       previousClose: meta.chartPreviousClose || meta.previousClose,
@@ -2368,6 +2377,9 @@ function isAShareTradingTime() {
   const day = now.getDay();
   if (day === 0 || day === 6) return false;
   const t = now.getHours() * 60 + now.getMinutes();
+  // 边界为有意非对称：早盘含 11:30（690 是早盘最后一分钟），尾盘不含 15:00
+  // （900 起即收盘，isAShareTradingTime 用于缓存 TTL/告警开关，15:00 后必须判 false；
+  //  分时绘制用 isEtfContinuousMinute，那边才含 15:00 收盘点）
   return (t >= 570 && t <= 690) || (t >= 780 && t < 900);
 }
 
@@ -2415,6 +2427,28 @@ async function fetchTencentDayKline(symbol, limit = 120) {
   const rows = (sym && (sym.day || sym.qfqday)) || [];
   // 注意 r[1]=开 r[2]=收（曾误用 r[1]，等于拿开盘价算 MACD）
   return rows.map(r => ({ date: r[0], close: parseFloat(r[2]) }));
+}
+
+// 新浪美股日K（收盘价）：2026-11 起腾讯 ifzq 的美股K线接口频繁 501 反爬，QQQ 相关
+// 数据改以新浪为主源。返回 [{d:'YYYY-MM-DD', c:close}]，limit 为截取的最近根数。
+async function fetchSinaUsDaily(symbol, limit = 0) {
+  const txt = await httpGet(
+    `https://stock.finance.sina.com.cn/usstock/api/jsonp.php/x/US_MinKService.getDailyK?symbol=${encodeURIComponent(symbol)}&___qn=3`,
+    { Referer: 'https://finance.sina.com.cn/' }
+  );
+  const m = txt.match(/x\((\[[\s\S]*\])\)/);
+  if (!m) throw new Error('sina us daily: no data');
+  const arr = JSON.parse(m[1]).map(r => ({ d: r.d, c: +r.c })).filter(r => r.d && isFinite(r.c));
+  return limit > 0 && arr.length > limit ? arr.slice(-limit) : arr;
+}
+
+// QQQ 日K：新浪为主（腾讯 ifzq 2026-11 起对美股K线 501 反爬），腾讯 usQQQ.OQ 兜底
+async function fetchQqqDayKline(limit = 120) {
+  try {
+    const arr = await fetchSinaUsDaily('QQQ', limit);
+    if (arr.length) return arr.map(r => ({ date: r.d, close: r.c }));
+  } catch { /* 落到腾讯 */ }
+  return fetchTencentDayKline('usQQQ.OQ', limit);
 }
 
 // 港股日K（腾讯 hk 前缀通道，官方收盘价）
@@ -2612,7 +2646,7 @@ app.get('/api/index-macd', async (req, res) => {
     const [shKlines, cyKlines, ndxKlines, kospiKlines, goldKlines, kcKlines, ndxTechKlines, nkyKlines, ndxBioKlines, hkInnovKlines] = await Promise.all([
       fetchKline('sh000001', klineLimit),
       fetchKline('sz399006', klineLimit),
-      fetchTencentDayKline('usQQQ.OQ', klineLimit),      // 纳斯达克100 QQQ
+      fetchQqqDayKline(klineLimit),                      // 纳斯达克100 QQQ（腾讯优先，501反爬时回落新浪）
       fetchNaverIndexKline('KOSPI', startStr),
       fetchKline('sh518880', klineLimit),                  // 黄金ETF
       fetchKline('sh000688', klineLimit),                // 科创50
@@ -2691,10 +2725,7 @@ app.get('/api/index-macd', async (req, res) => {
 //  为什么溢价率是关键：159509 是 QDII ETF，受外汇额度限制长期溢价。
 //  实测 2026-09-30 场内 3.194 / IOPV 2.3720 = 溢价 34.65%（基金已发停牌风险提示公告）。
 //  溢价是「场内价 − 净值」的差，随情绪扩张/收敛，与指数涨跌无关；
-//  高溢价时买入 = 额外承担溢价回落的风险，因此本接口把溢价率作为一级决策变量。
-//  策略档位（用户给定，按本 ETF 历史分布标定）：
-//    ≤18% 买入 · <15% 多买 · ≥22% 只减不加 · ≥27% 减仓
-//  档位会换算成基于 IOPV 的挂单价（加仓价/买入价/警戒价/减仓价）直接给出。
+//  溢价仅作估值参考，不限制买卖或仓位；趋势与价格风控独立执行。
 // ═══════════════════════════════════════════════════════
 const ETF_CODE = 'sz159509';
 const ETF_NAME = '纳指科技ETF';
@@ -2705,29 +2736,36 @@ let ETF_PREM_PREV = null;                   // 上一次请求的溢价率（用
 let ETF_KLINES = [];                        // 最近一次拉取的日K（供盘中柱估算）
 let LAST_PREMARKET_PLAN = null;
 let LAST_NEXT_PREMARKET_PLAN = null;
+// 全历史回溯（~134KB）只依赖「日K最后日期」：同一交易日内结果不变，
+// 按交易日缓存，避免每次 /api/etf-track（盘中 10s 一轮）都重算一遍全历史回测
+const ETF_REVIEW_CACHE = { date: null, data: null };
 const ETF_NAV_TTL = 6 * 3600_000;           // 净值历史：6 小时
 const ETF_MKT_TTL_TRADING = 20_000;         // 盘中：20 秒
 const ETF_MKT_TTL_IDLE = 180_000;           // 非盘中：3 分钟
+// 日K独立缓存：盘中日K几乎不变（收盘才补最后一根），不必与 20 秒行情同频重抓腾讯 ifzq
+const ETF_KLINE_CACHE = { data: null, ts: 0 };
+const ETF_KLINE_TTL_TRADING = 120_000;      // 盘中：2 分钟
+const ETF_KLINE_TTL_IDLE = 600_000;         // 非盘中：10 分钟
+let ETF_KLINE_BACKOFF_UNTIL = 0;            // 日K上游失败退避：60 秒内不再重试
+const ETF_KLINE_BACKOFF_MS = 60_000;
 
 // ── 溢价率档位（按本 ETF 自身历史分布标定，不是通用 ETF 标准）──
 // 历史 299 个交易日（2025-07-10 ~ 2026-09-29）实测分布：
 //   min 3.3% · p10 7.9% · p25 13.7% · 中位数 17.2% · p75 20.6% · max 32.3%
 //   低于 18% 的交易日占 58.5%，低于 15% 占 31.8%；长期正溢价是 QDII 外汇额度受限所致。
-// 策略阈值（用户给定）：溢价 ≤18% 可买入，<15% 可多买（加仓）。
-//   据此把 18% / 15% 定为买入线 / 加仓线，22% / 27% 定为警戒线 / 减仓线。
 // 历史上按「溢价 < 阈值」进场后持 20 个交易日的场内价平均收益（含溢价收敛贡献）：
 //   <15% → +7.87%（胜率 83%）· <18% → +6.25%（76%）· <25% → +4.02%（64%）
 //   即：进场溢价越低，后续收益与胜率越好，价差约 2~4 个百分点来自溢价回归本身。
-const PREMIUM_ADD = 15;      // 加仓线（多买）
-const PREMIUM_BUY = 18;      // 买入线
-const PREMIUM_WATCH = 22;    // 警戒线（高溢价：仓位压到 3 成以内，只少买不追高）
-const PREMIUM_DANGER = 27;   // 极高溢价线（仓位压到 2 成以内）
+const PREMIUM_ADD = 15;
+const PREMIUM_BUY = 18;
+const PREMIUM_WATCH = 22;
+const PREMIUM_DANGER = 27;
 const PREMIUM_ZONES = [
-  { key: 'add',   level: 'cheap',   label: '加仓区', lo: -Infinity,      hi: PREMIUM_ADD,    note: `溢价 <${PREMIUM_ADD}%，可多买` },
-  { key: 'buy',   level: 'ok',      label: '买入区', lo: PREMIUM_ADD,    hi: PREMIUM_BUY,    note: `溢价 ${PREMIUM_ADD}~${PREMIUM_BUY}%，可买入` },
-  { key: 'watch', level: 'warn',    label: '观望区', lo: PREMIUM_BUY,    hi: PREMIUM_WATCH,  note: `溢价 ${PREMIUM_BUY}~${PREMIUM_WATCH}%，略高于买入线，观望` },
-  { key: 'avoid', level: 'high',    label: '高溢价', lo: PREMIUM_WATCH,  hi: PREMIUM_DANGER, note: `溢价 ${PREMIUM_WATCH}~${PREMIUM_DANGER}%，不买入，持有者减仓` },
-  { key: 'exit',  level: 'extreme', label: '极高',   lo: PREMIUM_DANGER, hi: Infinity,       note: `溢价 >${PREMIUM_DANGER}%，减仓规避溢价回落` },
+  { key: 'add',   level: 'cheap',   label: '较低',   lo: -Infinity,      hi: PREMIUM_ADD,    note: `溢价 <${PREMIUM_ADD}%，仅供参考` },
+  { key: 'buy',   level: 'ok',      label: '中低',   lo: PREMIUM_ADD,    hi: PREMIUM_BUY,    note: `溢价 ${PREMIUM_ADD}~${PREMIUM_BUY}%，仅供参考` },
+  { key: 'watch', level: 'warn',    label: '中等',   lo: PREMIUM_BUY,    hi: PREMIUM_WATCH,  note: `溢价 ${PREMIUM_BUY}~${PREMIUM_WATCH}%，仅供参考` },
+  { key: 'avoid', level: 'high',    label: '高溢价', lo: PREMIUM_WATCH,  hi: PREMIUM_DANGER, note: `溢价 ${PREMIUM_WATCH}~${PREMIUM_DANGER}%，注意溢价回落风险，不限制买卖或仓位` },
+  { key: 'exit',  level: 'extreme', label: '极高',   lo: PREMIUM_DANGER, hi: Infinity,       note: `溢价 ≥${PREMIUM_DANGER}%，注意溢价回落风险，不限制买卖或仓位` },
 ];
 function premiumZone(pct) {
   if (pct == null || !isFinite(pct)) return { key: 'unknown', level: 'neutral', label: '—', note: '溢价数据缺失' };
@@ -3067,14 +3105,7 @@ function buildEtfSignals(klines) {
 
 // ── 多指标组合信号（买卖信号清单 v4）──
 //  不再以 MACD 为唯一标准。依据 764 日回测结论（scripts/etf-indicator-study.js）：
-//  · 溢价率是一级变量——但只决定「仓位上限」与「能不能加仓」，不直接产生清仓：
-//    <15 重仓区 / 15~18 买入区 / 18~22 观望区 / 22~27 高溢价（≤3 成）/ ≥27 极高（≤2 成）
 //  · 「不追高」过滤器（威廉%R≤-60 / 收盘<MA21 / 收盘<布林中轨，任一命中）显著改善买点质量
-//  · 高溢价区仍保留 MACD 级别提示（v9）：
-//      死叉 → 走弱预警；死叉后首次跌破 MA21 → 减仓；
-//      跌破 MA21+MA30 → 清仓；三线全破 → 跑路清仓；
-//      金叉 → 少量买入（溢价偏高，仓位不超过 3 成）
-//  · 布林上轨/威廉超买（≥-10）作为高位过热信号，在「持有不加仓」段里提示别追高
 //  输出按「连续同类型合并为段」，每段带证据列表与信号后 20 日涨跌
 function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
   const n = klines.length;
@@ -3095,9 +3126,6 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
     const v = navMap[klines[i].date];
     return v > 0 ? C[i] / v * 100 - 100 : null;
   };
-  // 趋势破坏：连续 3 日收在 MA21 缓冲带下方，或跌破 MA60（与「仓位建议」同一套判定）
-  const trendBroken = new Array(n).fill(false);
-  { let below = 0; for (let i = 0; i < n; i++) { if (ma21[i] == null) continue; if (C[i] < ma21[i] * (1 - POS_MA_BUF)) below++; else below = 0; trendBroken[i] = below >= POS_BELOW_N || (ma60[i] != null && C[i] < ma60[i]); } }
   // 段内建议仓位（复用仓位建议的逐日目标仓位；已含「美股趋势确认」门控）
   const posSeries = buildEtfPositionSeries(klines, navMap, null, panic && panic.active, usIdx) || [];
   const posAt = i => (posSeries[i] && posSeries[i].target != null) ? posSeries[i].target : null;
@@ -3110,7 +3138,7 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
     sell_weak:  { label: '持有不加仓', action: '持仓不动', side: 'hold' },
     wait_us:    { label: '等重仓确认', action: '暂缓加仓/减仓', side: 'hold' },
     panic_wait: { label: '抄底未确认', action: '撤回防守仓', side: 'hold' },
-    panic_try:  { label: '恐慌试仓',  action: '小仓试仓 20~35%', side: 'buy' },
+    panic_try:  { label: '恐慌试仓',  action: `小仓试仓 ${Math.round(POS_TRY_CAP * 100)}%`, side: 'buy' },
     weak_warn:  { label: '走弱预警',  action: '停止加仓·准备减仓', side: 'hold' },
     sell:       { label: '减仓',     action: '减仓',     side: 'sell' },
     sell_clear: { label: '清仓/减半', action: '清仓或减半', side: 'sell' },
@@ -3157,16 +3185,13 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
   let weakCd = 0;
 
   const sigs = [];
-  let breakArmed = false;   // 死叉后是否还允许一次「跌破 MA21」确认减仓
   for (let i = 35; i < n; i++) {
     const p = premAt(i);
-    if (p == null) continue;
+    const premTxt = p == null ? '—' : p.toFixed(1) + '%';
     const fWill = willR[i] != null && willR[i] <= -60;
     const fMa = ma21[i] != null && C[i] < ma21[i];
     const fBoll = boll.mid[i] != null && C[i] < boll.mid[i];
     const fHit = fWill || fMa || fBoll;
-    const bollUp = boll.mid[i] != null && boll.up[i] != null && C[i] > boll.up[i];
-    const willHot = willR[i] != null && willR[i] >= -10;
 
     let code = null, ev = [], tag = null;
     // 重仓铁律（v7）：MACD 翻红 + 站上 MA21 才允许重仓。溢价低只说明「有性价比」，
@@ -3178,79 +3203,40 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
     const gateHint = gtRow && gtRow.miss && gtRow.miss.length
       ? `未满足重仓条件（${gtRow.miss.join('、')}）：溢价再低也只是「有性价比」，不能重仓`
       : '重仓条件已满足（MACD 翻红 + 站上 MA21）';
-    // 恐慌抄底窗口：这是系统里最严格的底部条件（7 项共振），可比「溢价<15」更值得重仓。
-    // 否则会出现「7/8 溢价 14.87% 给重仓、7/30 溢价 15.58% 只给买入」这种被 0.7pp 卡出来的倒挂。
     const isPanic = !!(panic && panic.active && panic.active.has(klines[i].date));
     // 恐慌下限已失效（触发后超过 PANIC_US_GRACE_DAYS 个交易日仍站不回 MA21）：
     // 说明是下跌中继而非恐慌底（2026-01-21、2025-03-04 两次各亏 6.1%/5.4%），
     // 清单不能再喊「分批重仓」，否则就是用户说的「一路加仓一路亏」。
     const panicLapsed = !!(posSeries[i] && posSeries[i].panicLapsed);
-    if (isPanic && panicLapsed && p <= PREMIUM_WATCH) {
+    if (isPanic && panicLapsed) {
       code = 'panic_wait';
-      ev = [`溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）`,
+      ev = [`溢价 ${premTxt}（仅参考）`,
         `恐慌抄底已触发超过 ${PANIC_US_GRACE_DAYS} 个交易日，价格始终站不回 MA21 ${ma21[i] != null ? ma21[i].toFixed(3) : ''}`,
         gateHint,
         '判断被证伪：这是下跌中继而非恐慌底 → 撤回到试仓/防守档，按当前档位执行'];
-    } else if (isPanic && p <= PREMIUM_WATCH) {
+    } else if (isPanic) {
       // 恐慌期也守铁律：未满足「MACD 翻红 + 站上 MA21」就只能是「恐慌试仓」，不能喊重仓
       //（2026-01-21 那次清单全程喊「重仓买入」，用户一路加仓亏了 3 个月）
       code = heavyOk ? 'buy_strong' : 'panic_try';
-      ev = [`溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）`, '买入共振窗口触发：多项超卖、回撤等条件达标，不代表底部或基本面已确认'];
+      ev = [`溢价 ${premTxt}（仅参考）`, '买入共振窗口触发：多项超卖、回撤等条件达标，不代表底部或基本面已确认'];
       if (fWill) ev.push(`威廉%R ${willR[i].toFixed(0)} 超卖（≤-60）`);
       if (fMa) ev.push('收盘 < MA21（回调中）');
       if (fBoll) ev.push('收盘 < 布林中轨');
       ev.push(heavyOk
         ? '重仓条件已满足 → 分批重仓到 85%'
-        : `尚未满足重仓条件（${gtRow && gtRow.miss && gtRow.miss.length ? gtRow.miss.join('、') : '未确认'}）→ 先按试仓档小仓分批（溢价 <15% 给 ${Math.round(POS_TRY_CAP_CHEAP * 100)}%、≥15% 只给 ${Math.round(POS_TRY_CAP * 100)}%），站上 MA21 且 MACD 翻红后再补到 65~85%`);
-    } else if (p < 15 && fHit) {
-      code = 'buy_strong';
-      ev = [`溢价 ${p.toFixed(1)}%（<15 重仓区）`];
+        : `尚未满足重仓条件（${gtRow && gtRow.miss && gtRow.miss.length ? gtRow.miss.join('、') : '未确认'}）→ 先按 ${Math.round(POS_TRY_CAP * 100)}% 试仓档小仓分批，站上 MA21 且 MACD 翻红后再补到 65~85%`);
+    } else if (fHit) {
+      code = heavyOk ? 'buy' : 'buy_weak';
+      ev = [`溢价 ${premTxt}（仅参考）`];
       if (fWill) ev.push(`威廉%R ${willR[i].toFixed(0)} 超卖（≤-60）`);
       if (fMa) ev.push('收盘 < MA21（回调中）');
       if (fBoll) ev.push('收盘 < 布林中轨');
-    } else if (p >= 15 && p <= 18 && fHit) {
-      code = 'buy';
-      ev = [`溢价 ${p.toFixed(1)}%（15~18 买入区）`];
-      if (fWill) ev.push(`威廉%R ${willR[i].toFixed(0)} 超卖（≤-60）`);
-      if (fMa) ev.push('收盘 < MA21（回调中）');
-      if (fBoll) ev.push('收盘 < 布林中轨');
-    } else if (p <= 18 && goldenCross(i)) {
+    } else if (goldenCross(i)) {
       code = 'buy_weak';
-      ev = [`溢价 ${p.toFixed(1)}%（≤18）`, 'MACD 零轴下金叉（无回调确认，试仓）'];
-    } else if (p >= PREMIUM_WATCH) {
-      // 高溢价本身不是「清仓」理由，但它一定是「仓位上限」：统一压到 3 成以内
-      // （≥27 压到 2 成）。高溢价区里仍然保留 MACD 级别的离散买卖点——
-      //   死叉 → 走弱预警；死叉后的首次跌破 MA21 → 减仓（一次死叉只确认一次，
-      //   避免同一轮空头里反复重复输出）；金叉 → 少量买入。
-      const broke = trendBroken[i];
-      const dead = deathCross(i);
-      const brokeMa21 = ma21[i] != null && C[i] < ma21[i];
-      if (goldenCross(i)) breakArmed = false;
-      if (broke && p >= PREMIUM_DANGER) {
-        code = 'sell_clear';
-        ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_DANGER} 极高区）`, '趋势破坏（连续 3 日破 MA21 缓冲带或跌破 MA60）', '溢价回落 + 趋势转弱双杀，减半至 3 成以内'];
-      } else if (broke) {
-        code = 'sell';
-        ev = [`溢价 ${p.toFixed(1)}%（高溢价区）`, '趋势破坏：连续 3 日收在 MA21 缓冲带下或跌破 MA60', '按仓位建议降到 30% 以内'];
-      } else if (dead) {
-        code = 'weak_warn'; tag = 'weak';
-        breakArmed = true;
-        ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_WATCH} 高溢价区）`, 'MACD 死叉（DIF 下穿 DEA），动能转弱', 'MACD 单独翻绿只预警，不直接减仓；若跌破 MA21 再升级为减仓'];
-      } else if (brokeMa21 && breakArmed) {
-        code = 'sell'; tag = 'ma';
-        breakArmed = false;
-        ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_WATCH} 高溢价区）`, `收盘 ${C[i].toFixed(3)} 跌破 MA21 ${ma21[i].toFixed(3)}（死叉后首次破位确认）`, '高溢价 + 破位 → 减仓，仓位压到 3 成以内'];
-      } else if (goldenCross(i)) {
-        code = 'buy_small';
-        ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_WATCH} 高溢价区）`, 'MACD 金叉（DIF 上穿 DEA），动能转强', `但溢价偏高，只可少量买入：仓位不超过 3 成，不追高`];
-      } else {
-        code = 'sell_weak';
-        ev = [`溢价 ${p.toFixed(1)}%（≥${PREMIUM_WATCH} 高溢价区）`, '趋势仍在 MA21 上方，仅停止加仓'];
-        if (willHot) ev.push(`威廉%R ${willR[i].toFixed(0)} 超买（≥-10），别追高`);
-        if (bollUp) ev.push('触及布林上轨，别追高');
-        const tp = posAt(i);
-        if (tp != null) ev.push(`建议仓位上限 ${Math.round(tp * 100)}%（持有，不减仓）`);
-      }
+      ev = [`溢价 ${premTxt}（仅参考）`, 'MACD 零轴下金叉（无回调确认，试仓）'];
+    } else if (deathCross(i)) {
+      code = 'weak_warn'; tag = 'weak';
+      ev = ['MACD 死叉（DIF 下穿 DEA），动能转弱', 'MACD 单独翻绿只预警，不直接减仓；若跌破 MA21 再升级为减仓'];
     }
     // ── 走弱层：MACD 单独翻绿只预警；真正减仓看价格破位 ─────────────────────────
     // 2026-08-19 复盘：MACD 先翻绿/红柱缩短后，价格仍可能在强趋势里横盘再上攻。
@@ -3306,7 +3292,7 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
           ? `破位命中 —— ${clearHit.join('、')}${extraHit.length ? '；另 ' + extraHit.join('、') : ''}`
           : `减仓触发 —— ${etfMacdWeak && etfBelow ? '纳指科技 MACD 翻绿 + 跌破 MA21' : '纳指100 MACD 翻绿 + 跌破 MA21'}${extraHit.length ? '；另 ' + extraHit.join('、') : ''}`;
         ev = [
-          `溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）：低溢价只代表便宜，不代表不会继续跌`,
+          `溢价 ${premTxt}（仅参考）：破位风控独立于溢价`,
           hitLine,
           lv === 4
             ? 'MA21 / MA30 / MA60 三条均线全部跌破 → 中期趋势彻底转空，立刻清仓跑路，不再等确认'
@@ -3319,7 +3305,7 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
         if ((!code || code === 'sell_weak') && wSelf) {
           code = 'weak_warn'; tag = 'weak';
           ev = [
-            `溢价 ${p.toFixed(1)}%（${premiumZone(p).label}）`,
+            `溢价 ${premTxt}（仅参考）`,
             `走弱前兆 —— ${wHit.join('、')}`,
             'MACD 单独翻绿/缩短只代表动能降温，不代表价格一定下跌；未跌破 MA21 前只停止加仓，不直接减仓',
           ];
@@ -3336,9 +3322,10 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
     if (code && !heavyOk && !isPanic && (code === 'buy_strong' || code === 'buy' || code === 'buy_weak')) {
       ev.push(gateHint);
       if (tier === 'run') { code = 'wait_us'; tag = 'us'; }
+      else if (tier === 'watch') code = 'sell_weak';
       else code = 'buy_weak';
     }
-    if (code) sigs.push({ idx: i, date: klines[i].date, close: C[i], premium: +p.toFixed(2), code, tag: tag || code, ev });
+    if (code) sigs.push({ idx: i, date: klines[i].date, close: C[i], premium: p == null ? null : +p.toFixed(2), code, tag: tag || code, ev });
   }
 
   // 连续同类型合并为段（隔一天以上视为新段；理由不同也拆开，如 8/21 死叉与 8/24 破位）
@@ -3410,71 +3397,21 @@ function buildEtfCompositeSignals(klines, navMap, panic, usIdx) {
   return { signals: segs, stats, backtest, lastDate: klines[n - 1].date };
 }
 
-// ── 仓位建议：把「方向」与「估值」两个维度解耦 ──────────────────────────────
-// 起因：溢价长期高于 22% 时，v2 清单整月只能输出「减仓/清仓」，与 MACD 9/18 的强买
-// 互相打架；而 9 月场内价仍从 2.825 涨到 3.194（+13.1%）。根源是把溢价（估值/情绪
-// 维度）当成了方向信号，且买点条件绑定「溢价≤18%」——一旦在高溢价区被震出就再也
-// 无法入场（9 月全程空仓）。
-// 修正后的架构：
-//   · 方向由趋势决定：收盘在 MA21 上方维持持仓；连续 3 日跌破 MA21×0.98 或跌破
-//     MA60 才判定趋势破坏（带缓冲与滞回，避免单日插针把仓位打飞）。
-//   · 溢价只决定「仓位上限」与「能不能加仓」，不产生清仓指令。
-//   · 低溢价「抄底仓」：趋势破坏时不再一律压到 3 成——溢价 <15% 给 85% 上限、
-//     15~18% 给 65% 上限。本 ETF 溢价中位数仅 9.1%、<15% 占 69.8% 的交易日，
-//     「便宜」本身就是最好的安全垫；7/8（溢价 14.9%）与 7/30（溢价 15.6%）这类
-//     位置旧口径只给 24~30%，明显偏保守。
-//   · **低溢价抄底仓必须叠加「美股趋势确认」**（2026-04 修正，v6）：2026-01~03 按
-//     「低溢价 → 抄底仓 85%」一路加仓，结果是跟着美股一起跌了 3 个月——跟随者口径
-//     （只加不减、现金起步）期间均仓 82%、亏损 -14.4%，用户体感就是「资金很快不够
-//     用、一路加仓一路亏、非常难受」。复盘拆出两件事：
-//       ① 1 月那波跌根本不是美股跌（纳指 1 月还在高位），而是 ETF 溢价从 23%
-//          均值回归到 15%——属估值/情绪维度，所以 18~22% 档的仓位系数由 0.8 压到 0.5；
-//       ② 2 月中 ~ 4 月上旬才是美股真跌（纳指 -12.7%）。此时「溢价低」只代表
-//          「有性价比」，不构成抄底/重仓的理由——美股趋势没好转就不能一路加仓。
-//     于是引入 usOk（见 buildUsTrendState）：纳指走坏且未止跌时，低溢价抄底仓不生效、
-//     整体仓位封顶 POS_US_BAD_CAP(40%)，等纳指自近 20 日低点反弹 ≥3%（止跌确认）
-//     再把仓位抬起来。实测正好命中「把抬仓集中在 3/30 ~ 4/3」的诉求：3 月全程封顶、
-//     4/1 触发止跌确认 → 4/2~4/3 抬到 85%，而 7/30 的恐慌抄底不受影响。
-// 回测（159509，764 个交易日，2023-08-08 ~ 2026-09-30，逐日按目标仓位再平衡）：
-//   买入持有   累计 +224%   · 年化 47.1% · 最大回撤 -30.5%
-//   旧口径     累计 +339%   · 年化 62.6% · 最大回撤 -23.1%（2026-01~03 跟随者 -14.4%、均仓 82%）
-//   本方案     累计 +337%   · 年化 62.3% · 最大回撤 -15.2%（2026-01~03 跟随者 -12.8%、均仓 75%）
-//   分年：2024 68% / 2025 64% / 2026 52%（买入持有 49% / 42% / 39%）。
-// 即：收益基本持平（-2pp）、回撤显著收敛（-23.1% → -15.2%）、牛市里的仓位反而更高。
 const POS_MA_BUF = 0.02;      // MA21 缓冲带：跌破 MA21×0.98 才计为「线下」
 const POS_BELOW_N = 3;        // 连续 3 日线下才判定趋势破坏
-// 低溢价「抄底仓」：趋势状态破位时，便宜本身就是最好的安全垫。
-// 不再被趋势状态一刀切到 3 成——溢价 <15% 给 85% 上限，15~18% 给 65% 上限。
-// **但必须叠加美股趋势确认（usOk）**：美股走坏且未止跌时这两个上限不生效（见 buildEtfPositionSeries）。
-const POS_DIP_CAP_CHEAP = 0.85;   // 溢价 <15%（需 usOk）
-const POS_DIP_CAP_BUY = 0.65;     // 溢价 15~18%（需 usOk）
-// 溢价 → 仓位系数（趋势向上时仍保留仓位，不做清仓）
-// 档位按本 ETF 自身历史校准：溢价中位数仅 9.1%（<15% 占 69.8% 的交易日），
-// 所以 18~22% 已经是偏高位置（约 85 分位），不该再给 80% 仓位——2026-01 的下跌
-// 就是「溢价从 23% 压缩到 15%」造成的，当时 80% 仓位明显过高。
-function premiumPositionFactor(pct) {
-  if (pct == null || !isFinite(pct)) return 0.3;   // 溢价未知时按「高溢价」防守处理
-  if (pct < PREMIUM_ADD) return 1.0;      // <15%
-  if (pct < PREMIUM_BUY) return 0.9;      // 15~18%
-  if (pct < PREMIUM_WATCH) return 0.5;    // 18~22% 偏贵：半仓为限
-  if (pct < PREMIUM_DANGER) return 0.25;  // 22~27% 高溢价：两成半为限
-  return 0.15;                            // ≥27% 极高溢价：一成半为限
-}
 const POS_FACTOR_TABLE = [
-  { pct: `<${PREMIUM_ADD}%`, factor: 1.0, note: '加仓区，可满仓' },
-  { pct: `${PREMIUM_ADD}~${PREMIUM_BUY}%`, factor: 0.9, note: '买入区，接近满仓' },
-  { pct: `${PREMIUM_BUY}~${PREMIUM_WATCH}%`, factor: 0.5, note: '偏贵区，半仓为限' },
-  { pct: `${PREMIUM_WATCH}~${PREMIUM_DANGER}%`, factor: 0.25, note: '高溢价，两成半为限（只少买，不追高）' },
-  { pct: `>${PREMIUM_DANGER}%`, factor: 0.15, note: '极高溢价，一成半为限（只减不加）' },
+  { pct: '全部溢价', factor: 1, note: '仅供参考，不限制仓位' },
 ];
 
 // ── 外围情绪源：纳指综合 / 费城半导体 日K（新浪美股）──
-// 「恐慌抄底」信号的外盘输入。抓取失败时静默降级（信号自动退化为 6 项技术评分）。
+// 「恐慌抄底」信号的外盘输入；抓取失败时仅使用其余技术评分。
 const US_IDX_CACHE = { data: null, ts: 0, state: null };
+let US_IDX_BACKOFF_UNTIL = 0;               // 全部源失败退避：30 秒内直接回旧缓存，不再重抓
 const US_IDX_TTL = 10 * 60e3;
 async function fetchUsIndexHistory() {
   const usState = getUSMarketState();
   const staleAcrossClose = US_IDX_CACHE.state === 'REGULAR' && usState !== 'REGULAR';
+  if (Date.now() < US_IDX_BACKOFF_UNTIL) return US_IDX_CACHE.data;
   if (US_IDX_CACHE.data && !staleAcrossClose && Date.now() - US_IDX_CACHE.ts < US_IDX_TTL) return US_IDX_CACHE.data;
   const out = {};
   const closeHistory = (arr) => {
@@ -3485,24 +3422,30 @@ async function fetchUsIndexHistory() {
   };
   // ndx = 纳斯达克 100：本 ETF 跟踪的就是纳指科技，比纳指综合（ixic）更贴近；
   // 且它的 MA21 / MACD 直接参与「能不能重仓」的门控（见 buildHeavyGate）。
-  await Promise.all([['ixic', '.IXIC'], ['ndx', '.NDX'], ['sox', '.SOX']].map(async ([key, sym]) => {
+  // qqq（QQQ ETF 日K）2026-11-10 起改新浪源为主：腾讯 ifzq 的 usQQQ.OQ 三个域名
+  // 全部返回 501 反爬 HTML（或连接失败），导致 usIdx 长期缺 qqq，「历史跌幅回顾」
+  // 因 buildPremarketHistoryReview 拿不到 usIdx.qqq 而静默消失。
+  await Promise.all([['ixic', '.IXIC'], ['ndx', '.NDX'], ['sox', '.SOX'], ['qqq', 'QQQ']].map(async ([key, sym]) => {
     try {
-      const txt = await httpGet(
-        `https://stock.finance.sina.com.cn/usstock/api/jsonp.php/x/US_MinKService.getDailyK?symbol=${encodeURIComponent(sym)}&___qn=3`,
-        { Referer: 'https://finance.sina.com.cn/' }
-      );
-      const m = txt.match(/x\((\[[\s\S]*\])\)/);
-      if (!m) return;
-      const arr = JSON.parse(m[1]).map(r => ({ d: r.d, c: +r.c })).filter(r => r.d && isFinite(r.c));
-      out[key] = closeHistory(arr);
+      out[key] = closeHistory(await fetchSinaUsDaily(sym));
     } catch (e) { console.error('[us-index]', key, e.message); }
   }));
-  try {
-    const rows = await fetchTencentDayKline('usQQQ.OQ', 1000);
-    const arr = rows.map(r => ({ d: r.date, c: +r.close })).filter(r => r.d && isFinite(r.c));
-    if (arr.length) out.qqq = closeHistory(arr);
-  } catch (e) { console.error('[us-index]', 'qqq', e.message); }
-  if (out.ixic) { US_IDX_CACHE.data = out; US_IDX_CACHE.ts = Date.now(); US_IDX_CACHE.state = usState; }
+  if (!out.qqq) {
+    // 新浪 QQQ 也失败时的兜底：腾讯 usQQQ.OQ（2026-11 起经常被 501 反爬拦截）
+    try {
+      const rows = await fetchTencentDayKline('usQQQ.OQ', 1000);
+      const arr = rows.map(r => ({ d: r.date, c: +r.close })).filter(r => r.d && isFinite(r.c));
+      if (arr.length) out.qqq = closeHistory(arr);
+    } catch (e) { console.error('[us-index]', 'qqq-tencent', e.message); }
+  }
+  // 任一指数成功即写缓存（此前仅 IXIC 成功才写：IXIC 挂掉时 NDX/SOX/QQQ 白抓且不缓存，
+  // 下个请求又重抓四源）。全失败则退避 30 秒。
+  if (Object.keys(out).length) {
+    US_IDX_CACHE.data = out; US_IDX_CACHE.ts = Date.now(); US_IDX_CACHE.state = usState;
+    US_IDX_BACKOFF_UNTIL = 0;
+  } else {
+    US_IDX_BACKOFF_UNTIL = Date.now() + 30_000;
+  }
   return US_IDX_CACHE.data;
 }
 
@@ -3517,8 +3460,6 @@ async function fetchUsIndexHistory() {
 //   · usDown   纳指 < MA50 且 MA50 较 5 个 ETF 交易日前下行  → 美股确认走坏（真下跌）
 //   · usRepair 纳指距近 20 个美股交易日收盘低点 ≥ +3%        → 美股止跌确认（反弹）
 //   · usOk     = !usDown || usRepair                          → 允许正常买入/加仓
-// 规则：低溢价抄底仓（85%/65%）只在 usOk 时生效；美股走坏且未止跌时整体仓位封顶
-// POS_US_BAD_CAP（只留底仓）。「恐慌抄底」是更严格的极端条件，不受此门限制。
 // 实测：usDown 恰好覆盖 2 月中下旬 ~ 4 月上旬的下跌段（3 月 100%），并在 4/1 因纳指自
 // 20 日低点反弹 3.8% 触发 usRepair 而解除——正好命中「3/30 ~ 4/3 抬仓」的需求；
 // 2025 年的正常回调基本不触发（1 月/7 月/10 月均 0%），所以不会误伤牛市里的回调买点。
@@ -3559,16 +3500,9 @@ function buildUsTrendState(klines, usIdx) {
 // ── v9「重仓铁律」：入场看 MACD+MA21，出场看价格破位确认 ────────────────
 // 2026-08-19 复盘：MACD 先缩短/翻绿后，价格仍在强趋势里横盘再上攻。
 // 因此 MACD 单独翻绿只作为动能预警，不再直接触发减仓；必须配合价格跌破 MA21 才升级。
-// 当前落地为四档（tier），溢价只在这些档位内部做微调，永远不能把「便宜」升级成「重仓」：
-//   heavy 重仓档：ETF 站上 MA21 且 MACD 翻红，且纳指100 站上 MA21 且「翻红 或 DIF>0」
-//   watch 观察档：MACD 翻绿但价格仍在 MA21 上方 → 持有观察、不加仓
-//   run   跑路档：MACD 翻绿且跌破 MA21，或纳指100 同时翻绿并跌破 MA21 → 减到 20%（<15% 留 35%）
-//   try   试仓档：动能恢复但价格还没站回 MA21 → 20%（溢价<15% → 35%）
 // MA21+MA30 仍是清仓铁律，MA21+MA30+MA60 三线全破仍是跑路清仓。
-const POS_TRY_CAP = 0.20;         // 试仓档 · 溢价 ≥15%（恐慌试仓同样适用）
-const POS_TRY_CAP_CHEAP = 0.35;   // 试仓档 · 溢价 <15%：便宜才多给一点，仍远不到重仓
-const POS_RUN_CAP = 0.25;         // 跑路档：ETF MACD 翻绿且跌破 MA21，或纳指100 同时翻绿并跌破 MA21 → 减仓
-const POS_RUN_CAP_CHEAP = 0.35;   // 溢价 <15% 时留一点底仓
+const POS_TRY_CAP = 0.20;
+const POS_RUN_CAP = 0.10;
 const POS_MAX_NOT_HEAVY = 0.5;    // 「非重仓档一律 ≤50%」的硬红线
 function buildHeavyGate(rows, usIdx) {
   const n = rows.length;
@@ -3640,7 +3574,7 @@ function buildHeavyGate(rows, usIdx) {
 // **外围情绪**：隔夜外盘重挫说明利空在集中兑现，而不是基本面在恶化。
 // 2026-07-30 实测：隔夜纳指 -1.74% / 费半 -5.33% + %R -98 + 布林 2% + 溢价 15.6% → 触发，
 // 4 个交易日 +8.8%（同期价格 +9.4%），而基准仓位只给 59%。
-// 预警不改变仓位；7 项共振 ≥5 项才开启窗口，实际仓位仍由价格确认、趋势与溢价共同决定。
+// 预警不改变仓位；6 项共振 ≥5 项才开启窗口，实际仓位由价格确认与趋势决定。
 // 为什么不一上来就给 85%：11 次历史触发 7 胜 4 负，且事前无法区分「恐慌底」与「半山腰」
 // ——2025-01-13、2025-03-04、2026-01-21 三次是趋势下跌中继，20 日后 -5% ~ -6%。
 // 回测对比（764 日）：触发即 85% → 累计 +285%；统一 65% → +310%；65% 站上 MA21 再补 85% → +313%。
@@ -3657,7 +3591,7 @@ const PANIC_TAKE_PROFIT = 0.12;
 const PANIC_MA21_BAND = 1.02;
 const PANIC_LEVELS = [
   { min: 6, label: '强超卖共振', note: '多项买入条件达标，不代表底部确认，按仓位风控执行' },
-  { min: 5, label: '买入共振达标', note: '达到窗口评分门槛，仍需检查溢价与价格、趋势确认' },
+  { min: 5, label: '买入共振达标', note: '达到窗口评分门槛，仍需检查价格、趋势确认' },
   { min: 4, label: '接近买点', note: '关注候选买点，尚未达到正式窗口门槛，不自动加仓' },
   { min: 3, label: '部分条件满足', note: 'ETF 买入共振不足，预警不等于买入' },
   { min: 0, label: '买入条件不足', note: '尚未达到买入共振门槛' },
@@ -3704,7 +3638,6 @@ function buildEtfPanicSignal(klines, navMap, usIdx) {
     addCheck('威廉%R', W[i] != null ? W[i].toFixed(0) : '—', '≤ -95 极限超卖', W[i] != null && W[i] <= -95, '短线动量是否杀到极端低位');
     addCheck('布林位置', bp != null ? (bp * 100).toFixed(0) + '%' : '—', '≤ 10% 贴近下轨', bp != null && bp <= 0.10, '价格是否贴近布林下轨');
     addCheck('RSI14', R[i] != null ? R[i].toFixed(0) : '—', '≤ 40 弱势区', R[i] != null && R[i] <= 40, '14 日 RSI 是否进入弱势区');
-    addCheck('溢价', prem[i] != null ? prem[i].toFixed(1) + '%' : '—', `≤ ${PREMIUM_BUY}% 便宜区`, prem[i] != null && prem[i] <= PREMIUM_BUY, '场内溢价是否回到可买区');
     const r5 = i >= 5 ? (C[i] / C[i - 5] - 1) * 100 : null;
     const selloffCheck = addCheck('5日跌幅', r5 != null ? r5.toFixed(1) + '%' : '—', '≤ -4% 急跌', r5 != null && r5 <= -4, 'ETF 近 5 个交易日是否急跌');
     const hi20 = Math.max(...C.slice(Math.max(0, i - 19), i + 1));
@@ -3782,7 +3715,7 @@ function buildEtfPanicSignal(klines, navMap, usIdx) {
   return {
     active, events, recent, current,
     levels: PANIC_LEVELS,
-    config: { trigger: PANIC_TRIGGER, cap: POS_PANIC_CAP, capAdd: POS_PANIC_CAP_ADD, holdDays: PANIC_HOLD_DAYS, takeProfit: PANIC_TAKE_PROFIT, ma21Band: PANIC_MA21_BAND, graceDays: PANIC_US_GRACE_DAYS, premiumLimit: PREMIUM_WATCH, tryCap: POS_TRY_CAP, tryCapCheap: POS_TRY_CAP_CHEAP },
+    config: { trigger: PANIC_TRIGGER, cap: POS_PANIC_CAP, capAdd: POS_PANIC_CAP_ADD, holdDays: PANIC_HOLD_DAYS, takeProfit: PANIC_TAKE_PROFIT, ma21Band: PANIC_MA21_BAND, graceDays: PANIC_US_GRACE_DAYS, tryCap: POS_TRY_CAP },
     stats: {
       total: closed.length, wins,
       winRate: closed.length ? Math.round(wins / closed.length * 100) : null,
@@ -3841,26 +3774,13 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
     let cap;
     if (tier === 'heavy' || tier === 'watch') {
       cap = state === 'UP' ? (brokeMa60 ? 0.6 : 1.0) : 0.3;
-      if (tier === 'heavy' && p != null) {
-        if (p < PREMIUM_ADD) cap = Math.max(cap, POS_DIP_CAP_CHEAP);
-        else if (p < PREMIUM_BUY) cap = Math.max(cap, POS_DIP_CAP_BUY);
-      }
     } else {
-      // 非重仓档：溢价只决定在这一档里多买一点 / 少买一点，**永远不能升级成重仓**。
-      // 这就是 2026-01~03「溢价降到 15 就一路加仓、一路亏」的根治点。
-      // 跑路档再取一次 min（跑路档必须 ≤ 试仓档），否则会出现「情况更坏了反而加仓」。
-      const cheap = p != null && p < PREMIUM_ADD;
-      const tryCap = cheap ? POS_TRY_CAP_CHEAP : POS_TRY_CAP;
-      const runCap = cheap ? POS_RUN_CAP_CHEAP : POS_RUN_CAP;
-      cap = tier === 'run' ? Math.min(runCap, tryCap) : tryCap;
+      cap = tier === 'run' ? Math.min(POS_RUN_CAP, POS_TRY_CAP) : POS_TRY_CAP;
     }
     // 零轴下死叉：趋势转弱再压一档
     if (state === 'UP' && i > 0 && bars[i - 1] && bars[i - 1].dif >= bars[i - 1].dea && bar.dif != null && bar.dif <= bar.dea && bar.dif < 0) cap *= 0.7;
-    const pf = premiumPositionFactor(p);
-    let target = Math.max(0, Math.min(1, cap * pf));
+    let target = Math.max(0, Math.min(1, cap));
     if (tier === 'watch') target = Math.min(target, POS_MAX_NOT_HEAVY);
-    // 恐慌抄底：隔夜外盘重挫 + 极限超卖共振时，仓位下限抬到 65%（不再被溢价系数打折）；
-    // 收盘重新站上 MA21 后再补到 85%——「分批重仓」，不为假底一次性买单。
     const panic = !!(panicActive && panicActive.has(rows[i].date));
     if (panic) { if (!panicOn) { panicOn = true; panicAdded = false; panicStartIdx = i; } }
     else { panicOn = false; panicStartIdx = -1; }
@@ -3872,25 +3792,20 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
     // 注意不能反过来「美股走坏就不让恐慌抄底」——实测美股走坏期的 6 次反而更准
     // （平均 +2.7%、胜率 67%，2026-07-30 的最佳案例正是此状态），门控的是「扛多久」。
     const panicLapsed = panicOn && !panicAdded && tier !== 'heavy' && panicStartIdx >= 0 && (i - panicStartIdx) >= PANIC_US_GRACE_DAYS;
-    // 恐慌下限只在高溢价（≥22%）以内生效——溢价极高时仍让「高溢价压仓」规则优先，避免自相矛盾。
-    // 恐慌层同样遵守重仓铁律：站上 MA21 只确认「止跌」，要 MACD 翻红（重仓档）才补到 85%。
-    if (panicOn && !panicLapsed && (p == null || p <= PREMIUM_WATCH)) {
+    // 站上 MA21 只确认止跌，MACD 翻红后才允许重仓。
+    if (panicOn && !panicLapsed) {
       if (panicAdded && tier === 'heavy') {
         target = Math.max(target, POS_PANIC_CAP_ADD);
       } else if (panicAdded && tier !== 'run') {
         target = Math.max(target, POS_PANIC_CAP);
       } else {
-        // 恐慌「试仓」档（未站回 MA21，或虽站回但 MACD 已翻绿）：
-        //   溢价 ≥15% → 20% 以内；溢价 <15% → 35%。
-        // 2026-01-21~02-03 就是这一段：溢价 15~18%、当时给到 35%，跟着一路跌到 3 月，
-        // 所以试错的仓位必须比「便宜」更小——下限即上限，直接按档定仓（不再乘溢价系数）。
-        target = (p != null && p < PREMIUM_ADD) ? POS_TRY_CAP_CHEAP : POS_TRY_CAP;
+        target = POS_TRY_CAP;
       }
     }
     out.push({
       date: rows[i].date, close: +C[i].toFixed(3), premium: p == null ? null : +p.toFixed(2),
       state, bull, ma21: ma21[i] == null ? null : +ma21[i].toFixed(3), ma60: ma60[i] == null ? null : +ma60[i].toFixed(3),
-      cap: +cap.toFixed(2), factor: pf, target: +target.toFixed(2), belowDays: below, intraday: !!rows[i].intraday,
+      cap: +cap.toFixed(2), factor: 1, target: +target.toFixed(2), belowDays: below, intraday: !!rows[i].intraday,
       panic, panicAdded: panicOn && panicAdded, panicLapsed,
       // 重仓铁律的逐日判定：tier = heavy/watch/try/run + 四项条件，供前端说明「为什么不能重仓」
       tier, gate: g ? {
@@ -3914,20 +3829,14 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
   const p = last.premium;
   const posPct = Math.round(last.target * 100);
   const zone = premiumZone(p);
-  const iopv = live && live.iopv > 0 ? live.iopv : null;
 
   // 美股趋势确认（MA50 中期口径）：仅用于展示，v7 起仓位由下面的「重仓铁律」接管
   const usOk = last.usOk !== false;
   const usPct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%');
 
   // ── 重仓铁律（v7）：能不能重仓，只看 MACD 翻红 + 站上 MA21，溢价说了不算 ──
-  // 四档的仓位口径（未乘溢价系数）：非重仓档一律 ≤50%
-  const tryPct = Math.round((p != null && p < PREMIUM_ADD ? POS_TRY_CAP_CHEAP : POS_TRY_CAP) * 100);
-  // 跑路档再取一次 min（必须 ≤ 试仓档），否则会出现「情况更坏了反而加仓」
-  const runPct = Math.round(Math.min(
-    p != null && p < PREMIUM_ADD ? POS_RUN_CAP_CHEAP : POS_RUN_CAP,
-    p != null && p < PREMIUM_ADD ? POS_TRY_CAP_CHEAP : POS_TRY_CAP,
-  ) * 100);
+  const tryPct = Math.round(POS_TRY_CAP * 100);
+  const runPct = Math.round(Math.min(POS_RUN_CAP, POS_TRY_CAP) * 100);
   const gt = last.gate || {};
   const tier = last.tier || 'heavy';
   const ma21Txt0 = last.ma21 != null ? last.ma21.toFixed(3) : '—';
@@ -3945,19 +3854,19 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
     miss: gt.miss || [],
     ma21: last.ma21,
     caps: {
-      try: POS_TRY_CAP, tryCheap: POS_TRY_CAP_CHEAP,
-      run: Math.min(POS_RUN_CAP, POS_TRY_CAP), runCheap: Math.min(POS_RUN_CAP_CHEAP, POS_TRY_CAP_CHEAP),
+      try: POS_TRY_CAP,
+      run: Math.min(POS_RUN_CAP, POS_TRY_CAP),
       maxNotHeavy: POS_MAX_NOT_HEAVY,
     },
     label: tier === 'heavy' ? '重仓条件已满足' : (tier === 'run' ? '破位 · 减仓跑路' : (tier === 'watch' ? '动能转弱 · 持有观察' : '未确认 · 只能试仓')),
   };
   gateInfo.note = tier === 'heavy'
-    ? `ETF 站上 MA21（${ma21Txt0}）且 MACD 翻红，纳指100 也站上 MA21 且动能不为负（MACD 翻红 或 DIF 在零轴上方）→ 两条都确认，可以按溢价正常加仓`
+    ? `ETF 站上 MA21（${ma21Txt0}）且 MACD 翻红，纳指100 也站上 MA21 且动能不为负（MACD 翻红 或 DIF 在零轴上方）→ 两条都确认，可以按趋势仓位上限分批加仓`
     : (tier === 'run'
-      ? `触发：${gateInfo.miss.join('、')} → 价格已经破 MA21，按铁律减仓到 ${runPct}%（溢价 ${p == null ? '—' : p.toFixed(1) + '%'} 再低也只是留底仓，不能重仓）`
+      ? `触发：${gateInfo.miss.join('、')} → 价格已经破 MA21，按铁律减仓到 ${runPct}%，未恢复趋势确认前不能重仓`
       : (tier === 'watch'
         ? `还差：${gateInfo.miss.join('、')} → MACD 转弱但价格仍在 MA21 上方，先停止加仓/观察，不直接减仓`
-        : `还差：${gateInfo.miss.join('、')} → 动能已翻红但价格还没站回 MA21，溢价再低也只能试仓 ${tryPct}%`));
+        : `还差：${gateInfo.miss.join('、')} → 动能已翻红但价格还没站回 MA21，只能试仓 ${tryPct}%`));
 
   const usInfo = {
     ok: usOk,
@@ -3971,90 +3880,149 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
     label: usOk ? (last.usDown ? '美股走坏后已止跌确认' : '美股趋势正常') : '美股走坏且未止跌',
     note: usOk
       ? (last.usDown
-        ? `纳指自近 20 日低点已反弹 ${usPct(last.usRebound)}（≥${US_TREND_REPAIR_PCT}%），止跌确认 → 低溢价抄底仓恢复生效`
-        : '纳指在 MA50 上方或 MA50 未下行，趋势健康 → 低溢价抄底仓正常生效')
-      : `纳指 ${last.usClose != null ? last.usClose.toFixed(0) : '—'} 收在 MA50 ${last.usMa50 != null ? last.usMa50.toFixed(0) : '—'} 下方且 MA50 下行（自近 20 日低点 ${usPct(last.usRebound)}）→ 低溢价抄底仓不生效，整体仓位封顶 ${Math.round(POS_US_BAD_CAP * 100)}%`,
+        ? `纳指自近 20 日低点已反弹 ${usPct(last.usRebound)}（≥${US_TREND_REPAIR_PCT}%），中期止跌确认；实际仓位仍按 MACD 与 MA21 门控执行`
+        : '纳指在 MA50 上方或 MA50 未下行，中期趋势健康；实际仓位仍按 MACD 与 MA21 门控执行')
+      : `纳指 ${last.usClose != null ? last.usClose.toFixed(0) : '—'} 收在 MA50 ${last.usMa50 != null ? last.usMa50.toFixed(0) : '—'} 下方且 MA50 下行（自近 20 日低点 ${usPct(last.usRebound)}）；仅作中期参考，不单独封顶仓位`,
   };
 
-  // 动作措辞：趋势破坏 → 真的减；否则即使溢价极高也只是「持有不加仓」
   let action, tone, headline;
+  // 结构化说明（前端按行渲染）：headline 是给人读的一句话，points 是同一件事的拆解。
+  // 恐慌窗口那段原来把「触发日/今日评分/门控/仓位/抬仓条件/宽限」塞进一个段落，
+  // 两百多字连在一起只能整段读，扫不出关键数字——所以拆成带标签的短行。
+  let points = null;
   const prev = series[series.length - 2];
   const changed = prev && Math.abs(last.target - prev.target) >= 0.049;
+  // 恐慌窗口元信息（文案与前端共用）：触发日/评分、今日评分、已延续天数、剩余宽限
+  // 为什么要单列：过去只有 last.panic 一个布尔量，窗口第 3 天、今日评分 1/6 时也被写成
+  // 「触发买入共振信号」，读起来像「今天又恐慌了」。
+  const panicWin = (() => {
+    if (!last.panic || !panic) return null;
+    const ev = Array.isArray(panic.events) ? (panic.events.filter(e => e.open).slice(-1)[0] || null) : null;
+    const cur = panic.current || null;
+    const idx = ev ? series.findIndex(x => x && x.date === ev.date) : -1;
+    const elapsed = idx >= 0 ? (series.length - 1) - idx : null;
+    return {
+      startDate: ev ? ev.date : null,
+      startScore: ev ? ev.score : null,
+      startLevel: ev ? ev.level : null,
+      startPx: ev ? ev.px : null,
+      days: ev ? ev.days : null,
+      ret: ev ? ev.ret : null,
+      todayScore: cur && cur.score != null ? cur.score : null,
+      todayLevel: cur ? cur.level : null,
+      elapsed,
+      graceLeft: elapsed == null ? null : Math.max(0, PANIC_US_GRACE_DAYS - elapsed),
+      fresh: !!(ev && ev.date === last.date),
+      aboveMa21: !!last.panicAdded,
+    };
+  })();
   if (last.panic && last.panicLapsed) {
     // 触发后超过 PANIC_US_GRACE_DAYS 个交易日仍站不回 MA21 → 这是下跌中继，不是恐慌底
     action = `抄底未确认 · 撤回 ${posPct}%`;
     tone = 'warn';
     headline = `恐慌抄底信号已触发超过 ${PANIC_US_GRACE_DAYS} 个交易日，但价格始终站不回 MA21（约 ${last.ma21 != null ? last.ma21.toFixed(3) : 'MA21'}）——`
       + `「利空集中兑现」的判断被证伪，这更像下跌中继（历史上 2026-01-21、2025-03-04 两次各亏 6.1% / 5.4%）。`
-      + `撤回 ${Math.round(POS_PANIC_CAP * 100)}% 的仓位下限，按 ${posPct}% 的防守仓位执行${usInfo.ok ? '' : '（美股仍未止跌，整体封顶 ' + Math.round(POS_US_BAD_CAP * 100) + '%）'}；`
-      + `等重新站上 MA21 或美股止跌确认再补回。`;
+      + `撤回 ${Math.round(POS_PANIC_CAP * 100)}% 的仓位下限，按 ${posPct}% 的防守仓位执行；`
+      + `等重新站上 MA21 并通过重仓门控后再补回。`;
   } else if (last.panic) {
-    const lv = panic && panic.current && panic.current.score >= PANIC_TRIGGER ? `（${panic.current.level}）` : '';
+    const pw = panicWin || {};
+    const fresh = !!pw.fresh;
+    const graceLeft = pw.graceLeft != null ? pw.graceLeft : null;
+    const todayScore = pw.todayScore != null ? pw.todayScore : null;
+    const todayLv = pw.todayLevel || null;
     const ma21Txt = last.ma21 != null ? last.ma21.toFixed(3) : 'MA21';
     // 恐慌层同样遵守重仓铁律：站上 MA21 只是「止跌确认」，要 MACD 翻红（重仓档）才到 85%
     const confirmed = last.panicAdded && tier !== 'run';
     action = confirmed ? (tier === 'heavy' ? `分批重仓 · ${posPct}%` : `恐慌抄底 · ${posPct}%`) : `恐慌试仓 · ${posPct}%`;
     tone = 'buy';
+    const winTxt = pw.startDate
+      ? `恐慌窗口由 ${pw.startDate} 的 ${pw.startScore}/6（${pw.startLevel}）触发，今天是窗口第 ${pw.days} 个交易日（成本 ${pw.startPx}，${pw.ret >= 0 ? '+' : ''}${pw.ret}%）`
+      : '恐慌窗口仍在';
+    const todayTxt = todayScore != null ? `今日恐慌评分 ${todayScore}/6（${todayLv}）` : '';
     headline = confirmed
       ? (tier === 'heavy'
         ? `恐慌抄底已双重确认（站上 MA21 ${ma21Txt} + MACD 翻红）→ 按「分批重仓」补到 ${posPct}%。`
         : `恐慌抄底已获价格确认（站上 MA21 ${ma21Txt}），但 MACD 还没翻红 → 按 ${posPct}% 执行，翻红后再补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%。`)
-      : `触发「买入共振」信号${lv}：多项超卖、回撤等条件达标，但不代表底部或基本面已确认。`
-        + ` 但当前未满足重仓条件（${gateInfo.miss.join('、') || '—'}），按铁律只给 ${posPct}% 试仓档——`
-        + (p != null && p < PREMIUM_ADD
-          ? `溢价 ${p.toFixed(1)}% 低于 15，试仓档放宽到 ${Math.round(POS_TRY_CAP_CHEAP * 100)}%；`
-          : `溢价${p == null ? '偏高' : ` ${p.toFixed(1)}%`} 不低于 15，试仓档压到 ${Math.round(POS_TRY_CAP * 100)}% 以内；`)
-        + `等 MACD 翻红且收盘站上 MA21（${ma21Txt}）再抬仓。`;
+      : (fresh
+        ? `${todayTxt || '今日触发'}：多项超卖、回撤等条件达标，但不代表底部或基本面已确认。`
+        : `${winTxt}；${todayTxt}——窗口还在，但今天不是新的恐慌买点。`)
+        + ` 当前未满足重仓条件（${gateInfo.miss.join('、') || '—'}），按铁律只给 ${posPct}% 试仓档：`
+        + `这是「窗口内允许的上限」，不是必须打到的仓位；它覆盖了减仓档的 ${runPct}%，不认同这是恐慌底就按 ${runPct}% 执行。`
+        + ` 等 MACD 翻红且收盘站上 MA21（${ma21Txt}）再抬仓。`;
     // 仍在非重仓档时，把「有效期」讲清楚——这正是 2026-01~03 一路扛仓的教训
     if (!last.panicAdded && tier !== 'heavy') {
-      headline += ` 注意：若 ${PANIC_US_GRACE_DAYS} 个交易日内仍站不回 MA21，就撤回恐慌下限、按防守仓位执行（2026-01-21 那次扛满 30 天亏 6.1%）。`;
+      headline += graceLeft != null
+        ? ` 宽限还剩 ${graceLeft} 个交易日：届时仍站不回 MA21，就撤回恐慌下限、回到 ${runPct}%（防守仓）执行（2026-01-21 那次扛满 30 天亏 6.1%）。`
+        : ` 注意：若 ${PANIC_US_GRACE_DAYS} 个交易日内仍站不回 MA21，就撤回恐慌下限、按防守仓位执行（2026-01-21 那次扛满 30 天亏 6.1%）。`;
+    }
+    // 未获价格确认时给出结构化拆解（已确认的两档文案本来就短，直接用 headline）
+    if (!confirmed) {
+      const miss = gateInfo.miss.length ? gateInfo.miss.join('、') : '—';
+      points = [
+        { tag: '窗口', text: pw.startDate
+          ? `${pw.startDate} 触发（${pw.startScore}/6 ${pw.startLevel || ''}）· 第 ${pw.days} 个交易日 · 记录成本 ${pw.startPx}（${pw.ret >= 0 ? '+' : ''}${pw.ret}%）`
+          : '恐慌窗口进行中' },
+        { tag: '今日', text: todayScore != null
+          ? `恐慌评分 ${todayScore}/6（${todayLv}）${fresh ? ' · 今日新触发' : ' · 窗口延续，不是新买点'}`
+          : '今日评分不可用', tone: fresh ? 'hot' : 'mute' },
+        { tag: '门控', text: `未满足重仓，还差：${miss}` },
+        { tag: '仓位', text: `${posPct}% 是窗口内上限，覆盖减仓档 ${runPct}%；不认同这是恐慌底就按 ${runPct}% 执行` },
+        { tag: '抬仓', text: `收盘站上 MA21 ${ma21Txt}，且 MACD 翻红 → 才补到 ${Math.round(POS_PANIC_CAP * 100)}% / ${Math.round(POS_PANIC_CAP_ADD * 100)}%` },
+        { tag: '时效', text: graceLeft != null
+          ? `宽限还剩 ${graceLeft} 个交易日，逾期仍站不回 MA21 → 撤回下限、回到 ${runPct}%`
+          : `${PANIC_US_GRACE_DAYS} 个交易日内站不回 MA21 → 撤回下限` },
+      ];
     }
   } else if (tier === 'run') {
     const prevPos = prev ? Math.round(prev.target * 100) : null;
     action = `减仓跑路 · ${posPct}%`; tone = 'danger';
     headline = `${gateInfo.miss.join('、')}——价格已经破 MA21，按重仓铁律减仓，先降到 ${posPct}%${prevPos != null && prevPos > posPct ? `（昨日 ${prevPos}%）` : ''}。`
-      + `溢价${p == null ? '偏低' : ` ${p.toFixed(1)}%（${zone.label}）`}只说明「有性价比」，不构成重仓理由；`
+      + '溢价仅供参考，不改变破位风控；'
       + `等 ETF MACD 重新翻红且收盘站回 MA21（${ma21Txt0}）才谈加仓。`;
+    points = [
+      { tag: '门控', text: `破位：${gateInfo.miss.join('、') || 'MACD 翻绿且跌破 MA21'}` },
+      { tag: '仓位', text: `降到 ${posPct}%${prevPos != null && prevPos > posPct ? `（昨日 ${prevPos}%）` : ''}，只留防守底仓` },
+      { tag: '抬仓', text: `ETF MACD 重新翻红，且收盘站回 MA21 ${ma21Txt0}` },
+      { tag: '溢价', text: `当前 ${p == null ? '—' : p.toFixed(2) + '%'}（${zone.label}），仅参考，不改变破位风控`, },
+    ];
   } else if (tier === 'watch') {
     action = `持有观察 · ${posPct}%`; tone = 'warn';
     headline = `${gateInfo.miss.join('、')}——只是动能转弱，价格仍在 MA21（${ma21Txt0}）上方，先停止加仓、不直接减仓；若 MACD 翻绿并跌破 MA21，再降到减仓档。`;
+    points = [
+      { tag: '门控', text: `动能转弱：${gateInfo.miss.join('、') || 'MACD 翻绿'}，但价格仍在 MA21 ${ma21Txt0} 上方` },
+      { tag: '仓位', text: `停止加仓，维持 ${posPct}%（非重仓档上限 ${Math.round(POS_MAX_NOT_HEAVY * 100)}%）` },
+      { tag: '减仓线', text: `MACD 翻绿且跌破 MA21 → 降到减仓档（${runPct}%）` },
+    ];
   } else if (tier === 'try') {
     action = `只可试仓 · ${posPct}%`; tone = 'warn';
     headline = `${gateInfo.miss.join('、')}——还没满足「MACD 翻红 + 站上 MA21」这个重仓的唯一条件，`
-      + `溢价${p == null ? '偏低' : ` ${p.toFixed(1)}%（${zone.label}）`}再低也只能小仓试错：按 ${posPct}% 以内分批，`
-      + `等收盘站回 MA21（${ma21Txt0}）再抬到 ${Math.round(POS_DIP_CAP_BUY * 100)}~${Math.round(POS_DIP_CAP_CHEAP * 100)}%。`;
+      + `只可按 ${posPct}% 以内分批试错，`
+      + `等收盘站回 MA21（${ma21Txt0}）且通过重仓门控后再抬仓。`;
+    points = [
+      { tag: '门控', text: `动能已恢复，但价格还没站回 MA21：${gateInfo.miss.join('、') || '—'}` },
+      { tag: '仓位', text: `≤ ${posPct}% 分批试错，不一次打满` },
+      { tag: '抬仓', text: `收盘站回 MA21 ${ma21Txt0} 且通过重仓门控` },
+    ];
   } else if (!up) {
-    const cheapDip = p != null && p < PREMIUM_BUY;
-    action = cheapDip && posPct >= 50 ? `留 ${posPct}% 抄底仓` : `减仓至 ${posPct}%`;
-    tone = cheapDip && posPct >= 50 ? 'buy' : 'danger';
+    action = `减仓至 ${posPct}%`;
+    tone = 'danger';
     headline = `趋势已破坏（连续 ${last.belowDays} 日收在 MA21 缓冲带下方${last.ma60 != null && last.close < last.ma60 ? '，且跌破 MA60' : ''}）`
-      + (cheapDip
-        ? `，但溢价只有 ${p.toFixed(1)}%（${zone.label}）——便宜本身就是安全垫，可以留 ${posPct}% 抄底仓，等重新站回 MA21 上方再补。`
-        : `，先把仓位降到 ${posPct}% 以内，等重新站回 MA21 上方再考虑加回。`);
+      + `，先把仓位降到 ${posPct}% 以内，等重新站回 MA21 上方再考虑加回。`;
   } else if (changed && last.target > prev.target) {
     action = `加仓至 ${posPct}%`; tone = 'buy';
-    headline = `趋势向上 + 溢价落到 ${zone.label}，仓位上限放开到 ${posPct}%，可分批补到该仓位。`;
+    headline = `趋势条件改善，仓位上限放开到 ${posPct}%，可在回踩确认后分批补到该仓位。`;
   } else if (changed && last.target < prev.target) {
     action = `减仓至 ${posPct}%`; tone = 'warn';
-    headline = `溢价升到 ${zone.label}，仓位上限下调到 ${posPct}%；趋势未破坏，减的是仓位不是清仓。`;
+    headline = `趋势条件转弱，仓位上限下调到 ${posPct}%；按当前趋势档位控制仓位。`;
   } else if (posPct >= 95) {
     action = '维持满仓'; tone = 'hold';
-    headline = `趋势向上、溢价 ${zone.label}，维持满仓；跌破 MA21 缓冲带连续 3 日再减。`;
+    headline = '趋势向上且重仓门控已确认，维持目标仓位；跌破 MA21 缓冲带连续 3 日再减。';
   } else {
     action = `持有 ${posPct}%`; tone = 'hold';
-    headline = `趋势向上但溢价 ${zone.label}（${p == null ? '—' : p.toFixed(1) + '%'}），仓位上限 ${posPct}%：持有不加仓，跌只加不追涨。`;
+    headline = `趋势向上，当前趋势仓位上限 ${posPct}%；按回踩确认分批执行，不追涨。`;
   }
 
-  // 空仓者入场节奏：目标仓位 ≠ 一次性满上。高溢价区买入的 20 日期望为负
-  //（本 ETF 高溢价段后 20 日平均 -3.8%），所以高溢价时只「分批建仓 + 等回调」。
-  let entryNote;
-  if (p != null && p >= PREMIUM_DANGER) {
-    entryNote = `若当前空仓：溢价 ${p.toFixed(1)}% 属历史极高区，不建议一次性买入。以「每次 1 成、逢回调加一次」分批建立，等溢价回落到 ${PREMIUM_WATCH}% 以下（约 ${iopv ? (iopv * (1 + PREMIUM_WATCH / 100)).toFixed(3) + ' 元' : '按 IOPV 折算'}）或价格回踩 MA21，再把仓位补到 ${posPct}%。`;
-  } else if (p != null && p >= PREMIUM_WATCH) {
-    entryNote = `若当前空仓：溢价 ${p.toFixed(1)}% 偏高，可按 ${posPct}% 上限分 2~3 批建仓，别一次打满；溢价回落到 ${PREMIUM_WATCH}% 以下再加。`;
-  } else {
-    entryNote = `若当前空仓：溢价 ${zone.label}，可直接按 ${posPct}% 上限建仓。`;
-  }
+  const entryNote = `若当前空仓：按 ${posPct}% 目标仓位分 2~3 批执行，等待回踩与止跌确认，不一次打满；溢价仅供参考，不限制仓位。`;
 
   // 触发价位
   const triggers = [];
@@ -4072,22 +4040,7 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
       tone: gt.etfAbove === false ? 'warn' : 'ref',
     });
   }
-  if (last.ma60 != null) triggers.push({ label: 'MA60（趋势生命线）', price: last.ma60, note: '跌破则趋势上限降到 60%（再乘溢价系数）', tone: 'warn' });
-  if (iopv) {
-    triggers.push({
-      label: `加仓价 · 溢价 ${PREMIUM_ADD}%`,
-      price: +(iopv * (1 + PREMIUM_ADD / 100)).toFixed(3),
-      note: tier === 'heavy' ? `低于此价且重仓条件已满足 → 可加到 ${Math.round(POS_DIP_CAP_CHEAP * 100)}%`
-        : `低于此价也先别重仓：未满足「MACD 翻红 + 站上 MA21」，按 ${posPct}% 以内分批`,
-      tone: tier === 'heavy' ? 'buy' : 'warn',
-    });
-    triggers.push({
-      label: `买入价 · 溢价 ${PREMIUM_BUY}%`,
-      price: +(iopv * (1 + PREMIUM_BUY / 100)).toFixed(3),
-      note: tier === 'heavy' ? '低于此价可加到九成' : `重仓条件未满足 → 溢价 ≥15% 只加到 ${Math.round(POS_TRY_CAP * 100)}%、<15% 也只到 ${Math.round(POS_TRY_CAP_CHEAP * 100)}%`,
-      tone: tier === 'heavy' ? 'buy' : 'warn',
-    });
-  }
+  if (last.ma60 != null) triggers.push({ label: 'MA60（趋势生命线）', price: last.ma60, note: '跌破则趋势上限降到 60%', tone: 'warn' });
   // 纳指 100：重仓的两个前提之一（站上 MA21 + MACD 不能翻绿）
   if (gateInfo.usClose != null && gateInfo.usMa21 != null) {
     const dvTxt = gateInfo.usDif != null ? gateInfo.usDif.toFixed(0) : '—';
@@ -4132,35 +4085,28 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
     from: first.date,
   };
 
-  // 趋势上限的构成说明（含低溢价抄底仓的抬高；抄底仓必须叠加美股趋势确认）
   const baseCap = last.cap;
-  const trendCap = up ? (last.ma60 != null && last.close < last.ma60 ? 0.6 : 1.0) : 0.3;
-  const dipLiftBase = p != null && p < PREMIUM_ADD ? POS_DIP_CAP_CHEAP : (p != null && p < PREMIUM_BUY ? POS_DIP_CAP_BUY : null);
-  const cheapTxt = dipLiftBase != null ? `溢价 ${p.toFixed(1)}% 虽属便宜区（重仓档可给 ${Math.round(dipLiftBase * 100)}%）` : '溢价再低';
   const capNote = last.panic
     ? (last.panicLapsed
         ? `恐慌抄底已触发超过 ${PANIC_US_GRACE_DAYS} 个交易日但仍站不回 MA21 → 撤回 ${Math.round(POS_PANIC_CAP * 100)}% 下限，按 ${posPct}% 的防守仓位执行`
         : last.panicAdded && tier !== 'run'
-          ? `恐慌抄底已获价格确认（站上 MA21）→ ${tier === 'heavy' ? `MACD 也翻红，补到 ${Math.round(POS_PANIC_CAP_ADD * 100)}%` : `${tier === 'watch' ? 'MACD 转弱但尚未破位' : 'MACD 未翻红'}，${Math.round(POS_PANIC_CAP * 100)}% 为限`}`
-          : `触发恐慌抄底信号 → 未满足重仓条件，按 ${posPct}% 防守仓位打底（不因溢价低而重仓）`)
+          ? `恐慌抄底已获价格确认（站上 MA21）→ ${tier === 'heavy' ? `MACD 也翻红，按 ${posPct}% 目标仓位执行` : `${tier === 'watch' ? 'MACD 转弱但尚未破位' : 'MACD 未翻红'}，按 ${posPct}% 目标仓位执行`}`
+          : `恐慌窗口内（${panicWin && panicWin.startDate ? panicWin.startDate + ' 起' : '进行中'}）仍未站上 MA21 → 按 ${posPct}% 试仓档执行；该档覆盖减仓档 ${runPct}%，不认同恐慌底就按 ${runPct}%`)
     : tier === 'run'
-      ? `${gateInfo.miss.join('、')} → 减仓档 ${runPct}%（乘溢价系数后 ${posPct}%）：${cheapTxt}，但价格已破 MA21，不能重仓`
+      ? `${gateInfo.miss.join('、')} → 减仓档上限 ${runPct}%，当前目标 ${posPct}%，价格已破 MA21，不能重仓`
       : tier === 'watch'
         ? `${gateInfo.miss.join('、')} → 动能观察档：价格仍在 MA21 上方，只停止加仓，不因 MACD 单独翻绿直接减仓`
         : tier === 'try'
-          ? `${gateInfo.miss.join('、')} → 试仓档 ${tryPct}%（乘溢价系数后 ${posPct}%）：${cheapTxt}也只是从 ${Math.round(POS_TRY_CAP * 100)}% 放宽到 ${Math.round(POS_TRY_CAP_CHEAP * 100)}%，远不到重仓；收盘站回 MA21（${ma21Txt0}）且 MACD 翻红才抬到 ${Math.round(POS_DIP_CAP_BUY * 100)}~${Math.round(POS_DIP_CAP_CHEAP * 100)}%`
-          : (dipLiftBase != null && dipLiftBase > trendCap)
-            ? `重仓条件已满足（MACD 翻红 + 站上 MA21）→ 趋势基准上限 ${Math.round(trendCap * 100)}%，溢价 ${p.toFixed(1)}% 属便宜区 → 抬高到 ${Math.round(dipLiftBase * 100)}% 的抄底仓`
-            : `重仓条件已满足 → ${up ? '趋势向上' : '趋势破坏'}，基准上限 ${Math.round(trendCap * 100)}%（再乘溢价系数）`;
+          ? `${gateInfo.miss.join('、')} → 试仓档上限 ${tryPct}%，当前目标 ${posPct}%；收盘站回 MA21（${ma21Txt0}）且 MACD 翻红后才允许抬仓`
+          : `重仓条件已满足 → ${up ? '趋势向上' : '趋势破坏'}，当前趋势上限 ${Math.round(baseCap * 100)}%；溢价不限制仓位`;
 
   return {
-    action, tone, headline, entryNote, capNote, panic: last.panic, tier, gate: gateInfo,
+    action, tone, headline, points, entryNote, capNote, panic: last.panic, panicWindow: panicWin, tier, gate: gateInfo,
     state: last.state, stateLabel: up ? '趋势向上' : '趋势破坏',
     bull: last.bull, posPct, target: last.target,
     capTrend: baseCap, premiumFactor: last.factor, premium: p, premiumZone: zone,
     ma21: last.ma21, ma60: last.ma60, close: last.close, belowDays: last.belowDays, intraday: last.intraday,
     factorTable: POS_FACTOR_TABLE.map(x => ({ ...x, active: last.factor === x.factor })),
-    // 美股趋势确认（低溢价能否抬仓的前提）：供前端仓位卡直接展示
     usTrend: usInfo,
     triggers, backtest,
     // 逐日序列：供前端「仓位阶梯图」与历史查看（近 120 个交易日）
@@ -4170,7 +4116,7 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
 
 // 历史回溯：全区间最佳买卖点 + 多指标策略对比（含每套策略的实际交易日期）
 //  · bestBuys/bestSells：事后最优（后视镜视角，用于看清「什么样的位置才是好位置」）
-//  · signalBuys：策略可捕捉的买点（MACD 买入信号 ∩ 溢价 ≤18%）
+//  · signalBuys：MACD 买入信号，不按溢价筛选
 //  · backtest：覆盖 溢价 / MACD / RSI / KDJ / 威廉%R / 布林带 / 均线 / ATR 止损 / 仓位分级
 //    共 20+ 套规则；每套附 tradeLog —— 真正出手的日期、价格、单笔收益、持有天数，
 //    前端可点击策略行展开「符合条件交易的所有日期」。
@@ -4247,9 +4193,8 @@ function buildEtfHistoryReview(klines, navMap, signals) {
   const premSorted = rows.map(r => r.premium).filter(v => v != null).sort((a, b) => a - b);
   const pq = q => premSorted.length ? premSorted[Math.min(premSorted.length - 1, Math.round(q * (premSorted.length - 1)))] : null;
 
-  // 策略可捕捉的买点：MACD 买入信号且当时溢价 ≤18%
   const signalBuys = (signals || [])
-    .filter(s => s.side === 'buy' && s.idx < n && premAt(s.idx) != null && premAt(s.idx) <= PREMIUM_BUY)
+    .filter(s => s.side === 'buy' && s.idx < n)
     .map(s => ({ date: s.date, close: s.close, label: s.label, premium: premAt(s.idx), r20: fwdRet(s.idx, 20), r60: fwdRet(s.idx, 60) }))
     .slice(-8);
 
@@ -4540,6 +4485,9 @@ function etfIntradayBar(klines, price, todayStr) {
 function etfLiveMacdBars(data, klines, today, now = new Date()) {
   const quote = data.quote;
   const last = klines[klines.length - 1];
+  // 磁盘兜底的 K 线可能已落后数日：不是今天落盘的缓存不做盘中柱估算，
+  // 否则会拿过期 MACD 基线算出假的「盘中翻红/翻绿」信号
+  if (data.diskSavedAt && String(data.diskSavedAt).slice(0, 10) !== today) return { bars: data.bars, todayBar: null };
   const minute = now.toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour12: false }).slice(0, 5);
   const provisional = minute < '15:00';
   const useQuote = data.session.realtime && quote && quote.quoteDate === today && quote.volume > 0
@@ -4553,8 +4501,7 @@ function etfLiveMacdBars(data, klines, today, now = new Date()) {
   return { bars: bars.slice(-60), todayBar };
 }
 
-// 每日操作建议：溢价率档位（一级决策变量）× 技术面 × 持仓
-// 决策顺序：① 溢价减仓区（>27%）→ ② 技术面转空 → ③ 加仓/买入区 → ④ 观望区 → ⑤ 兜底
+// 每日操作建议以趋势与仓位计划为准，溢价仅供参考。
 function buildEtfAdvice(ctx) {
   const { quote, ind, lastSignal, pos, todayBar, signals } = ctx;
   const premium = quote.premiumPct;
@@ -4562,49 +4509,31 @@ function buildEtfAdvice(ctx) {
   const iopv = quote.iopv;
   const price = quote.price != null ? quote.price : ind.price;
   const reasons = [];
+  // 理由带 rank（越大越靠前），返回前排序：趋势门控 → 当日动能 → 最近信号 → 溢价参考。
+  // 之前固定是「溢价、技术面、信号、盘中柱」的追加顺序，读起来像一堆并列信息，
+  // 分不清哪条真正决定了今天的动作；溢价还会被误读成买卖理由（它只解释贵不贵）。
+  const addReason = (key, rank, item) => reasons.push({ key, rank, ...item });
 
   const techBull = ind.price > ind.ma21 && ind.bar > 0;
   const techBear = ind.price < ind.ma21 && ind.bar < 0;
   const buySide = lastSignal && lastSignal.side === 'buy';
   const sellSide = lastSignal && lastSignal.side === 'sell';
 
-  // 溢价档位对应的挂单价 + 现价距买入线还有多远
-  const ladder = premiumPriceLadder(iopv);
-  const buyPrice = ladder ? ladder.buy.price : null;
-  const addPrice = ladder ? ladder.add.price : null;
-  const toBuyPct = (buyPrice && price) ? (price / buyPrice - 1) * 100 : null;
-  const toAddPct = (addPrice && price) ? (price / addPrice - 1) * 100 : null;
-
-  reasons.push({
-    tone: (zone.key === 'add' || zone.key === 'buy') ? 'good' : zone.key === 'watch' ? 'neutral' : zone.key === 'unknown' ? 'neutral' : 'bad',
-    label: `溢价 ${zone.label}`,
-    text: premium != null
-      ? `场内价 ${price.toFixed(3)} / IOPV ${iopv != null ? iopv.toFixed(4) : '—'} = 溢价 ${premium.toFixed(2)}%（买入线 ${PREMIUM_BUY}% · 加仓线 ${PREMIUM_ADD}%）`
-      : '溢价数据缺失',
+  addReason('premium', 10, {
+    ref: true,
+    tone: 'neutral',
+    label: `溢价 ${zone.label}（仅参考）`,
+    text: Number.isFinite(premium)
+      ? `场内价 ${price.toFixed(3)} / IOPV ${iopv != null ? iopv.toFixed(4) : '—'} = 溢价 ${premium.toFixed(2)}%；不限制买卖或仓位，仍需注意溢价回落风险`
+      : '溢价数据缺失，不影响趋势和价格风控判断',
   });
-  if (toBuyPct != null && toBuyPct > 0) {
-    reasons.push({
-      tone: 'neutral',
-      label: '距买入线',
-      text: `现价 ${price.toFixed(3)} 比买入价 ${buyPrice.toFixed(3)}（溢价 ${PREMIUM_BUY}%）贵 ${toBuyPct.toFixed(2)}%`
-        + (toAddPct != null && toAddPct > 0 ? `，比加仓价 ${addPrice.toFixed(3)}（溢价 ${PREMIUM_ADD}%）贵 ${toAddPct.toFixed(2)}%` : '')
-        + '；要么等价格回落，要么等溢价收敛',
-    });
-  } else if (toBuyPct != null) {
-    reasons.push({
-      tone: 'good',
-      label: '已达买入线',
-      text: `现价 ${price.toFixed(3)} 低于买入价 ${buyPrice.toFixed(3)}（溢价 ${PREMIUM_BUY}%）${Math.abs(toBuyPct).toFixed(2)}%`
-        + (toAddPct != null && toAddPct <= 0 ? `，且已低于加仓价 ${addPrice.toFixed(3)}（溢价 ${PREMIUM_ADD}%），可加大买入力度` : ''),
-    });
-  }
-  reasons.push({
+  addReason('tech', 100, {
     tone: techBull ? 'good' : techBear ? 'bad' : 'neutral',
     label: '技术面',
     text: `价格${ind.price > ind.ma21 ? '站上' : '跌破'} MA21(${ind.ma21 != null ? ind.ma21.toFixed(3) : '—'})，MACD ${ind.bar >= 0 ? '红柱 +' : '绿柱 '}${ind.bar.toFixed(3)}`,
   });
   if (lastSignal) {
-    reasons.push({
+    addReason('signal', 60, {
       tone: buySide ? 'good' : 'bad',
       label: `最近信号 ${lastSignal.label}`,
       text: `${lastSignal.date} @ ${lastSignal.close.toFixed(3)}，建议${lastSignal.action}；此后${lastSignal.sinceRetPct >= 0 ? '涨' : '跌'} ${Math.abs(lastSignal.sinceRetPct).toFixed(2)}%`,
@@ -4613,20 +4542,14 @@ function buildEtfAdvice(ctx) {
   if (todayBar && todayBar.isToday) {
     const flip = todayBar.prevBar <= 0 && todayBar.bar > 0 ? '翻红'
       : todayBar.prevBar >= 0 && todayBar.bar < 0 ? '翻绿' : '延续';
-    reasons.push({
+    addReason('intraday', 80, {
       tone: flip === '翻红' ? 'good' : flip === '翻绿' ? 'bad' : 'neutral',
       label: '盘中柱',
       text: `现价估算今日 MACD 柱 ${todayBar.bar >= 0 ? '+' : ''}${todayBar.bar.toFixed(3)}（${flip}）`,
     });
   }
+  reasons.sort((x, y) => y.rank - x.rank);
 
-  // ── 买点确认：溢价达标之外，再确认「没有在冲高」──
-  // 回测依据（scripts/etf-indicator-study.js，764 个交易日）：
-  //   · 溢价 ≤18% 单独用 → 年化 56.1% / Calmar 1.84；
-  //   · 叠加一个「不追高」过滤（威廉%R≤-60 / 价格<MA21 / 价格<布林中轨，三者效果几乎一致）
-  //     → 年化 57.6% / Calmar 1.89，且 3 年只交易 6 次（不增加操作频率）。
-  //   · 溢价 18~22% 区间买入的未来 20 日期望收益为 -0.91%（胜率 39%），故溢价未达标时不谈买点。
-  //   · 这些指标只用来过滤买点，不生成卖出信号——回测中按 RSI>70 等卖出会卖飞主升浪。
   const filterDefs = [
     {
       key: 'willr', label: '威廉%R ≤ -60', ok: ind.willR != null && ind.willR <= -60,
@@ -4641,101 +4564,39 @@ function buildEtfAdvice(ctx) {
       value: ind.bollMid != null ? `${price.toFixed(3)} vs ${ind.bollMid.toFixed(3)}` : '—', hint: '20 日均线中轨下方',
     },
   ];
-  const premiumOk = premium != null && premium <= PREMIUM_BUY;
   const hitFilters = filterDefs.filter(f => f.ok);
   const confirm = {
-    premiumOk,
     filters: filterDefs,
     hit: hitFilters.map(f => f.label),
     hitCount: hitFilters.length,
-    level: !premiumOk ? 'none' : hitFilters.length ? 'good' : 'chasing',
-    note: !premiumOk
-      ? '溢价未达买入线，先等价格回落或溢价收敛（历史分档：溢价 18~22% 区间买入的未来 20 日期望收益为 -0.91%）'
-      : hitFilters.length
-        ? `溢价已达标，且「${hitFilters.map(f => f.label).join('、')}」命中——回测中期望收益最好的买点形态，可分批买入`
-        : '溢价已达标，但价格仍在冲高（三项过滤器均未命中）；回测显示此时买入的短期期望收益偏低，建议先下一笔、留足子弹',
+    level: hitFilters.length ? 'good' : 'chasing',
+    note: hitFilters.length
+      ? `「${hitFilters.map(f => f.label).join('、')}」命中回调过滤，仍需按趋势与仓位上限分批执行；溢价仅供参考`
+      : '三项回调过滤均未命中，价格仍在冲高，等待回踩确认，不因取消溢价限制而追涨',
   };
 
   let level = 'wait';
   let action = '观望';
   let headline = '';
   const held = !!(pos && pos.shares > 0);
-  const inBuyZone = zone.key === 'add' || zone.key === 'buy';
-  const pctTxt = premium != null ? premium.toFixed(1) : '—';
-  const buyTxt = buyPrice ? buyPrice.toFixed(3) : '—';
-  const addTxt = addPrice ? addPrice.toFixed(3) : '—';
-
-  if (zone.key === 'exit') {
-    // 溢价 >27%：溢价风险压倒一切
-    if (held) {
-      level = 'danger'; action = '减仓';
-      headline = `溢价 ${pctTxt}% 已进「极高」区（>${PREMIUM_DANGER}%），建议减仓，规避溢价回落`;
-    } else {
-      level = 'wait'; action = '观望（不买入）';
-      headline = `溢价 ${pctTxt}% 属极高区间，坚决不追高；等回到 ${buyTxt} 以下再谈买入`;
-    }
-  } else if (held && sellSide && ind.price < ind.ma21) {
-    level = 'danger'; action = '减仓 / 清仓';
-    headline = `技术面转空（${lastSignal.label}）且跌破 MA21，建议减仓`
-      + (inBuyZone ? `（溢价 ${pctTxt}% 虽已达标，但趋势先破位，先减仓等企稳）` : '');
-  } else if (zone.key === 'avoid') {
-    if (held) {
-      level = 'warn'; action = '减仓（暂停加仓）';
-      headline = `溢价 ${pctTxt}% 高于警戒线 ${PREMIUM_WATCH}%，持有者可分批减仓，不宜再加仓`;
-    } else {
-      level = 'wait'; action = '观望（不买入）';
-      headline = `溢价 ${pctTxt}% 高于警戒线 ${PREMIUM_WATCH}%，等回落至 ${buyTxt}（溢价 ${PREMIUM_BUY}%）再买入`;
-    }
-  } else if (inBuyZone) {
-    const strong = zone.key === 'add';
-    if (held) {
-      level = 'buy';
-      action = strong ? '加仓（多买）' : '持有 / 小幅加仓';
-      headline = strong
-        ? `溢价 ${pctTxt}% 已低于加仓线 ${PREMIUM_ADD}%（对应价 ${addTxt}），可加大买入力度`
-        : `溢价 ${pctTxt}% 在买入区（${PREMIUM_ADD}~${PREMIUM_BUY}%），持有并可小幅加仓`;
-    } else if (techBear) {
-      level = 'warn'; action = '小仓试探';
-      headline = `溢价 ${pctTxt}% 已到${strong ? '加仓线' : '买入线'}以下，但技术面偏空（跌破 MA21 且绿柱），建议首笔半仓、留足子弹`;
-    } else if (!techBull && !buySide) {
-      level = 'warn'; action = '分批建仓';
-      headline = `溢价 ${pctTxt}% 已进${zone.label}，趋势未确认，建议分批小仓介入`;
-    } else {
-      level = 'buy';
-      action = strong ? '多买（加仓）' : '分批买入';
-      headline = strong
-        ? `溢价 ${pctTxt}% 已低于加仓线 ${PREMIUM_ADD}%（对应价 ${addTxt}），可加大买入力度`
-        : `溢价 ${pctTxt}% 低于买入线 ${PREMIUM_BUY}%（对应价 ${buyTxt}），技术面配合，可分批买入`;
-    }
-  } else if (zone.key === 'watch') {
-    if (held) {
-      level = 'hold'; action = '持有（不加仓）';
-      headline = `溢价 ${pctTxt}% 略高于买入线 ${PREMIUM_BUY}%，持有不加仓，等回到 ${buyTxt} 以下`;
-    } else {
-      level = 'wait'; action = '观望';
-      headline = `溢价 ${pctTxt}% 仍高于买入线 ${PREMIUM_BUY}%，等跌到 ${buyTxt}（或溢价收敛）再买`;
-    }
+  const plan = ctx.positionPlan;
+  if (plan) {
+    action = plan.action;
+    headline = plan.headline;
+    level = plan.tone === 'danger' ? 'danger' : plan.tone === 'warn' ? 'warn' : plan.tone === 'buy' ? 'buy' : 'hold';
+  } else if (techBear || sellSide && ind.price < ind.ma21) {
+    level = held ? 'danger' : 'wait';
+    action = held ? '减仓 / 清仓' : '观望';
+    headline = '技术面转空且价格跌破 MA21，先控制风险，等待企稳。';
+  } else if (techBull && hitFilters.length) {
+    level = 'buy'; action = held ? '持有 / 分批加仓' : '分批买入';
+    headline = '趋势与回调过滤配合，可分批执行，仍需遵守总仓位上限。';
   } else {
-    // 溢价数据缺失：退回纯技术面判断
-    if (held && techBull) {
-      level = 'hold'; action = '持有';
-      headline = '多头趋势延续，继续持有（溢价数据缺失，注意自行核对溢价）';
-    } else if (held && techBear) {
-      level = 'warn'; action = '减仓';
-      headline = '价格跌破 MA21 且 MACD 绿柱，建议逐步减仓';
-    } else if (held) {
-      level = 'hold'; action = '持有观察';
-      headline = '趋势未明确，持有并关注 MA21 与溢价变化';
-    } else if (sellSide) {
-      level = 'wait'; action = '观望';
-      headline = '技术面偏空，等待新的买入信号';
-    } else {
-      level = 'wait'; action = '观望';
-      headline = '溢价数据缺失，暂不判断';
-    }
+    level = held ? 'hold' : 'wait'; action = held ? '持有观察' : '观望';
+    headline = buySide ? '已有买入信号，等待当前回调与趋势确认，不追涨。' : '等待趋势与回调确认，溢价不再作为买卖限制。';
   }
 
-  return { level, action, headline, reasons, held, zone: zone.key, confirm };
+  return { level, action, headline, points: plan ? (plan.points || null) : null, reasons, held, zone: zone.key, confirm };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -4797,11 +4658,14 @@ function unpricedUsMove(history, anchorDate, regular, extended, cumulative, mode
 }
 
 function buildPremarketHistoryReview(klines, usIdx, qqqMovePct, beforeDate) {
-  if (!Array.isArray(klines) || klines.length < 60 || !usIdx || !usIdx.qqq || qqqMovePct == null || !isFinite(qqqMovePct) || qqqMovePct >= 0) return null;
+  // 双向匹配：QQQ 跌幅日看次日"还能跌多深"（low），涨幅日看次日"还能冲多高"（high）。
+  // 涨幅回顾仅作卖档的展示参考，不自动校准档位（服务端校准与样本不足提示均以 dir==='down' 门控）。
+  if (!Array.isArray(klines) || klines.length < 60 || !usIdx || !usIdx.qqq || qqqMovePct == null || !isFinite(qqqMovePct)) return null;
+  const dir = qqqMovePct < 0 ? 'down' : 'up';
   const q = usIdx.qqq;
   if (!Array.isArray(q.dates) || !q.ret) return null;
-  const lo = qqqMovePct * 1.3;
-  const hi = qqqMovePct * 0.7;
+  const lo = Math.min(qqqMovePct * 0.7, qqqMovePct * 1.3);
+  const hi = Math.max(qqqMovePct * 0.7, qqqMovePct * 1.3);
   const cutoff = (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 2); return d.toISOString().slice(0, 10); })();
   const nextEtfAfter = (d) => {
     let loIdx = 0, hiIdx = klines.length - 1, ans = -1;
@@ -4822,19 +4686,23 @@ function buildPremarketHistoryReview(klines, usIdx, qqqMovePct, beforeDate) {
     if (i < 1 || klines[i].date > lastEtfDate || (beforeDate && klines[i].date >= beforeDate)) continue;
     const prevClose = klines[i - 1].close;
     const row = klines[i];
-    if (!(prevClose > 0) || !(row.close > 0) || !(row.low > 0)) continue;
+    if (!(prevClose > 0) || !(row.close > 0) || !(row.low > 0) || !(row.high > 0)) continue;
     if (rows.some(r => r.etfDate === row.date)) continue;
     rows.push({
       qqqDate: d,
       qqqMove: move,
       etfDate: row.date,
+      openPct: row.open > 0 ? +((row.open / prevClose - 1) * 100).toFixed(2) : null,
       closePct: +((row.close / prevClose - 1) * 100).toFixed(2),
       lowPct: +((row.low / prevClose - 1) * 100).toFixed(2),
+      highPct: +((row.high / prevClose - 1) * 100).toFixed(2),
+      open: row.open > 0 ? +row.open.toFixed(3) : null,
       close: +row.close.toFixed(3),
       low: +row.low.toFixed(3),
+      high: +row.high.toFixed(3),
     });
   }
-  if (!rows.length) return { target: +qqqMovePct.toFixed(2), range: { lo: +lo.toFixed(2), hi: +hi.toFixed(2) }, period: '近2年', count: 0, samples: [] };
+  if (!rows.length) return { dir, target: +qqqMovePct.toFixed(2), range: { lo: +lo.toFixed(2), hi: +hi.toFixed(2) }, period: '近2年', count: 0, samples: [] };
   const avg = arr => +(arr.reduce((s, v) => s + v, 0) / arr.length).toFixed(2);
   const quantile = (arr, qv) => {
     const a = [...arr].sort((a, b) => a - b);
@@ -4843,14 +4711,17 @@ function buildPremarketHistoryReview(klines, usIdx, qqqMovePct, beforeDate) {
   };
   const closeP = rows.map(r => r.closePct);
   const lowP = rows.map(r => r.lowPct);
+  const highP = rows.map(r => r.highPct);
   const samples = [...rows].sort((a, b) => Math.abs(a.qqqMove - qqqMovePct) - Math.abs(b.qqqMove - qqqMovePct)).slice(0, 5);
   return {
+    dir,
     target: +qqqMovePct.toFixed(2),
     range: { lo: +lo.toFixed(2), hi: +hi.toFixed(2) },
     period: '近2年',
     count: rows.length,
     close: { avg: avg(closeP), median: quantile(closeP, 0.5), worst: Math.min(...closeP), best: Math.max(...closeP) },
     low: { avg: avg(lowP), median: quantile(lowP, 0.5), worst: Math.min(...lowP), best: Math.max(...lowP) },
+    high: { avg: avg(highP), median: quantile(highP, 0.5), worst: Math.min(...highP), best: Math.max(...highP) },
     samples,
   };
 }
@@ -4961,7 +4832,7 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
     b1 -= deepen; b2 -= deepen; b3 -= deepen; b4 -= deepen; b5 -= deepen;
     buyReasons.push(`昨日盘中 ${usRegPct.toFixed(2)}% + 今日盘外 ${usPrePct.toFixed(2)}% 双段同向下跌，二次探底买点下移 ${deepen.toFixed(2)}%`);
   }
-  if (historyReview && historyReview.count >= 5 && historyReview.low) {
+  if (historyReview && historyReview.dir === 'down' && historyReview.count >= 5 && historyReview.low) {
     const hMed = historyReview.low.median;
     const hAvg = historyReview.low.avg;
     const hWorst = historyReview.low.worst;
@@ -4989,10 +4860,7 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
   b4 = Math.max(Math.min(b4, b3 - 0.2), -9.5);
   b5 = Math.max(Math.min(b5, b4 - 0.2), -10);
 
-  // 高溢价（≥22% 观望区）：日内预留资金同比例减半，金字塔比例不变
-  const posScale = (premium != null && premium >= PREMIUM_WATCH) ? 0.5 : 1;
-  const scaledPos = [20, 30, 50, 75, 100].map(v => Math.round(v * posScale));
-  if (posScale < 1) buyReasons.push(`溢价 ${premium.toFixed(1)}% ≥${PREMIUM_WATCH}%，日内仓位减半（最高 ${scaledPos[4]}%）`);
+  const scaledPos = [20, 30, 50, 75, 100];
 
   const buyLabels = hasYesterday
     ? [`预期开盘小幅回踩`, `昨日开盘位（${yOpenPct.toFixed(2)}%）`, `昨日最低（${yLowPct.toFixed(2)}%）`, '历史相似深水区', '极端恐慌预留']
@@ -5093,7 +4961,7 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
     logicParts.push('美股数据缺失，按预期开盘 0% 处理');
   }
   logicParts.push(`${sellAnchor} ${fmtPct(sellAnchorPct)} → 反弹减仓参考档位，不要求回到昨收`);
-  if (historyReview && historyReview.count < 5) logicParts.push(`相似历史仅 ${historyReview.count} 个独立 ETF 交易日，样本不足，不按历史均值自动校准`);
+  if (historyReview && historyReview.dir === 'down' && historyReview.count < 5) logicParts.push(`相似历史仅 ${historyReview.count} 个独立 ETF 交易日，样本不足，不按历史均值自动校准`);
   if (usPct == null) logicParts.push('缺少未消化美股输入，开盘0%仅为数据缺失占位，不是中性预测');
   if (premium != null) logicParts.push(`当前溢价 ${premium.toFixed(1)}%（${zone.label}）`);
   if (buyReasons.length) logicParts.push(buyReasons.join('；'));
@@ -5141,58 +5009,96 @@ function buildEtfIntradayBands(points) {
     const windowRange = (Math.max(...recent.map(r => r.price)) / low.price - 1) * 100;
     const halfWidthPct = Math.max(0.15, Math.min(0.6, windowRange * 0.25));
     const prev = recent[recent.length - 2], prev2 = recent[recent.length - 3];
+    // ── 结构位（全部截至当前分钟，无未来函数）：分时均价 / 当日开盘 / 已确认摆动低点 ──
+    const vwap = p.avg > 0 ? p.avg : null;
+    const dayOpen = points[0].price;
+    const swingLows = [], swingHighs = [];
+    for (let j = 2; j <= recent.length - 3; j++) {
+      const w = recent;
+      if (w[j].price <= w[j - 1].price && w[j].price <= w[j - 2].price && w[j].price <= w[j + 1].price && w[j].price <= w[j + 2].price) swingLows.push(w[j].price);
+      if (w[j].price >= w[j - 1].price && w[j].price >= w[j - 2].price && w[j].price >= w[j + 1].price && w[j].price >= w[j + 2].price) swingHighs.push(w[j].price);
+    }
+    const swingLow = swingLows.length ? swingLows.at(-1) : null;
+    const swingHigh = swingHighs.length ? swingHighs.at(-1) : null;
+    const buyCands = [[vwap, 'vwap'], [dayOpen, 'open'], [swingLow, 'swingLow']].filter(([v]) => v != null && v > 0);
+    // 低吸挂单价：现价下方 ≥0.3% 的最高结构位（保证挂单有真实回落空间，不再贴脸）
+    let lowLevel = null, lowAnchor = null;
+    for (const [v, a] of buyCands) if (p.price / v - 1 >= 0.003 && (lowLevel == null || v > lowLevel)) { lowLevel = v; lowAnchor = a; }
+    // 空间不足时给出最近下方结构位作为「等回落到」目标
+    let lowWait = null, lowWaitAnchor = null;
+    for (const [v, a] of buyCands) if (p.price > v && (lowWait == null || v > lowWait)) { lowWait = v; lowWaitAnchor = a; }
+    // 高抛参考价：现价上方 ≥0.2% 的最近结构位（反弹到阻力即减仓参考）
+    const sellCands = [[vwap, 'vwap'], [dayOpen, 'open'], [swingHigh, 'swingHigh']].filter(([v]) => v != null && v > 0);
+    let highLevel = null, highAnchor = null;
+    for (const [v, a] of sellCands) if (v / p.price - 1 >= 0.002 && (highLevel == null || v < highLevel)) { highLevel = v; highAnchor = a; }
+    const enough = recent.length >= 3;
     return { time: p.t, from: recent[0].t, low: low.price, lowTime: low.t, high: high.price, highTime: high.t,
       reboundPct: (p.price / low.price - 1) * 100, swingPct: (high.price / low.price - 1) * 100,
       pullbackPct: (high.price / p.price - 1) * 100, halfWidthPct,
       rising: !!(prev2 && p.price > prev.price && prev.price > prev2.price),
       falling: !!(prev2 && p.price < prev.price && prev.price < prev2.price),
-      lowBand: recent.length >= 3 ? { low: round(low.price), high: round(low.price * 1.003) } : null,
-      highBand: recent.length >= 3 && p.avg > 0 ? { low: round(p.avg * (1 - halfWidthPct / 100)), high: round(p.avg * (1 + halfWidthPct / 100)) } : null };
+      lowBand: enough && lowLevel != null ? { low: round(lowLevel), high: round(lowLevel * 1.003),
+        anchor: lowAnchor, spacePct: +(((p.price / lowLevel) - 1) * 100).toFixed(2) } : null,
+      lowWait: enough && lowLevel == null && lowWait != null ? { price: round(lowWait), anchor: lowWaitAnchor } : null,
+      highBand: enough && highLevel != null ? { low: round(highLevel), high: round(highLevel * (1 + halfWidthPct / 100)),
+        anchor: highAnchor, spacePct: +(((highLevel / p.price) - 1) * 100).toFixed(2) } : null,
+      highHold: enough && highLevel == null };
   });
 }
 
 function buildEtfIntradayGuide(ctx, points, events, actionable, bands) {
   const reference = bands[bands.length - 1];
-  if (!reference || !reference.lowBand) return null;
+  if (!reference || (!reference.lowBand && !reference.lowWait && !reference.highBand && !reference.highHold)) return null;
   const last = points[points.length - 1];
+  // 当日已见低点：跌破它才算"低点失守"，用作深档观察位，而不是提前挂单等成交
+  const dayLowPoint = points.reduce((best, p) => p.price <= best.price ? p : best, points[0]);
   const { lowBand, highBand } = reference;
   const quote = ctx.quote || {};
-  const premium = quote.premiumPct;
   const time = (quote.quoteTime || '').slice(11, 16);
+  const anchorLabel = { vwap: '分时均价', open: '当日开盘价', swingLow: '摆动低点', swingHigh: '摆动高点' };
+  const stopPrice = lowBand ? +(lowBand.low * 0.995).toFixed(3) : null;
   let buyBlock = '';
-  if (!actionable) buyBlock = '非实时交易状态，仅回看参考区，不生成当前买入指令。';
+  if (!actionable) buyBlock = '非实时交易状态，仅回看参考价，不生成当前买入指令。';
   else if (time >= '14:30') buyBlock = '14:30 后停止新增仓位。';
-  else if (!Number.isFinite(premium)) buyBlock = '当前溢价缺失，不能确认买入条件。';
-  else if (premium > PREMIUM_BUY) buyBlock = `溢价 ${premium.toFixed(2)}% > ${PREMIUM_BUY}%，不新增仓位。`;
-  else if (!ctx.positionPlan || !['heavy', 'try'].includes(ctx.positionPlan.tier)) buyBlock = '当前趋势不允许加仓，低吸区仅观察。';
+  else if (!ctx.positionPlan || !['heavy', 'try'].includes(ctx.positionPlan.tier)) buyBlock = '当前趋势不允许加仓，低吸价仅观察。';
   else if (ctx.premarket && ctx.premarket.inputs.qqqPrePct != null && ctx.premarket.inputs.qqqPrePct <= ctx.premarket.stop.qqqAbort) buyBlock = 'QQQ 已触发日内计划作废条件。';
   else if (ctx.premarket && quote.prevClose > 0 && (quote.price / quote.prevClose - 1) * 100 <= ctx.premarket.stop.pricePct) buyBlock = '价格已跌破日内计划失效线，不新增仓位。';
   const latest = [...events].reverse().find(e => etfMinuteNumber(last.t) - etfMinuteNumber(e.time) >= 0 && etfMinuteNumber(last.t) - etfMinuteNumber(e.time) <= 1);
-  let buyState = '等待回踩', buyNote = '价格回到低吸参考区后，需反弹至少 0.3% 并连续两分钟回升；触区不直接买。';
+  let buyState = '等待回落', buyNote = lowBand
+    ? `可在 ${lowBand.low.toFixed(3)}（${anchorLabel[lowBand.anchor] || lowBand.anchor}）挂单等待；触价不等于买入，需止跌确认。跌破 ${stopPrice.toFixed(3)}（-0.5%）视为接飞刀，放弃该笔。`
+    : reference.lowWait
+      ? `回落空间不足 0.3%，等回落到 ${reference.lowWait.price.toFixed(3)}（${anchorLabel[reference.lowWait.anchor] || reference.lowWait.anchor}）再评估。`
+      : '现价低于全部分时均价与开盘价，等止跌企稳后再评估，不接飞刀。';
+  if (!lowBand && !reference.lowWait) buyState = '低于结构位 · 等企稳';
   if (buyBlock) { buyState = '低吸仅观察'; buyNote = buyBlock; }
   else if (latest && latest.side === 'buy') { buyState = '止跌确认 · 小仓候选'; buyNote = `确认分钟 ${latest.time}，仍按总仓位上限分批执行，不追涨。`; }
-  else if (last.price <= lowBand.high) { buyState = '低吸区内 · 等止跌'; buyNote = '已接近近30个连续分钟低位，还需两分钟回升与至少0.3%反弹确认；继续创新低时不接飞刀。'; }
+  else if (lowBand && last.price <= lowBand.high) { buyState = '低吸区内 · 等止跌'; buyNote = `已触及 ${lowBand.low.toFixed(3)} 结构位，还需两分钟回升与至少0.3%反弹确认；继续创新低不接飞刀，跌破 ${stopPrice.toFixed(3)} 止损。`; }
   const buyMissing = [];
   const weak = (quote.prevClose > 0 && reference.low <= quote.prevClose * 0.995) || (last.avg > 0 && reference.low <= last.avg * 0.997);
   if (!weak) buyMissing.push('需先出现有效回踩');
   if (reference.reboundPct < 0.3) buyMissing.push(`反弹还差 ${(0.3 - reference.reboundPct).toFixed(2)}%`);
   if (!reference.rising) buyMissing.push('尚未连续两分钟回升');
-  if (!buyBlock && !(latest && latest.side === 'buy') && buyMissing.length) buyNote = buyMissing.join('；') + '。触区不直接买入。';
+  if (!buyBlock && !(latest && latest.side === 'buy') && buyMissing.length && lowBand) buyNote = buyMissing.join('；') + '。触价不直接买入。';
   const sellMissing = [];
   if (reference.swingPct < 0.6) sellMissing.push(`反弹幅度还差 ${(0.6 - reference.swingPct).toFixed(2)}%`);
   if (reference.pullbackPct < 0.25) sellMissing.push(`从高点回落还差 ${(0.25 - reference.pullbackPct).toFixed(2)}%`);
   if (!reference.falling) sellMissing.push('尚未连续两分钟转弱');
-  if (highBand && reference.high < highBand.low) sellMissing.push('反弹高点尚未到均价观察区');
-  let sellState = '等待反弹', sellNote = '已有仓位等反弹接近分时均价；近30分钟反弹至少0.6%后，回落0.25%且连续两分钟转弱才提示减仓。';
-  if (!actionable) { sellState = '反弹观察区回看'; sellNote = '已收盘或行情不实时，仅展示参考区；历史卖点不补发通知。'; }
-  else if (!highBand) { sellState = '均价待确认'; sellNote = '分时均价不可用，暂不判断高抛参考区。'; }
+  let sellState = '等待反弹', sellNote;
+  if (highBand) sellNote = `反弹到 ${highBand.low.toFixed(3)}（${anchorLabel[highBand.anchor] || highBand.anchor}，距现价 ${highBand.spacePct.toFixed(2)}%）附近考虑分批减仓；需转弱确认，不因触价自动卖出。`;
+  else if (reference.highHold) { sellState = '上方无阻力 · 持有观察'; sellNote = '现价不低于任何结构位，上方暂无阻力参考；强势持有观察，等转弱信号。'; }
+  else { sellState = '均价待确认'; sellNote = '分时均价不可用，暂不判断高抛参考价。'; }
+  if (!actionable) { sellState = '反弹参考回看'; sellNote = '已收盘或行情不实时，仅展示参考价；历史卖点不补发通知。'; }
+  else if (highBand && reference.high < highBand.low && reference.swingPct >= 0.6) sellMissing.push(`反弹高点距参考价还差 ${((highBand.low / reference.high - 1) * 100).toFixed(2)}%`);
+  else if (!highBand && reference.highHold) { sellMissing.length = 0; }
+  else if (!highBand) { sellState = '均价待确认'; sellNote = '分时均价不可用，暂不判断高抛参考价。'; }
   else if (latest && latest.side === 'sell') { sellState = latest.risk ? '持续走弱 · 减仓预警' : '反弹转弱 · 减仓候选'; sellNote = `确认分钟 ${latest.time}；仅适用于已有仓位，不等于必须卖出或已成交。`; }
-  else if (last.price >= highBand.low && last.price <= highBand.high) { sellState = '反弹观察区内 · 等转弱'; sellNote = '已接近分时均价，反弹仍强时不提前卖；等待回落幅度和连续两分钟转弱确认。'; }
-  else if (last.price > highBand.high) { sellState = '反弹持有观察'; sellNote = '价格已高于均价参考区，暂未出现新的转弱确认；不因触区自动卖出。'; }
+  else if (last.price >= highBand.low && last.price <= highBand.high) { sellState = '阻力区内 · 等转弱'; sellNote = '已反弹到结构位附近，反弹仍强时不提前卖；等待回落幅度和连续两分钟转弱确认。'; }
   if (actionable && highBand && !(latest && latest.side === 'sell') && sellMissing.length) sellNote = sellMissing.join('；') + '。仅供已有仓位分批减仓参考。';
-  return { asOf: last.t, from: reference.from, lowBand, highBand, buyState, buyNote, sellState, sellNote,
+  return { asOf: last.t, from: reference.from, lowBand, highBand, lowWait: reference.lowWait, highHold: reference.highHold,
+    stopPrice, buyState, buyNote, sellState, sellNote,
+    dayLow: { price: dayLowPoint.price, time: dayLowPoint.t },
     buyMissing, sellMissing, halfWidthPct: reference.halfWidthPct,
-    note: '参考带与信号统一使用近30个连续分钟；绿带是累计成交均价附近的反弹观察区，半宽为近30分钟振幅的1/4（0.15%–0.6%）。触带不等于买卖确认，未扣交易费用。' };
+    note: '参考价为结构位挂单参考：低吸=现价下方≥0.3%的最高结构位（分时均价/开盘价/摆动低点），高抛=现价上方≥0.2%的最近结构位。回测（41个交易日）显示机械「触低吸买→触高抛卖」为负期望，触价不等于成交，须配合止跌/转弱确认与止损（低吸价-0.5%）。' };
 }
 
 function buildEtfIntradayStrength(points, date) {
@@ -5250,7 +5156,7 @@ function buildEtfChaseGate(ctx, points, current, actionable) {
   const span = etfMinuteNumber(last.t) - etfMinuteNumber(points[0].t);
   const premium = Number.isFinite(quote.premiumPct) ? quote.premiumPct : null;
   const kind = current && current.kind;
-  const metrics = { open, openPct, avg: last.avg, price: last.price, avgGap, span, premium, premiumLine: PREMIUM_BUY, kind: kind || null };
+  const metrics = { open, openPct, avg: last.avg, price: last.price, avgGap, span, premium, kind: kind || null };
   const gate = (level, label, reason, fix) => ({ level, label, reason, fix, metrics, asOf: last.t });
   if (!actionable) {
     // 收盘/非实时：不产生当前指令，但把当日复盘结论留在这里，避免卡片变成一句空话。
@@ -5316,17 +5222,16 @@ function buildEtfIntradaySignals(ctx) {
   result.actionable = !!(!ctx.stale && ctx.session && ctx.session.trading && quote.quoteDate === ctx.today && isEtfContinuousMinute(time)
     && Number.isFinite(quoteAt) && now - quoteAt <= 90000 && quoteAt <= now + 5000
     && result.asOf && Math.abs(etfMinuteNumber(time) - etfMinuteNumber(result.asOf)) <= 2);
-  result.note = '仅按已闭合分钟确认，所标时间为确认分钟，下一分钟才能实时提示；低吸需止跌，高抛需反弹转弱。回放不代表实际成交，历史溢价未知时不追认买入。';
+  result.note = '仅按已闭合分钟确认，所标时间为确认分钟，下一分钟才能实时提示；低吸需止跌，高抛需反弹转弱。回放不代表实际成交，非实时信号不追认买入；溢价仅供参考。';
   result.bands = buildEtfIntradayBands(points);
   result.strength = buildEtfIntradayStrength(points, d.date);
   let reboundArmed = true, priorLowTime = null, lastReboundMin = -Infinity, lastSellMin = -Infinity;
-  const premium = Number.isFinite(quote.premiumPct) ? quote.premiumPct : null;
   for (let i = 0; i < points.length; i++) {
     const p = points[i], reference = result.bands[i];
     const min = etfMinuteNumber(p.t);
     if (reference.lowTime !== priorLowTime) reboundArmed = true;
     priorLowTime = reference.lowTime;
-    if (!reference.lowBand) continue;
+    if (!reference.lowBand && !reference.lowWait && !reference.highBand && !reference.highHold) continue;
     const { rising, falling } = reference;
     const offLow = reference.reboundPct, offHigh = reference.pullbackPct, range = reference.swingPct;
     const weak = (quote.prevClose > 0 && reference.low <= quote.prevClose * 0.995) || (p.avg > 0 && reference.low <= p.avg * 0.997);
@@ -5334,13 +5239,13 @@ function buildEtfIntradaySignals(ctx) {
     if (reboundArmed && min - lastReboundMin >= 10 && rising && weak && offLow >= 0.3 && p.t < '14:30') {
       const liveSignal = result.actionable && min >= etfMinuteNumber(time) - 2;
       const weakNow = ['weak', 'broken'].includes(result.strength.history[i].kind);
-      const buyAllowed = liveSignal && !weakNow && time < '14:30' && premium != null && premium <= PREMIUM_BUY
+      const buyAllowed = liveSignal && !weakNow && time < '14:30'
         && ctx.positionPlan && ['heavy', 'try'].includes(ctx.positionPlan.tier)
         && !(ctx.premarket && ctx.premarket.inputs.qqqPrePct != null && ctx.premarket.inputs.qqqPrePct <= ctx.premarket.stop.qqqAbort)
         && !(ctx.premarket && quote.prevClose > 0 && (p.price / quote.prevClose - 1) * 100 <= ctx.premarket.stop.pricePct);
       result.events.push({ key: `intraday_rebound_${d.date}_${p.t}`, time: p.t, price: p.price, side: buyAllowed ? 'buy' : 'watch',
         level: buyAllowed ? 'good' : 'info', title: buyAllowed ? '日内止跌 · 小仓候选' : '日内止跌观察 · 不自动买入',
-        text: `自近30分钟低位 ${reference.low.toFixed(3)} 反弹 ${offLow.toFixed(2)}%，连续两分钟回升。${buyAllowed ? '溢价与风控允许，仍按总仓位上限执行，不追涨。' : liveSignal && premium != null && premium > PREMIUM_BUY ? `当前溢价 ${premium.toFixed(2)}%，不新增仓位；已有仓位等待反弹减仓。` : '仅作走势观察，历史溢价或实时风控未确认，不追认买入。'}` });
+        text: `自近30分钟低位 ${reference.low.toFixed(3)} 反弹 ${offLow.toFixed(2)}%，连续两分钟回升。${buyAllowed ? '实时风控允许，仍按总仓位上限执行，不追涨；溢价仅供参考。' : '仅作走势观察，时段、趋势或实时风控未确认，不追认买入。'}` });
       lastReboundMin = min; reboundArmed = false;
     } else if (min - lastSellMin >= 10 && falling && range >= 0.6 && offHigh >= 0.25 && nearAvg && reference.highTime > reference.lowTime) {
       result.events.push({ key: `intraday_pullback_${d.date}_${p.t}`, time: p.t, price: p.price, side: 'sell', level: 'warn',
@@ -5353,14 +5258,20 @@ function buildEtfIntradaySignals(ctx) {
   result.events.sort((a, b) => a.time.localeCompare(b.time));
   result.guide = buildEtfIntradayGuide(ctx, points, result.events, result.actionable, result.bands);
   result.chaseGate = buildEtfChaseGate(ctx, points, result.strength.current, result.actionable);
+  // 交易时段内但行情没跟上：不能把「今天全天不该追」这种收盘复盘结论挂到盘中卡片上
+  if (result.chaseGate && !result.actionable && ctx.session && ctx.session.trading && quote.quoteDate === ctx.today) {
+    const delaySec = Number.isFinite(quoteAt) ? Math.max(0, Math.round((now - quoteAt) / 1000)) : null;
+    result.chaseGate = { ...result.chaseGate, level: 'wait', label: '行情延迟 · 暂不判定',
+      reason: `行情${delaySec == null ? '还没跟上' : `滞后约 ${delaySec >= 60 ? Math.floor(delaySec / 60) + ' 分' : delaySec + ' 秒'}`}，此刻的涨幅与均价不是最新状态，不据此给追买结论。`,
+      fix: '等行情恢复实时后自动刷新；延迟期间的买卖价只作挂单参考，不构成成交指令。' };
+  }
   const strength = result.strength.current;
   if (result.guide && strength) {
     if (result.actionable && ['weak', 'broken'].includes(strength.kind)) {
       result.guide.buyState = '走弱 · 禁止追买';
-      result.guide.buyNote = strength.label + '，不因外盘上涨接跌或追涨；等ETF自身恢复再检查溢价和趋势。';
+      result.guide.buyNote = strength.label + '，不因外盘上涨接跌或追涨；等ETF自身恢复再检查趋势与价格风控。';
     }
-    result.strength.chase = !result.actionable ? '非实时 · 仅回看' : premium == null ? '溢价缺失 · 不能判断买入'
-      : premium > PREMIUM_BUY ? `溢价 ${premium.toFixed(2)}% · 不新增仓位`
+    result.strength.chase = !result.actionable ? '非实时 · 仅回看'
       : time >= '14:30' ? '14:30 后不新增仓位'
       : !ctx.positionPlan || !['heavy', 'try'].includes(ctx.positionPlan.tier) ? '趋势风控不允许新增买入'
       : strength.kind === 'strong' ? '偏强也不直接追涨，等回踩确认' : '未确认强势 · 不追涨';
@@ -5368,24 +5279,72 @@ function buildEtfIntradaySignals(ctx) {
   return result;
 }
 
+// 行动卡：把全部盘中信号压缩成一张卡——买 / 卖 / 持有 / 跑路，外加三个关键价位。
+//   跑路线 = 昨收 × (1 + stop.pricePct)；买/卖档 = 盘前计划里离现价最近的下一档。
+//   判定优先级：跑路 > 走弱减仓 > 反弹转弱高抛 > 止跌买入 > 持有不动。
+function buildEtfActionCard(ctx) {
+  const quote = ctx.quote || {}, price = quote.price, prevClose = quote.prevClose;
+  if (!(price > 0) || !(prevClose > 0)) return null;
+  const plan = ctx.premarket || {};
+  const sig = ctx.intradaySignals || {};
+  const strength = sig.strength && sig.strength.current;
+  const tier = ctx.positionPlan && ctx.positionPlan.tier;
+  const minute = etfMinuteNumber((quote.quoteTime || '').slice(11, 16));
+  const buyLv = (plan.buy || []).filter(b => b.price > 0 && b.price < price).sort((a, b) => b.price - a.price)[0] || null;
+  const sellLv = (plan.sell || []).filter(s => s.price > 0 && s.price > price).sort((a, b) => a.price - b.price)[0] || null;
+  const stopPct = plan.stop && isFinite(plan.stop.pricePct) ? plan.stop.pricePct : -3.5;
+  const stopPrice = +(prevClose * (1 + stopPct / 100)).toFixed(3);
+  const recent = (side, win) => (sig.events || []).some(e => {
+    if (e.side !== side) return false;
+    const age = minute - etfMinuteNumber(e.time);
+    return age >= 0 && age <= win;
+  });
+  const kind = strength && strength.kind;
+  const runByPrice = price <= stopPrice;
+  let stance = 'hold', verdict = '持有不动', reason = '';
+  if (kind === 'broken' || runByPrice) {
+    stance = 'run'; verdict = '跑路 · 先出来';
+    reason = runByPrice
+      ? `现价 ${price.toFixed(3)} 已跌破跑路线 ${stopPrice.toFixed(3)}（昨收 ${stopPct}%），情况不对先出来，别赌反弹。`
+      : '分时已破位：连续贴着均价下方且跌破前段支撑。先减仓出来，重新站回分时均价之前不接。';
+  } else if (kind === 'weak') {
+    stance = 'sell'; verdict = '走弱 · 先减仓';
+    reason = '连续几分钟贴着分时均价下方阴跌，反弹没力道；已有仓位逢反弹先减，不在这个位置接跌。';
+  } else if (recent('sell', 5)) {
+    stance = 'sell'; verdict = '反弹转弱 · 高抛';
+    reason = `刚确认反弹转弱，已有仓位分批减${sellLv ? `，参考档 ${sellLv.price.toFixed(3)}` : ''}，别等利润回吐。`;
+  } else if (recent('buy', 5) && ['heavy', 'try'].includes(tier)) {
+    stance = 'buy'; verdict = '止跌 · 按档买入';
+    reason = `日内止跌确认、趋势风控允许；参考买档 ${buyLv ? buyLv.price.toFixed(3) : '现价附近'}，按计划分批小仓接，破位立刻停。`;
+  } else {
+    stance = 'hold'; verdict = '持有不动';
+    reason = `结构没坏、也没确认转强，拿着别动；涨到 ${sellLv ? sellLv.price.toFixed(3) : '—'} 附近再看减仓，跌到 ${buyLv ? buyLv.price.toFixed(3) : '—'} 附近再看接回。`;
+  }
+  return { stance, verdict, reason, kind: kind || null,
+    prices: { stop: stopPrice, buy: buyLv ? buyLv.price : null, sell: sellLv ? sellLv.price : null } };
+}
+
 // 盘中提示：状态型条件（每次请求重算，前端按 key 去重后只提示新增项）
 function buildEtfAlerts(ctx) {
-  const { quote, ind, todayBar, signals } = ctx;
+  const { quote, ind, todayBar } = ctx;
   const out = [];
   const add = (key, level, title, text, pri) => out.push({ key, level, title, text, pri });
+  // 跑路是最高优先级：独立 key，条件解除后自动重新武装，再次触发会再弹一次
+  if (ctx.action && ctx.action.stance === 'run') {
+    add('action_run', 'danger', `🚨 ${ctx.action.verdict}`, ctx.action.reason, -10);
+  }
   const zone = premiumZone(quote.premiumPct);
   const pz = quote.premiumPct;
-  const ladder = premiumPriceLadder(quote.iopv);
   const live = ctx.session && ctx.session.trading && ctx.intradaySignals && ctx.intradaySignals.actionable;
   const nowMin = etfMinuteNumber((quote.quoteTime || '').slice(11, 16));
   if (live && ctx.premarket) {
     for (const touch of ctx.premarket.touches || []) {
       if (nowMin - etfMinuteNumber(touch.time) < 0 || nowMin - etfMinuteNumber(touch.time) > 2) continue;
-      const canBuy = touch.side === 'buy' && pz != null && pz <= PREMIUM_BUY && touch.time < '14:30'
+      const canBuy = touch.side === 'buy' && touch.time < '14:30'
         && ctx.positionPlan && ['heavy', 'try'].includes(ctx.positionPlan.tier);
       out.push({ key: `intraday_level_${ctx.today}_${touch.key}`, time: touch.time, level: touch.side === 'sell' ? 'warn' : canBuy ? 'good' : 'info',
         title: `${touch.key.toUpperCase()} ${touch.side === 'buy' ? '低吸参考位' : '高抛参考位'}触达`,
-        text: `现价 ${touch.price.toFixed(3)}，参考档位 ${touch.target.toFixed(3)}；${touch.side === 'sell' ? '已有仓位可关注分批减仓，不代表自动成交。' : canBuy ? '等待止跌确认，不因触价直接买入。' : '当前溢价、时间或趋势风控不允许新增仓位，仅记录触达。'}`, pri: -2 });
+        text: `现价 ${touch.price.toFixed(3)}，参考档位 ${touch.target.toFixed(3)}；${touch.side === 'sell' ? '已有仓位可关注分批减仓，不代表自动成交。' : canBuy ? '等待止跌确认，不因触价直接买入。' : '当前时间或趋势风控不允许新增仓位，仅记录触达。'}`, pri: -2 });
     }
   }
   if (live && ctx.intradaySignals && ctx.intradaySignals.actionable) {
@@ -5393,77 +5352,33 @@ function buildEtfAlerts(ctx) {
       const age = nowMin - etfMinuteNumber(event.time);
       if (age >= 0 && age <= 2) {
         const currentStrength = ctx.intradaySignals.strength && ctx.intradaySignals.strength.current;
-        const buyBlocked = event.side === 'buy' && (!Number.isFinite(pz) || pz > PREMIUM_BUY || nowMin >= 870
+        const buyBlocked = event.side === 'buy' && (nowMin >= 870
           || currentStrength && ['weak', 'broken'].includes(currentStrength.kind)
           || !ctx.positionPlan || !['heavy', 'try'].includes(ctx.positionPlan.tier));
-        out.push(buyBlocked ? { ...event, side: 'watch', level: 'info', title: '止跌信号已出现 · 当前风控禁止买入', text: `${event.text} 当前溢价、时间或趋势已不满足买入条件，不按之前候选加仓。`, pri: -3 } : { ...event, pri: -3 });
+        out.push(buyBlocked ? { ...event, side: 'watch', level: 'info', title: '止跌信号已出现 · 当前风控禁止买入', text: `${event.text} 当前时间或趋势已不满足买入条件，不按之前候选加仓。`, pri: -3 } : { ...event, pri: -3 });
       }
     }
   }
 
-  // 溢价穿越买入线 / 加仓线（盘中对比上一次请求，真正的「该出手了」提示）
   const pc = ctx.premCross;
-  if (pc && pc.crossedDown && pc.crossedDown.length) {
-    for (const line of pc.crossedDown) {
-      const isAdd = line === PREMIUM_ADD;
-      const isBuy = line === PREMIUM_BUY;
-      add(`premium_cross_dn_${line}`, 'good', `溢价跌破 ${line}%${isAdd ? '加仓线' : isBuy ? '买入线' : '档位线'}`,
-        `溢价由 ${pc.from.toFixed(2)}% 收敛至 ${pc.to.toFixed(2)}%`
-        + (ladder ? `，加仓价 ${ladder.add.price} / 买入价 ${ladder.buy.price}` : '')
-        + (isAdd ? '；已进入加仓区，按策略可多买' : isBuy ? '；已进入买入区，可分批买入' : ''));
+  if (pc) {
+    for (const [direction, lines] of [['dn', pc.crossedDown || []], ['up', pc.crossedUp || []]]) {
+      for (const line of lines) {
+        add(`premium_cross_${direction}_${line}`, 'info', `溢价${direction === 'dn' ? '跌破' : '升破'} ${line}% 参考档位`,
+          `溢价由 ${pc.from.toFixed(2)}% 变为 ${pc.to.toFixed(2)}%；仅供参考，不触发买卖或仓位调整。`);
+      }
     }
   }
-  if (pc && pc.crossedUp && pc.crossedUp.length) {
-    for (const line of pc.crossedUp) {
-      const isDanger = line === PREMIUM_DANGER;
-      add(`premium_cross_up_${line}`, isDanger ? 'danger' : 'warn', `溢价升破 ${line}%${isDanger ? '减仓线' : '警戒线'}`,
-        `溢价由 ${pc.from.toFixed(2)}% 扩张至 ${pc.to.toFixed(2)}%`
-        + (isDanger ? '；溢价风险显著，持有者考虑减仓，不追高' : '；买入性价比下降'));
-    }
+  if (Number.isFinite(pz)) {
+    add(`premium_zone_${zone.key}`, 'info', `溢价 ${zone.label}（仅参考）`,
+      `当前溢价 ${pz.toFixed(2)}%；不限制买卖或仓位，注意溢价收敛可能造成额外回撤。`);
   }
 
-  if (zone.key === 'add') {
-    add('premium_zone_add', 'good', '溢价进入加仓区',
-      `当前溢价 ${pz.toFixed(2)}%（<${PREMIUM_ADD}%），按策略可多买；IOPV ${quote.iopv != null ? quote.iopv.toFixed(4) : '—'}${ladder ? `，加仓价 ${ladder.add.price}` : ''}`);
-  } else if (zone.key === 'buy') {
-    add('premium_zone_buy', 'good', '溢价进入买入区',
-      `当前溢价 ${pz.toFixed(2)}%（${PREMIUM_ADD}~${PREMIUM_BUY}%），可分批买入${ladder ? `，买入价 ${ladder.buy.price}` : ''}`);
-  } else if (zone.key === 'avoid') {
-    add('premium_zone_avoid', 'warn', '溢价高于警戒线',
-      `当前溢价 ${pz.toFixed(2)}% 高于 ${PREMIUM_WATCH}%，只减不加，等回落到 ${ladder ? ladder.buy.price : '买入价'} 以下`);
-  } else if (zone.key === 'exit') {
-    add('premium_zone_exit', 'danger', '溢价极高',
-      `场内价较净值溢价 ${pz.toFixed(2)}%，追高买入风险极大；该基金曾因高溢价申请停牌警示`);
-  } else if (zone.key === 'watch') {
-    add('premium_zone_watch', 'info', '溢价略高于买入线',
-      `当前溢价 ${pz.toFixed(2)}% 高于买入线 ${PREMIUM_BUY}%，等回落至 ${ladder ? ladder.buy.price : '买入价'} 再介入`);
-  }
-
-  // ── 可执行的「买入机会」：溢价进区 且 技术面未破位（与建议卡同一套判定）──
   const adv = ctx.advice;
   if (adv && adv.level === 'buy') {
-    const strong = adv.zone === 'add';
-    add(strong ? 'buy_opportunity_strong' : 'buy_opportunity', 'good',
-      strong ? '★ 加仓机会（按策略可多买）' : '★ 买入机会（可分批买入）',
-      `溢价 ${pz.toFixed(2)}% 已进入${strong ? `加仓区（<${PREMIUM_ADD}%）` : `买入区（${PREMIUM_ADD}~${PREMIUM_BUY}%）`}，`
-      + `现价 ${quote.price.toFixed(3)}`
-      + (ladder ? `／买入价 ${ladder.buy.price}${strong ? `／加仓价 ${ladder.add.price}` : ''}` : '')
-      + (adv.held ? '；已有持仓，按计划执行加仓' : '；建议分 2~3 笔建仓，先半仓'),
-      -1);
-  } else if (adv && adv.level === 'warn' && /试探|建仓/.test(adv.action || '')) {
-    // 价位到了但技术面偏空 / 趋势未确认：降级为小仓试探，同样值得提醒
-    add('buy_probe', 'warn', '价位已到，可小仓试探',
-      `溢价 ${pz.toFixed(2)}% 已满足买入线，但${adv.headline.replace(/^溢价[^，]*，?/, '').replace(/^但/, '')}`,
-      1);
-  }
-  // 还要再跌一点点：提前挂单提醒（IOPV 盘中会变，触发价也会跟着动）
-  if (pz != null && ladder && pz >= PREMIUM_BUY && pz - PREMIUM_BUY <= 1.5) {
-    add('near_buy_line', 'info', '接近买入线',
-      `溢价 ${pz.toFixed(2)}% 距买入线 ${PREMIUM_BUY}% 仅 ${(pz - PREMIUM_BUY).toFixed(2)}pp；`
-      + `现价跌到 ${ladder.buy.price} 即触发买入（按当前 IOPV ${quote.iopv != null ? quote.iopv.toFixed(4) : '—'} 折算）`);
-  } else if (pz != null && ladder && pz >= PREMIUM_ADD && pz - PREMIUM_ADD <= 1.5 && zone.key === 'buy') {
-    add('near_add_line', 'info', '接近加仓线',
-      `溢价 ${pz.toFixed(2)}% 距加仓线 ${PREMIUM_ADD}% 仅 ${(pz - PREMIUM_ADD).toFixed(2)}pp；跌到 ${ladder.add.price} 可多买`);
+    add('buy_opportunity', 'good', '分批买入参考', adv.headline, -1);
+  } else if (adv && adv.level === 'warn' && /试仓|试探|建仓/.test(adv.action || '')) {
+    add('buy_probe', 'warn', '趋势未确认 · 只可试仓', adv.headline, 1);
   }
 
   if (ind.ma21 != null && ind.prevClose != null) {
@@ -5504,16 +5419,6 @@ function buildEtfAlerts(ctx) {
     else if (chg <= -1.5) add('dn15', 'info', `${chgTitle}走弱`, `${chgDay}跌 ${chg.toFixed(2)}%`);
   }
 
-  // 接近最近买点
-  const lastBuy = [...(signals || [])].reverse().find(s => s.side === 'buy');
-  if (lastBuy && lastBuy.close > 0) {
-    const dev = (quote.price / lastBuy.close - 1) * 100;
-    if (Math.abs(dev) <= 1) {
-      add('near_last_buy', 'good', '回踩最近买点',
-        `现价距 ${lastBuy.date} 买点 ${lastBuy.close.toFixed(3)} 仅 ${dev >= 0 ? '+' : ''}${dev.toFixed(2)}%`);
-    }
-  }
-
   const rank = { danger: 0, warn: 1, good: 2, info: 3 };
   out.sort((a, b) => ((a.pri ?? rank[a.level] ?? 9) - (b.pri ?? rank[b.level] ?? 9)));
   return out;
@@ -5527,21 +5432,42 @@ async function getEtfMarketData() {
   if (ETF_MKT_CACHE.data && Date.now() - ETF_MKT_CACHE.ts < ttl) return ETF_MKT_CACHE.data;
 
   const todayStr = bjDateStr();
-  const [klines, quote, minute] = await Promise.all([
-    fetchTencentEtfDayK(ETF_CODE, 1000).catch(() => []),
+  // 日K走独立缓存 + 失败退避；quote 与分时保持每次实时拉（拆出 Promise.all）
+  const klineTtl = clockTrading ? ETF_KLINE_TTL_TRADING : ETF_KLINE_TTL_IDLE;
+  let klines = (ETF_KLINE_CACHE.data && ETF_KLINE_CACHE.data.length && Date.now() - ETF_KLINE_CACHE.ts < klineTtl)
+    ? ETF_KLINE_CACHE.data : null;
+  if (!klines && Date.now() >= ETF_KLINE_BACKOFF_UNTIL) {
+    try {
+      klines = await fetchTencentEtfDayK(ETF_CODE, 1000);
+      if (klines && klines.length) {
+        ETF_KLINE_CACHE.data = klines;
+        ETF_KLINE_CACHE.ts = Date.now();
+        ETF_KLINE_BACKOFF_UNTIL = 0;
+      }
+    } catch (e) { console.error('[etf-kline]', e.message); }
+    if (!klines || !klines.length) {
+      klines = [];
+      ETF_KLINE_BACKOFF_UNTIL = Date.now() + ETF_KLINE_BACKOFF_MS;   // 失败退避 60 秒，不让每个请求都打上游
+    }
+  } else if (!klines) {
+    klines = [];   // 退避期内：不打上游，直接走下方缓存兜底
+  }
+  const [quote, minute] = await Promise.all([
     fetchTencentEtfQuote(ETF_CODE).catch(() => null),
     fetchTencentEtfMinute(ETF_CODE).catch(() => null),
   ]);
   let navMap = {};
-  try { navMap = await fetchEtfNavHistory(ETF_FUND_CODE); } catch { /* 净值缺失不阻断 */ }
+  const degraded = [];   // 子源失败清单（净值/美股/恐慌等）：响应里带出去，前端能区分「为空」和「挂了」
+  try { navMap = await fetchEtfNavHistory(ETF_FUND_CODE); } catch { degraded.push('净值'); /* 净值缺失不阻断 */ }
 
   if (!klines.length) {
     if (ETF_MKT_CACHE.data) return ETF_MKT_CACHE.data;
     const disk = loadEtfDiskCache();
     if (disk) {
-      // 用磁盘缓存顶住，同时把内存缓存时间戳清零 → 下次请求立即重试上游，自愈
+      // 用磁盘缓存顶住；不再把 ts 清零（那会导致每个请求都重打上游），
+      // 改为 30 秒后允许重试上游自愈
       ETF_MKT_CACHE.data = disk;
-      ETF_MKT_CACHE.ts = 0;
+      ETF_MKT_CACHE.ts = Date.now() - (clockTrading ? ETF_MKT_TTL_TRADING : ETF_MKT_TTL_IDLE) + 30_000;
       console.warn('[etf-track] 上游日K不可用，使用磁盘缓存（' + disk.diskSavedAt + '）');
       return disk;
     }
@@ -5563,17 +5489,17 @@ async function getEtfMarketData() {
   // 美股指数（纳指/费半）：既作「恐慌抄底」的外盘输入，也作「美股趋势确认」的门控输入
   // （低溢价能不能抬仓、要不要把整体仓位压到 40% 以下，都看它）
   let usIdx = null;
-  try { usIdx = await fetchUsIndexHistory(); } catch (e) { console.error('[us-index]', e.message); }
+  try { usIdx = await fetchUsIndexHistory(); } catch (e) { console.error('[us-index]', e.message); degraded.push('美股指数'); }
 
   let panicSignal = null;
   try {
     panicSignal = buildEtfPanicSignal(klines, navMap, usIdx);
-  } catch (e) { console.error('[etf-panic]', e.message); }
+  } catch (e) { console.error('[etf-panic]', e.message); degraded.push('恐慌信号'); }
 
   // 多指标组合信号（买卖信号清单 v6）：溢价为主 + 威廉%R/MA21/布林/MACD 共振，
   // 且美股未确认止跌时不给「重仓买入/买入/试仓」，统一降级为「等美股确认」
   let comboSignals = { signals: [], stats: null, backtest: null };
-  try { comboSignals = buildEtfCompositeSignals(klines, navMap, panicSignal, usIdx); } catch (e) { console.error('[etf-combo]', e.message); }
+  try { comboSignals = buildEtfCompositeSignals(klines, navMap, panicSignal, usIdx); } catch (e) { console.error('[etf-combo]', e.message); degraded.push('组合信号'); }
 
   // 仓位建议：趋势定方向、溢价定仓位、美股趋势定「低溢价能不能抬仓」（盘中用实时价与实时溢价覆盖）
   let positionPlan = null;
@@ -5581,7 +5507,7 @@ async function getEtfMarketData() {
     positionPlan = buildEtfPositionPlan(klines, navMap, (quote && quote.price > 0) ? {
       price: quote.price, premiumPct: quote.premiumPct, iopv: quote.iopv, date: todayStr,
     } : null, panicSignal, usIdx);
-  } catch (e) { console.error('[etf-pos]', e.message); }
+  } catch (e) { console.error('[etf-pos]', e.message); degraded.push('仓位计划'); }
 
   // 买点确认用指标（威廉%R / RSI / 布林带）；仅作买点过滤与展示，不生成卖出信号
   const highs = klines.map(k => (isFinite(k.high) ? k.high : k.close));
@@ -5668,9 +5594,9 @@ async function getEtfMarketData() {
     })),
     // 买卖信号清单 v3：溢价不再单独构成卖出理由（趋势先破坏才减仓），并附段内建议仓位
     comboSignals,
-    // 仓位建议：趋势（MA21/MA60/MACD）定方向，溢价档位定仓位上限
+    // 仓位建议按趋势定仓，溢价仅供参考。
     positionPlan,
-    // 恐慌抄底：外盘重挫 + 极限超卖 + 溢价压缩 共振时的加仓窗口（含历史触发胜率）
+    // 恐慌抄底：外盘与技术共振的窗口（含历史统计）。
     panicSignal,
     usIdx,
     stats,
@@ -5681,7 +5607,7 @@ async function getEtfMarketData() {
       nav: quote ? quote.nav : null,
       history: premiumHist,          // 全历史（用于回溯；前端默认只画近 120 日）
       stats20: premiumStats,
-      // 策略阈值（前端画档位条 / 挂单价用）
+      // 历史溢价参考档位，不参与交易决策。
       rules: {
         add: PREMIUM_ADD, buy: PREMIUM_BUY, watch: PREMIUM_WATCH, danger: PREMIUM_DANGER,
         zones: PREMIUM_ZONES.map(z => ({
@@ -5693,10 +5619,20 @@ async function getEtfMarketData() {
       // 溢价率历史分布（近 250 个交易日）
       dist: premiumDist,
     },
-    intraday: minute,
+    intraday: minute ? { ...minute, prevClose: quote ? quote.prevClose : null } : minute,
     lastSignal,
-    // 全历史回溯：最佳买卖点 + 策略对比
-    review: (() => { try { return buildEtfHistoryReview(klines, navMap, signals); } catch (e) { console.error('[etf-review]', e.message); return null; } })(),
+    // 子源失败清单（null = 全部正常）：前端据此区分「信号为空」和「子源挂了」
+    degraded: degraded.length ? degraded : null,
+    // 全历史回溯：最佳买卖点 + 策略对比（按交易日缓存，同一交易日内直接复用）
+    review: (() => {
+      const kdate = klines[lastIdx] ? klines[lastIdx].date : null;
+      if (ETF_REVIEW_CACHE.date === kdate && ETF_REVIEW_CACHE.data) return ETF_REVIEW_CACHE.data;
+      try {
+        ETF_REVIEW_CACHE.data = buildEtfHistoryReview(klines, navMap, signals);
+        ETF_REVIEW_CACHE.date = kdate;
+      } catch (e) { console.error('[etf-review]', e.message); degraded.push('历史回溯'); ETF_REVIEW_CACHE.data = null; }
+      return ETF_REVIEW_CACHE.data;
+    })(),
   };
 
   ETF_MKT_CACHE.data = data;
@@ -5705,16 +5641,21 @@ async function getEtfMarketData() {
   return data;
 }
 
+// 最近一次成功的完整响应（含 route 层字段 advice/premarket/intradaySignals 等）。
+// 上游异常时回给它 + stale:true，保证兜底响应结构完整、前端卡片不会整片消失。
+let ETF_LAST_TRACK_PAYLOAD = null;
+
 app.get('/api/etf-track', async (req, res) => {
   try {
     const data = await getEtfMarketData();
     const todayStr = bjDateStr();
 
     // 持仓（查询参数由前端从 localStorage 带入，仅用于生成建议，不落库）
+    // 合法性校验：cost 为合理单价（0~1 万）、shares 为合理份额上限，防脏参数生成荒谬建议
     const cost = parseFloat(req.query.cost);
     const shares = parseFloat(req.query.shares);
     let pos = null;
-    if (isFinite(cost) && isFinite(shares) && shares > 0) {
+    if (isFinite(cost) && isFinite(shares) && shares > 0 && cost > 0 && cost < 10_000 && shares <= 100_000_000) {
       const price = data.quote ? data.quote.price : data.ind.price;
       const marketValue = shares * price;
       const costValue = cost * shares;
@@ -5728,11 +5669,15 @@ app.get('/api/etf-track', async (req, res) => {
 
     const { bars: displayBars, todayBar } = etfLiveMacdBars(data, ETF_KLINES, todayStr);
 
-    // 盘中溢价穿越检测：对比上一次请求的溢价率，判断是否跌破买入线 / 加仓线
+    // 盘中溢价参考档位变化检测。
     const curPrem = data.quote ? data.quote.premiumPct : null;
     let premCross = null;
     if (isFinite(curPrem)) {
-      if (ETF_PREM_PREV && isFinite(ETF_PREM_PREV.pct) && data.session.trading) {
+      // 基线只在盘中更新、且按交易日归组：
+      //  · 盘外不更新基线 → 隔夜溢价跳空不会被当成盘中穿越误报（此前隔夜最后一笔溢价
+      //    会成为次日开盘检测的起点，开盘第一对请求就把「跳空」误报成「穿越」）
+      //  · 新交易日第一笔（day !== today）只重建基线、不检测
+      if (ETF_PREM_PREV && isFinite(ETF_PREM_PREV.pct) && data.session.trading && ETF_PREM_PREV.day === todayStr) {
         const lines = [PREMIUM_ADD, PREMIUM_BUY, PREMIUM_WATCH, PREMIUM_DANGER];
         const crossedDown = lines.filter(x => ETF_PREM_PREV.pct >= x && curPrem < x);
         const crossedUp = lines.filter(x => ETF_PREM_PREV.pct < x && curPrem >= x);
@@ -5743,7 +5688,7 @@ app.get('/api/etf-track', async (req, res) => {
           };
         }
       }
-      ETF_PREM_PREV = { pct: curPrem, ts: Date.now() };
+      if (data.session.trading) ETF_PREM_PREV = { pct: curPrem, ts: Date.now(), day: todayStr };
     }
 
     const ctx = {
@@ -5880,10 +5825,11 @@ app.get('/api/etf-track', async (req, res) => {
       if (!nextMode || LAST_PREMARKET_PLAN) saveEtfDayPlan(ctx.premarket);
     }
     ctx.intradaySignals = intradaySignals;
+    ctx.action = buildEtfActionCard(ctx);
     const alerts = isAShareTradingTime() && data.session.trading ? buildEtfAlerts(ctx) : [];
 
     const { usIdx: _usIdx, ...publicData } = data;
-    const payload = { success: true, ...publicData, bars: displayBars, pos, advice, alerts, todayBar, premCross, premarket, dayPlan: LAST_PREMARKET_PLAN, intradaySignals };
+    const payload = { success: true, ...publicData, bars: displayBars, pos, advice, alerts, todayBar, premCross, premarket, dayPlan: LAST_PREMARKET_PLAN, intradaySignals, action: ctx.action };
     if (req.query.diag === '1') {
       payload.diag = {
         klineCount: ETF_KLINES.length,
@@ -5893,10 +5839,13 @@ app.get('/api/etf-track', async (req, res) => {
         cachedAgoMs: Date.now() - ETF_MKT_CACHE.ts,
       };
     }
+    ETF_LAST_TRACK_PAYLOAD = payload;
     res.json(payload);
   } catch (err) {
     console.error('[etf-track]', err.message);
-    if (ETF_MKT_CACHE.data) return res.json({ success: true, ...ETF_MKT_CACHE.data, stale: true });
+    // 优先回最近一次完整 payload（结构一致，只是旧）；没有才退 MKT 缓存兜底
+    if (ETF_LAST_TRACK_PAYLOAD) return res.json({ ...ETF_LAST_TRACK_PAYLOAD, stale: true });
+    if (ETF_MKT_CACHE.data) return res.json({ success: true, ...ETF_MKT_CACHE.data, stale: true, degraded: true });
     res.status(500).json({ error: err.message });
   }
 });

@@ -1351,8 +1351,24 @@
     @keyframes etfPulseAmber { 0% { box-shadow: 0 0 0 0 rgba(232,160,61,0.45); } 75%, 100% { box-shadow: 0 0 0 10px rgba(232,160,61,0); } }
     .etf-advice-body { padding: 8px 11px 9px; }
     .etf-advice-headline { font-size: 13.5px; font-weight: 700; line-height: 1.45; color: var(--text-primary); }
-    .etf-reasons { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
-    .etf-reason { display: flex; gap: 7px; font-size: 11px; line-height: 1.45; }
+    .etf-points { display: flex; flex-direction: column; gap: 5px; }
+    .etf-point { display: flex; gap: 8px; font-size: 12px; line-height: 1.5; align-items: flex-start; }
+    .etf-point-tag { flex: 0 0 auto; min-width: 32px; text-align: center; font-size: 9.5px; font-weight: 700; letter-spacing: .2px; color: var(--text-name); border: 1px solid var(--border-badge); border-radius: 3px; padding: 1px 4px; margin-top: 1px; white-space: nowrap; }
+    .etf-point-text { color: var(--text-secondary); }
+    .etf-point.mute .etf-point-text { color: var(--text-muted); }
+    .etf-point:first-child .etf-point-text { color: var(--text-primary); font-weight: 700; }
+    /* 「ETF 买入信号」卡内复用同一套短行排版，字号跟随卡片更紧凑 */
+    .etf-panic-rows { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+    .etf-panic-rows .etf-point { font-size: 11px; line-height: 1.45; gap: 6px; }
+    .etf-panic-rows .etf-point-tag { min-width: 26px; font-size: 9px; padding: 0 3px; }
+    .etf-panic-rows .etf-point:first-child .etf-point-text { font-weight: 700; }
+    .etf-reasons { margin-top: 6px; display: flex; flex-direction: column; gap: 5px; }
+    .etf-reason { display: flex; gap: 7px; font-size: 11px; line-height: 1.45; align-items: flex-start; }
+    .etf-reason-no { flex: 0 0 auto; width: 15px; height: 15px; border-radius: 50%; font-size: 9.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-badge); color: var(--text-muted); background: transparent; }
+    .etf-reason-no.good { color: #c93526; border-color: rgba(232,76,61,.45); }
+    .etf-reason-no.bad  { color: #1f8f5f; border-color: rgba(46,189,133,.45); }
+    .etf-reason.ref .etf-reason-label { font-weight: 400; color: var(--text-secondary); }
+    .etf-reason.ref .etf-reason-no { color: var(--text-muted); border-style: dashed; }
     .etf-reason-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; margin-top: 4px; }
     .etf-reason-dot.good { background: #e84c3d; }
     .etf-reason-dot.bad  { background: #2ebd85; }
@@ -1365,7 +1381,7 @@
       background: var(--bg-entry);
       padding: 6px 11px 8px;
     }
-    /* 买点确认：溢价达标 + 「不追高」过滤器 */
+    /* 买点确认 */
     .etf-confirm { margin-top: 8px; border-top: 1px dashed var(--border-header); padding-top: 7px; }
     .etf-confirm-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 5px; }
     .etf-confirm-title { font-size: 11.5px; font-weight: 700; color: var(--text-name); }
@@ -1390,7 +1406,7 @@
     .etf-confirm-item.no .mk { color: #8899aa; }
     .etf-confirm-note { margin-top: 5px; font-size: 10.5px; line-height: 1.55; color: var(--text-muted); }
 
-    /* 仓位建议：趋势定方向 × 溢价定仓位（高溢价只降仓、不清仓） */
+    /* 仓位建议 */
     .etf-pos { margin-top: 8px; border-top: 1px dashed var(--border-header); padding-top: 7px; }
     .etf-pos-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 5px; }
     .etf-pos-title { font-size: 11.5px; font-weight: 700; color: var(--text-name); }
@@ -1633,6 +1649,19 @@
     .etf-alert-time { flex: 0 0 auto; font-size: 9.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
     .etf-alert-text { display: block; color: var(--text-secondary); }
 
+    /* ── 行动卡：一句话回答 买/卖/持有/跑路 + 关键价位 ── */
+    .etf-action { margin: 0 0 6px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border-badge); background: var(--etf-panel); display: flex; flex-direction: column; gap: 4px; }
+    .etf-action-run  { background: rgba(232,76,61,0.14);  border-color: rgba(232,76,61,0.5); }
+    .etf-action-sell { background: rgba(232,160,61,0.13); border-color: rgba(232,160,61,0.42); }
+    .etf-action-buy  { background: rgba(46,189,133,0.12); border-color: rgba(46,189,133,0.4); }
+    .etf-action-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .etf-action-verdict { font-size: 15px; font-weight: 800; letter-spacing: 1px; color: var(--text-primary); }
+    .etf-action-run .etf-action-verdict { color: rgba(232,76,61,0.95); }
+    .etf-action-prices { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-primary); display: flex; gap: 10px; flex-wrap: wrap; }
+    .etf-action-prices .run-line { color: rgba(232,76,61,0.95); }
+    .etf-action-reason { font-size: 10.5px; line-height: 1.55; color: var(--text-secondary); }
+    .etf-action.off { opacity: .6; }
+
     /* ── 分时/溢价图 ── */
     .etf-chart-wrap { position: relative; overflow-x: auto; }
     .etf-chart-wrap svg { display: block; }
@@ -1668,6 +1697,11 @@
     .etf-intraday-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
     .etf-intraday-scroll > svg { max-width: none; }
     .etf-intraday-axis { position: absolute; left: 0; top: 0; pointer-events: none; }
+    .etf-t-intraday { margin: 6px 0; color: var(--text-secondary); }
+    .etf-t-intraday b { color: var(--text-primary); }
+    .etf-t-intraday .etf-guide-card b { font-size: 18px; font-variant-numeric: tabular-nums; }
+    .etf-intraday-readout { min-height: 32px; margin: 5px 0; padding: 5px 7px; background: var(--etf-panel); color: var(--text-secondary); font-size: 10px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+    .etf-intraday-scroll:focus-visible { outline: 2px solid var(--text-secondary); outline-offset: -2px; }
     .etf-cycle-form, .etf-trade-form.etf-cycle-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 7px 0; }
     .etf-cycle-form label { display: flex; flex-direction: column; min-width: 0; font-size: 10px; color: var(--text-secondary); }
     .etf-cycle-form .etf-inp { width: 100%; min-width: 0; box-sizing: border-box; flex: none; }
@@ -1739,12 +1773,12 @@
       font-size: 9.5px; font-weight: 700; white-space: nowrap;
     }
     .etf-signal-table .sig-badge.buy  { color: #fff; background: rgba(232,76,61,0.85); }
-    /* 少量买入：高溢价区的金叉——方向是买，但仓位被压到 3 成以内，用半透明红区分 */
+    /* 少量买入 */
     .etf-signal-table .sig-badge.buy.small { background: rgba(232,76,61,0.5); }
     .etf-signal-table .sig-badge.sell { color: #fff; background: rgba(46,189,133,0.85); }
     /* 跑路清仓：三条均线全破，比「清仓/减半」更重——用深绿区分 */
     .etf-signal-table .sig-badge.sell.run { background: rgba(22,130,88,0.95); }
-    /* 持有不加仓：高溢价但趋势未破坏——既不是买也不是卖 */
+    /* 持有不加仓 */
     .etf-signal-table .sig-badge.hold { color: #fff; background: rgba(136,153,170,0.9); }
     .etf-signal-table .sig-badge.hold + div { color: var(--text-muted); }
     /* 走弱预警：还没到减仓，但已不再走强——用橙色和「持有不加仓」区分开 */
@@ -2135,20 +2169,8 @@ function effectiveChange(q, opts = {}) {
     // 24h模式：实时显示当前时段数据
     // 盘中：直接用盘中实时涨跌
     if (s === 'REGULAR') return q.regularMarketChangePercent ?? 0;
-    // 夜盘/收盘后窗口（ET 20:00–次日 04:00）：
-    // ① 雪球夜盘真实成交（富途「夜盘」同款数据源，口径同为相对正股收盘价）优先，
-    //    与富途 App 显示完全一致
-    // ② 无雪球数据时显示盘后终价 vs 收盘价（最近一段确认成交），
-    //    不采信 Yahoo fullday/期货/β 估算冒充的"夜盘价"
-    //    （期货 vs 昨结算价会把整个常规盘涨幅重复计入，例：QQQ 收盘 +1.02%、
-    //     盘后终价≈持平，期货口径却显示 +0.99%）
     if (s === 'OVERNIGHT') {
-      // 后端 computeOvernightQuote 已按优先级选好源（xueqiu > xueqiu-ext > yahoo > futures > proxy），
-      // 并把结果放进 overnightChangePercent。直接采用，不要再用 sina afterHoursPrice 重新计算——
-      // afterHoursPrice 是盘后定盘价，可能停滞数天，会覆盖掉后端实时的期货/yahoo 代理值
-      // （实测 QQQ：afterHoursPrice 卡在上周五 751.3754 → 算出来 +0.01%，
-      //  但后端 futures 代理实际 +0.10%，被前者覆盖）。
-      return q.overnightChangePercent ?? 0;
+      return q.overnightChangePercent ?? null;
     }
     // 盘前：eastmoney 的 regularMarketChangePercent 已是盘前实时价 vs 昨收
     if (s === 'PRE' || s === 'PREPRE') {
@@ -2759,7 +2781,7 @@ function renderMacdView() {
 // ═══════════════════════════════════════════════════
 //  RENDER — 纳指科技ETF 专用视图
 //   · 实时跟踪：现价 / 溢价率 / 均线 / MACD
-//   · 每日操作建议：溢价率（一级风控）× 技术面 × 持仓
+//   · 每日操作建议：技术面 × 持仓，溢价仅参考
 //   · 分时图 + 盘中提示（新提示以浮层弹出 + 可选桌面通知）
 //   · 买卖信号清单：哪天该买、哪天该卖，附信号后表现
 //   · 我的持仓：移动加权成本记账（localStorage）
@@ -2768,6 +2790,7 @@ const ETF_TRADES_KEY = 'etf-159509-trades';
 const ETF_ALERT_LOG_KEY = 'etf-159509-alert-log';
 let ETF_TRACK = null;
 let ETF_LOAD_ERR = null;
+let ETF_STALE = false;   // 服务端返回 stale:true（上游异常、下发的是上一轮完整数据）时置位，页面顶部挂"数据延迟"条
 let ETF_LOADING = false;
 let ETF_SHOW_ALL_SIGNALS = false;
 let ETF_NOTIFY = localStorage.getItem('etf-notify') === '1';
@@ -2876,46 +2899,9 @@ async function loadEtfTrack() {
     const pos = etfPosition();
     const params = [];
     if (pos.shares > 0) { params.push(`cost=${pos.avgCost.toFixed(4)}`, `shares=${pos.shares}`); }
-    // 把 QQQ/IXIC 的「昨日盘中」与「今日盘前段」两个涨跌幅分开传给后端
-    // - regPct：昨日盘中（昨前收 → 昨收），即 regularMarketChangePercent
-    // - prePct：今日盘前段（昨收 → 当前盘前/盘后/夜盘价），24h 口径下的盘外增量
-    // 分开展示：不叠加（用户视角 "昨日跌 1.93% + 今日盘前再跌 0.95%" 是两个独立信号）
-    // 后端按ETF基准交易日计算尚未消化的累计变化，两个时段只用于明细展示。
-    const qqq = LAST_MAP && LAST_MAP['QQQ'];
-    const ixic = LAST_MAP && LAST_MAP['IXIC'];
-    const split = (q) => {
-      if (!q) return { regPct: null, prePct: null };
-      const s = q.marketState;
-      if (s === 'PRE' || s === 'PREPRE') return { regPct: null, prePct: q.regularMarketChangePercent ?? null };
-      if (s === 'REGULAR') return { regPct: q.regularMarketChangePercent ?? null, prePct: null };
-      // 盘后/夜盘/已收盘：regPct=昨日盘中，prePct=盘外增量
-      const regPct = q.regularMarketChangePercent ?? 0;
-      let prePct = null;
-      if (s === 'OVERNIGHT') {
-        prePct = q.overnightChangePercent ?? null;
-      } else {
-        const closePrice = q.closePrice || q.regularMarketPrice;
-        if (q.afterHoursPrice && closePrice) {
-          prePct = ((q.afterHoursPrice - closePrice) / closePrice) * 100;
-        } else {
-          prePct = 0;
-        }
-      }
-      return { regPct, prePct };
-    };
-    const { regPct: qqqRegPct, prePct: qqqPrePct } = split(qqq);
-    const { regPct: ixicRegPct, prePct: ixicPrePct } = split(ixic);
-    if (qqqRegPct != null && isFinite(qqqRegPct)) params.push(`qqqRegPct=${qqqRegPct.toFixed(3)}`);
-    if (qqqPrePct != null && isFinite(qqqPrePct)) params.push(`qqqPrePct=${qqqPrePct.toFixed(3)}`);
-    if (ixicRegPct != null && isFinite(ixicRegPct)) params.push(`ixicRegPct=${ixicRegPct.toFixed(3)}`);
-    if (ixicPrePct != null && isFinite(ixicPrePct)) params.push(`ixicPrePct=${ixicPrePct.toFixed(3)}`);
-    // 累计口径（兼容旧字段，后端 fallback 用）
-    const qqqPct = (qqqRegPct != null && qqqPrePct != null && isFinite(qqqRegPct) && isFinite(qqqPrePct))
-      ? ((1 + qqqRegPct / 100) * (1 + qqqPrePct / 100) - 1) * 100 : null;
-    const ixicPct = (ixicRegPct != null && ixicPrePct != null && isFinite(ixicRegPct) && isFinite(ixicPrePct))
-      ? ((1 + ixicRegPct / 100) * (1 + ixicPrePct / 100) - 1) * 100 : null;
-    if (qqqPct != null && isFinite(qqqPct)) params.push(`qqqPct=${qqqPct.toFixed(3)}`);
-    if (ixicPct != null && isFinite(ixicPct)) params.push(`ixicPct=${ixicPct.toFixed(3)}`);
+    // QQQ/IXIC 的 regPct/prePct 拆分与累计口径复利已统一收敛到服务端：
+    // 前端每轮先拉 /api/quotes（落服务端 quoteCache，TTL 4s），etf-track 后端兜底逻辑
+    // 会从同一份 quoteCache 算出同构结果，这里不再重复传参（此前前后端各维护 ~60 行同构代码）。
     const qs = params.length ? '?' + params.join('&') : '';
     const r = await fetch('/api/etf-track' + qs);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -2923,6 +2909,7 @@ async function loadEtfTrack() {
     if (!json.success) throw new Error(json.error || 'etf-track failed');
     ETF_TRACK = json;
     ETF_LOAD_ERR = null;
+    ETF_STALE = !!json.stale;
     processEtfAlerts(json.alerts || []);
     etfTUpdate();
     updateDocTitle();
@@ -2934,7 +2921,7 @@ async function loadEtfTrack() {
 }
 
 // 「该出手了」类提示：首次打开页面也要弹（否则开盘时条件已满足就静默错过）
-const ETF_ALERT_URGENT = /^(buy_opportunity|buy_probe|premium_cross_dn|macd_flip_pos|macd_flip_neg|break_ma21|intraday_level|intraday_rebound|intraday_pullback|intraday_weak|tcycle_)/;
+const ETF_ALERT_URGENT = /^(buy_opportunity|buy_probe|premium_cross_dn|macd_flip_pos|macd_flip_neg|break_ma21|intraday_level|intraday_rebound|intraday_pullback|intraday_weak|tcycle_|action_run)/;
 
 // 新提示 → 浮层 + 提示音 +（可选）桌面通知
 // 首次加载只登记；但「买入机会 / 减仓信号 / 穿越买入线」这类会照常弹出
@@ -2942,9 +2929,15 @@ function etfAlertsActive(now = Date.now()) {
   const bj = new Date(now + 8 * 3600_000);
   const min = bj.getUTCHours() * 60 + bj.getUTCMinutes();
   const weekday = bj.getUTCDay() >= 1 && bj.getUTCDay() <= 5;
+  // 边界与服务端 isAShareTradingTime 一致：早盘含 11:30、尾盘不含 15:00（15:00 起即收盘）
   return !!(ETF_TRACK && ETF_TRACK.session && ETF_TRACK.session.trading && weekday
     && ((min >= 570 && min <= 690) || (min >= 780 && min < 900)));
 }
+
+// 同 key 提示的复现冷却：条件解除后允许再次提示，但阈值型提示（up3/dn15 等）在
+// 边缘抖动时会反复触发（服务端 20s 缓存 + 10s 轮询加剧），10 分钟内复现的同 key 不再弹
+const ETF_ALERT_COOLDOWN_MS = 10 * 60_000;
+const ETF_ALERT_COOLDOWN = new Map();   // key → 解除时间戳
 
 function processEtfAlerts(alerts) {
   if (!etfAlertsActive()) {
@@ -2955,9 +2948,12 @@ function processEtfAlerts(alerts) {
   }
   const first = ETF_ALERT_SEEN === null;
   if (first) ETF_ALERT_SEEN = new Set();
+  const nowTs = Date.now();
   etfAlertLogToday();
   for (const a of alerts) {
-    if (!a || !a.key || ETF_ALERT_SEEN.has(a.key)) continue;
+    if (!a || !a.key) continue;
+    const cd = ETF_ALERT_COOLDOWN.get(a.key);
+    if (ETF_ALERT_SEEN.has(a.key) || (cd && nowTs - cd < ETF_ALERT_COOLDOWN_MS)) continue;
     ETF_ALERT_SEEN.add(a.key);
     const urgent = ETF_ALERT_URGENT.test(a.key);
     const time = a.time || nowStr();
@@ -2968,9 +2964,18 @@ function processEtfAlerts(alerts) {
     if (signals && signals.actionable && (a.side === 'buy' || a.side === 'sell')
       && signals.events.some(e => e.key === a.key && e.side === a.side)) etfBeep();
   }
-  // 条件解除后允许再次提示
+  // 条件解除 → 记录解除时间（供冷却判定）并移出已见集合
   const keys = new Set(alerts.map(a => a && a.key).filter(Boolean));
-  for (const k of [...ETF_ALERT_SEEN]) if (!keys.has(k)) ETF_ALERT_SEEN.delete(k);
+  for (const k of [...ETF_ALERT_SEEN]) {
+    if (!keys.has(k)) {
+      ETF_ALERT_COOLDOWN.set(k, nowTs);
+      ETF_ALERT_SEEN.delete(k);
+    }
+  }
+  // 冷却表清理：解除超过 1 小时的条目不再需要
+  if (ETF_ALERT_COOLDOWN.size > 64) {
+    for (const [k, t] of ETF_ALERT_COOLDOWN) if (nowTs - t > 3600_000) ETF_ALERT_COOLDOWN.delete(k);
+  }
 }
 
 // 短促提示音（WebAudio 合成，无需音频文件；未交互过的页面会被浏览器拦截，静默跳过）
@@ -3102,7 +3107,7 @@ function etfSampleMarketMotion(map, stale, now = Date.now()) {
       : q && ['REGULAR', 'PRE', 'PREPRE', 'POST', 'OVERNIGHT'].includes(state) && q.tradingToday !== false;
     const pct = q && (symbol === 'SSE' ? q.regularMarketChangePercent : effectiveChange(q, { mode: '24h' }));
     const sourceAt = q && (symbol === 'SSE' ? q.sourceTimeMs : state === 'OVERNIGHT' ? q.overnightAsOf : q.sourceTimeMs);
-    if (stale || !active || !Number.isFinite(pct) || pct <= -100 || (state === 'OVERNIGHT' && q.overnightEstimated !== false)
+    if (stale || !active || !Number.isFinite(pct) || pct <= -100 || (state === 'OVERNIGHT' && (q.overnightEstimated !== false || q.overnightStale))
       || (sourceAt != null && (!Number.isFinite(sourceAt) || now - sourceAt > 45000 || sourceAt > now + 5000))) {
       delete ETF_MARKET_MOTION[symbol];
       continue;
@@ -3156,7 +3161,7 @@ function etfCurrentTradeSignal(now = Date.now()) {
   const qqqAbort = stop && stop.stop && stop.stop.qqqAbort;
   const priceStop = stop && stop.stop && stop.stop.pricePct;
   const pricePct = q.prevClose > 0 ? (q.price / q.prevClose - 1) * 100 : null;
-  const canBuy = Number.isFinite(q.premiumPct) && q.premiumPct <= 18 && time < '14:30' && plan && ['heavy', 'try'].includes(plan.tier)
+  const canBuy = time < '14:30' && plan && ['heavy', 'try'].includes(plan.tier)
     && guide && guide.buyState === '止跌确认 · 小仓候选'
     && !(Number.isFinite(qqqPct) && Number.isFinite(qqqAbort) && qqqPct <= qqqAbort)
     && !(Number.isFinite(pricePct) && Number.isFinite(priceStop) && pricePct <= priceStop);
@@ -3218,7 +3223,7 @@ function etfMarketLinkHtml() {
     note = '指数走强不替代ETF自身走势；仅已有仓位参考，触价不等于成交。';
   } else if (buy && canBuy && guide) {
     title = '指数回升＋ETF止跌 · 低吸候选';
-    note = '仍遵守溢价、仓位上限和原买入失效条件，不因指数走强追高。';
+    note = '仍遵守趋势、仓位上限和原买入失效条件，不因指数走强追高；溢价仅供参考。';
   } else {
     title = '指数回升 · 等ETF确认';
     note = canBuy ? '观察ETF低吸区止跌、高抛区转弱；未确认前不直接买卖。' : `当前风控或止跌确认条件不允许新增买入；已有仓位等待ETF转弱确认再考虑高抛。${guide && guide.buyNote || ''}`;
@@ -3231,7 +3236,17 @@ function etfHeroHtml() {
   const shPct = LAST_MAP.SSE && LAST_MAP.SSE.regularMarketChangePercent;
   const qqq = LAST_MAP.QQQ;
   const qqqPct = effectiveChange(qqq, { mode: '24h' });
-  const qqqSession = qqq && ({ PRE: '盘前', PREPRE: '盘前', POST: '盘后', OVERNIGHT: '夜盘' })[qqq.marketState] || '';
+  let qqqSession = qqq && ({ PRE: '盘前', PREPRE: '盘前', POST: '盘后', OVERNIGHT: '夜盘' })[qqq.marketState] || '';
+  if (qqq && qqq.marketState === 'OVERNIGHT') {
+    const at = qqq.overnightAsOf;
+    const time = Number.isFinite(at) ? new Date(at).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false, hour: '2-digit', minute: '2-digit' }) : '';
+    const lag = Number.isFinite(at) ? Math.max(0, Math.floor((Date.now() - at) / 60000)) : null;
+    const source = { xueqiu: '雪球', 'xueqiu-ext': '雪球扩展', yahoo: 'Yahoo', futures: 'NQ期货估算', proxy: '模型估算', 'xueqiu-drift': '雪球+NQ漂移' }[qqq.overnightSource] || '';
+    qqqSession = [qqq.overnightEstimated ? source || '夜盘估算' : `夜盘${source ? ' · ' + source : ''}`, time,
+      qqq.overnightSource && !Number.isFinite(at) ? '时间未确认' : '',
+      qqq.overnightStale || LAST_STALE || lag > 5 ? `滞后${lag == null ? '' : lag + '分钟'}` : ''].filter(Boolean).join(' · ');
+    if (qqq.overnightSource === 'unavailable') qqqSession = '夜盘数据不可用';
+  }
   const pct = v => Number.isFinite(v) ? `${v > 0 ? '+' : ''}${fmtPct(v)}` : '--';
   return `
     <div class="etf-hero">
@@ -3281,28 +3296,21 @@ function etfQuoteInlineHtml() {
 }
 
 // ── 今日操作建议 ──
-// ── 买点确认：溢价达标 + 「不追高」过滤器（威廉%R / MA21 / 布林中轨）──
-// 依据 764 日回测：只按溢价买 → 年化 56.1%；再要求至少一项过滤器命中 → 57.6%；
-// 而溢价达标但价格仍在冲高时买入，短期期望收益明显偏低。这些指标不用作卖出信号。
+// 注：当前视图未接线（renderEtfView 不调用），但有 etf-chase.test.js 覆盖，
+// 保留备用；删除前先同步移除对应测试。
 function etfConfirmHtml() {
   const t = ETF_TRACK;
   const c = t && t.advice && t.advice.confirm;
   if (!c) return '';
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const buy = (t.premium && t.premium.rules) ? t.premium.rules.buy : 18;
   const prem = t.premium ? t.premium.current : null;
-  const rows = [
-    { label: `溢价 ≤ ${buy}%`, value: prem != null ? `${prem.toFixed(2)}%` : '—', ok: c.premiumOk },
-    ...(c.filters || []).map(f => ({ label: f.label, value: f.value, ok: f.ok })),
-  ];
+  const rows = (c.filters || []).map(f => ({ label: f.label, value: f.value, ok: f.ok }));
   const items = rows.map(x => `
         <span class="etf-confirm-item ${x.ok ? 'ok' : 'no'}" title="${esc(x.ok ? '已满足' : '未满足')}">
           <span class="mk">${x.ok ? '✓' : '○'}</span>${esc(x.label)}<b>${esc(x.value)}</b>
         </span>`).join('');
   const nFilter = (c.filters || []).length;
-  const badge = c.level === 'none' ? '溢价未达标'
-    : c.level === 'good' ? `过滤命中 ${c.hitCount}/${nFilter}`
-      : '溢价达标 · 未见回调';
+  const badge = c.level === 'good' ? `过滤命中 ${c.hitCount}/${nFilter}` : '未见回调';
   return `
       <div class="etf-confirm lv-${esc(c.level)}">
         <div class="etf-confirm-head">
@@ -3310,15 +3318,11 @@ function etfConfirmHtml() {
           <span class="etf-confirm-badge">${esc(badge)}</span>
         </div>
         <div class="etf-confirm-items">${items}</div>
+        <div class="etf-confirm-note">溢价（仅参考）：${prem != null ? `${prem.toFixed(2)}%` : '—'}，不参与买点确认。</div>
         <div class="etf-confirm-note">${esc(c.note)}</div>
       </div>`;
 }
 
-// ── 仓位建议：把「方向」与「估值」解耦 ──
-//  趋势（MA21/MA60/MACD）决定该不该持仓；溢价档位只决定仓位上限，不产生清仓指令。
-//  回测（159509，2023-09-06~2026-09-30）：本方案 年化 43.7% / 最大回撤 -20.8%，
-//  对比买入持有 46.2% / -30.5%；2026-09 溢价 22%~32% 期间建议仓位 70%→60%，
-//  吃到约 7.4%，而旧的「溢价≥27 清仓」口径在 9 月全程空仓、收益 0。
 // ⚠ 函数名不要改回 etfPositionHtml —— 底部「持仓管理」区块同名定义在文件更靠后，
 //   会把它覆盖掉（JS 函数声明提升），导致本卡永远渲染不出来。
 function etfPosAdviceHtml() {
@@ -3350,6 +3354,11 @@ function etfPosAdviceHtml() {
           ${item('纳指100 MACD 翻红', g.usZero, g.usDif != null ? 'DIF ' + g.usDif.toFixed(0) : '')}
           <span class="etf-pos-us-note">${esc(g.note)}</span>
         </div>` : '';
+  // 仓位块的 headline 与建议卡顶部那句来自同一字段（buildEtfAdvice 直接透传 plan.headline），
+  // 重复渲染等于把同一段长文案贴两遍——只在内容不同（或独立调用）时才补一句。
+  const adviceHeadline = t.advice && t.advice.headline;
+  const posNote = p.headline && p.headline !== adviceHeadline
+    ? `<div class="etf-pos-note">${esc(p.headline)}</div>` : '';
   return `
       <div class="etf-pos ${p.state === 'UP' ? 'up' : 'down'}">
         <div class="etf-pos-head">
@@ -3361,13 +3370,13 @@ function etfPosAdviceHtml() {
           <div class="etf-pos-num">${posPct}<small>%</small></div>
           <div class="etf-pos-formula">
             趋势上限 <b>${Math.round((p.capTrend || 0) * 100)}%</b>
-            × 溢价系数 <b>${p.premiumFactor}</b>（溢价 ${premTxt} · ${esc(zoneLabel)}）
-            = 建议仓位 <b>${posPct}%</b>
+            · 建议仓位 <b>${posPct}%</b>
+            <div>溢价 ${premTxt} · ${esc(zoneLabel)}；溢价仅参考，不限制仓位。</div>
             ${p.capNote ? `<div class="etf-pos-capnote">${esc(p.capNote)}</div>` : ''}
           </div>
         </div>
         <div class="etf-pos-bar"><i style="width:${posPct}%"></i></div>
-        <div class="etf-pos-note">${esc(p.headline)}</div>
+        ${posNote}
         ${gateLine}
         ${p.entryNote ? `<div class="etf-pos-entry">${esc(p.entryNote)}</div>` : ''}
         ${trigs ? `<div class="etf-pos-triggers">${trigs}</div>` : ''}
@@ -3382,7 +3391,7 @@ function etfPanicHtml() {
   if (!s.current.warning) return '<div class="etf-panic"><div class="etf-panic-note">当前接口缺少恐慌预警数据，请确认后端已更新并重启；仅刷新页面无法更新旧服务。</div></div>';
   const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const cur = s.current, st = s.stats || {}, cfg = s.config || {};
-  const score = cur.score || 0, max = 7;
+  const score = cur.score || 0, max = 6;
   const trigger = cfg.trigger;
   const warning = cur.warning;
   const renderChecks = items => items.map(c => `
@@ -3397,21 +3406,53 @@ function etfPanicHtml() {
   const col = v => (v == null ? 'var(--text-muted)' : v >= 0 ? '#e84c3d' : '#2ea043');
   const plan = t.positionPlan;
   const premium = t.quote && Number.isFinite(t.quote.premiumPct) ? t.quote.premiumPct : null;
-  const blocked = premium != null && premium > cfg.premiumLimit;
   const active = !!(plan && plan.panic);
-  const buyLabel = blocked ? '高溢价 · 暂停买入'
-    : premium == null ? '溢价待确认'
-    : active ? '窗口中 · 按仓位执行'
+  const pw = plan && plan.panicWindow;
+  const buyLabel = active ? '窗口中 · 按仓位执行'
     : score >= trigger ? '共振达标 · 等窗口确认'
     : score === trigger - 1 ? '接近买点 · 仅关注' : '买入条件不足';
-  const tone = !blocked && premium != null ? (active ? 'hot' : score >= trigger - 1 ? 'warm' : '') : '';
-  const buyNote = blocked
-    ? `当前溢价 ${premium.toFixed(2)}% > ${cfg.premiumLimit}%：即使市场恐慌或共振达标，也不因预警加仓，仍按高溢价风控执行。`
-    : premium == null ? '当前溢价不可用，不能判断是否允许买入；预警和技术评分不替代溢价确认。'
-    : active ? `当前仓位建议：${plan.action}（${plan.posPct}%）。${plan.headline}`
-    : score >= trigger ? '当前共振评分达标，但执行窗口尚未确认；最新外盘预览不自动开启历史日K窗口，按上方仓位建议执行。'
-    : score === trigger - 1 ? '已接近正式窗口门槛，可关注候选买点；不自动试仓或加仓，仍按上方仓位建议执行。'
-    : `仅 ${score}/${max} 项达标，未达到 ${trigger} 项的正式窗口门槛；恐慌预警不等于 ETF 买入信号。`;
+  const tone = active ? 'hot' : score >= trigger - 1 ? 'warm' : '';
+  // 结构化短行（2026-11-10）：原来这里是 5 段长文案堆叠，窗口中时还会把上方「今日操作建议」
+  // 的整段 headline 再抄一遍。现在拆成「标签 + 一句」，一行只放一类信息；
+  // 仓位仍以上方建议为准，本卡只解释评分口径。
+  const head = [], body = [];
+  const addRow = (arr, tag, text, t) => { if (text) arr.push({ tag, text, tone: t || '' }); };
+  const esc0 = v => esc(v == null ? '' : v);
+  // ① 结论：今天这个分数意味着什么
+  if (active) {
+    addRow(head, '结论', score >= trigger
+      ? `窗口开启中，今日已达 ${trigger}/${max} 门槛，可按窗口规则执行。`
+      : `窗口开启中，今日未达 ${trigger}/${max} 门槛——窗口延续，不是新的恐慌买点。`);
+    addRow(head, '执行', `按上方「今日操作建议」执行：${esc0(plan.action)}；本卡只解释评分口径，不单独给仓位。`);
+  } else if (score >= trigger) {
+    addRow(head, '结论', `今日 ${score}/${max} 项共振达标，但执行窗口尚未确认；最新外盘预览不自动开启历史日K窗口。`);
+  } else if (score === trigger - 1) {
+    addRow(head, '结论', `已接近正式窗口门槛（${score}/${max}），可关注候选买点；不自动试仓或加仓，仍按上方仓位建议执行。`);
+  } else {
+    addRow(head, '结论', `仅 ${score}/${max} 项达标，未达到 ${trigger}/${max} 项正式门槛；恐慌预警不等于 ETF 买入信号。`);
+  }
+  // ② 门槛口径 + 数据来源
+  addRow(head, '门槛', `正式窗口需 ${trigger}/${max} 项共振，${trigger - 1} 项仅关注；外盘只占 1 项，并非必选项。评分基于 ${esc0(cur.date)} 日K收盘，不是盘中实时买入指令。`);
+  // ③ 窗口机制
+  if (pw && pw.startDate) {
+    addRow(body, '窗口', `${esc0(pw.startDate)} 触发（${pw.startScore}/6 ${esc0(pw.startLevel || '')}）· 第 ${pw.days} 个交易日`
+      + (pw.ret == null ? '' : ` · 记录成本 ${pw.startPx}（${pw.ret >= 0 ? '+' : ''}${pw.ret}%）`));
+    addRow(body, '今日', `恐慌评分 ${pw.todayScore == null ? '—' : `${pw.todayScore}/6（${esc0(pw.todayLevel || '')}）`}`
+      + `${pw.fresh ? '· 今日新触发' : ''}${pw.aboveMa21 ? '· 已站上 MA21' : '· 仍未站上 MA21'}`,
+      pw.fresh ? 'hot' : 'mute');
+    addRow(body, '宽限', pw.graceLeft == null
+      ? `${cfg.graceDays} 个交易日仍站不回 MA21 → 撤回特殊仓位支持`
+      : `还剩 ${pw.graceLeft} 个交易日；逾期仍站不回 MA21 → 撤回特殊仓位支持，回到减仓档`);
+  }
+  addRow(body, '仓位', `未获价格确认只按 ${Math.round(cfg.tryCap * 100)}% 试仓档；站回 MA21 且不在减仓档才抬到 ${Math.round(cfg.cap * 100)}%，满足 ETF 与纳指100 的重仓门控再到 ${Math.round(cfg.capAdd * 100)}%。`);
+  addRow(body, '结束', `收盘较 MA21 高 ${Math.round((cfg.ma21Band - 1) * 100)}%、相对记录成本上涨 ${Math.round(cfg.takeProfit * 100)}%，或满 ${cfg.holdDays} 个交易日 → 窗口结束。`);
+  addRow(body, '溢价', `${premium == null ? '数据缺失' : premium.toFixed(2) + '%'}${t.quote && t.quote.quoteDate ? `（${esc0(t.quote.quoteDate)}）` : ''}；仅参考，不限制买卖或仓位`, 'mute');
+  const rowsHtml = arr => `<div class="etf-panic-rows">${arr.map(r => `
+      <div class="etf-point${r.tone === 'mute' ? ' mute' : ''}">
+        <span class="etf-point-tag">${r.tag}</span>
+        <span class="etf-point-text">${r.text}</span>
+      </div>`).join('')}
+    </div>`;
   const recent = (s.recent || []).map(e => {
     const r = e.ret == null ? '' : (e.ret >= 0 ? '+' : '') + e.ret + '%';
     const reset = e.resetFrom ? ` <span style="color:var(--text-muted);font-size:8.5px;" title="自 ${esc(e.resetFrom.date)}（${e.resetFrom.score}分）重置成本">↻</span>` : '';
@@ -3436,11 +3477,9 @@ function etfPanicHtml() {
         <span class="etf-confirm-badge">${esc(buyLabel)}</span>
         <span class="etf-panic-score">${score}<small>/${max} 项</small></span>
       </div>
-      <div class="etf-panic-note"><b>${esc(buyNote)}</b></div>
-      <div class="etf-panic-note">买入共振门槛：${trigger}/${max} 项，${trigger - 1} 项仅关注；外盘只占 1 项，并非必选项。当前场内溢价：${premium == null ? '待确认' : premium.toFixed(2) + '%'}${t.quote && t.quote.quoteDate ? `（${esc(t.quote.quoteDate)}）` : ''}；下方技术条件和评分溢价基于 ${esc(cur.date)} 日K，不是实时买入指令。</div>
+      ${rowsHtml(head)}
       ${checks ? `<div class="etf-panic-checks">${checks}</div>` : `<div class="etf-panic-note">评分明细暂不可用</div>`}
-      <div class="etf-panic-note">窗口内且溢价 ≤${cfg.premiumLimit}%：未获价格确认只按 ${Math.round(cfg.tryCap * 100)}%～${Math.round(cfg.tryCapCheap * 100)}% 试仓档；站回 MA21 且不在减仓档才抬到 ${Math.round(cfg.cap * 100)}%，满足 ETF 与纳指100 的重仓门控再到 ${Math.round(cfg.capAdd * 100)}%。${cfg.graceDays} 个交易日仍未站回 MA21 则撤回特殊仓位支持。</div>
-      <div class="etf-panic-note">历史窗口在收盘高于 MA21 ${Math.round((cfg.ma21Band - 1) * 100)}%、相对记录成本上涨 ${Math.round(cfg.takeProfit * 100)}% 或满 ${cfg.holdDays} 个交易日时结束。</div>
+      ${rowsHtml(body)}
       ${hist ? `<div class="etf-panic-hist">${hist} · 按记录成本计算，含更低位成本重置，不等于实际账户收益或未来胜率。</div>` : ''}
       ${recent ? `<div class="etf-panic-hist">最近窗口（近两年）：${recent}</div>` : ''}
     </div>`;
@@ -3460,12 +3499,22 @@ function etfAdviceHtml() {
     wait:   'linear-gradient(180deg,#8ba4bb,#5f7a94)',
   }[a.level] || 'linear-gradient(180deg,#8ba4bb,#5f7a94)';
   const icon = { danger: '⚠', warn: '⚠', buy: '▲', hold: '●', wait: '○' }[a.level] || '○';
-  const reasonsHtml = (a.reasons || []).map(r => `
-    <div class="etf-reason">
-      <span class="etf-reason-dot ${r.tone}"></span>
+  // 理由按后端 rank 排序后编号：1=趋势门控（决定档位）→ 2=当日动能 → 3=最近信号 → N=溢价参考
+  const reasonsHtml = (a.reasons || []).map((r, i) => `
+    <div class="etf-reason${r.ref ? ' ref' : ''}">
+      <span class="etf-reason-no ${r.tone}">${i + 1}</span>
       <span class="etf-reason-label">${r.label}</span>
       <span class="etf-reason-text">${r.text}</span>
     </div>`).join('');
+  // 结构化说明：后端把长文案拆成带标签的短行（窗口/今日/门控/仓位/抬仓/时效），
+  // 没有 points 的档位仍回落到 headline 一句话。
+  const pointsHtml = (a.points && a.points.length) ? `
+        <div class="etf-points">${a.points.map(p => `
+          <div class="etf-point${p.tone === 'mute' ? ' mute' : ''}">
+            <span class="etf-point-tag">${p.tag}</span>
+            <span class="etf-point-text">${p.text}</span>
+          </div>`).join('')}
+        </div>` : '';
   return `
     <div class="etf-advice lv-${a.level}">
       <div class="etf-advice-head">
@@ -3473,7 +3522,7 @@ function etfAdviceHtml() {
         <span class="etf-advice-action" style="background:${color}"><span class="ic">${icon}</span>${a.action}</span>
       </div>
       <div class="etf-advice-body">
-        <div class="etf-advice-headline">${a.headline}</div>
+        ${pointsHtml || `<div class="etf-advice-headline">${a.headline}</div>`}
         <div class="etf-reasons">${reasonsHtml}</div>
         ${etfPosAdviceHtml()}
         ${etfPanicHtml()}
@@ -3481,7 +3530,6 @@ function etfAdviceHtml() {
     </div>`;
 }
 
-// ── 溢价档位条（策略阈值可视化：15% 加仓线 / 18% 买入线 / 22% 警戒线 / 27% 减仓线）──
 function etfPremiumZonesHtml() {
   const t = ETF_TRACK;
   const p = t && t.premium;
@@ -3491,11 +3539,11 @@ function etfPremiumZonesHtml() {
   const pr = p.prices || {};
   const MAXV = 35;                       // 展示刻度上限（历史最高约 32.3%）
   const segs = [
-    { key: 'add',   lo: 0,        hi: R.add,    label: '加仓区', cls: 'cheap',   tip: '多买' },
-    { key: 'buy',   lo: R.add,    hi: R.buy,    label: '买入区', cls: 'ok',      tip: '买入' },
-    { key: 'watch', lo: R.buy,    hi: R.watch,  label: '观望',   cls: 'warn',    tip: '不加仓' },
-    { key: 'avoid', lo: R.watch,  hi: R.danger, label: '高溢价', cls: 'high',    tip: '只减不加' },
-    { key: 'exit',  lo: R.danger, hi: MAXV,     label: '极高',   cls: 'extreme', tip: '减仓' },
+    { key: 'add',   lo: 0,        hi: R.add,    label: '较低',   cls: 'cheap' },
+    { key: 'buy',   lo: R.add,    hi: R.buy,    label: '中低',   cls: 'ok' },
+    { key: 'watch', lo: R.buy,    hi: R.watch,  label: '中等',   cls: 'warn' },
+    { key: 'avoid', lo: R.watch,  hi: R.danger, label: '高溢价', cls: 'high' },
+    { key: 'exit',  lo: R.danger, hi: MAXV,     label: '极高',   cls: 'extreme' },
   ];
   const curZone = p.band ? p.band.key : null;
   const bar = segs.map(s => {
@@ -3510,12 +3558,12 @@ function etfPremiumZonesHtml() {
 
   const now = t.quote && t.quote.price != null ? t.quote.price : (t.ind ? t.ind.price : null);
   const dist = px => (now != null && px > 0) ? ((now / px - 1) * 100) : null;
-  const rowOf = (cls, name, o, hint) => {
+  const rowOf = (cls, name, o) => {
     if (!o) return '';
     const d = dist(o.price);
     return `<div class="etf-zone-price ${cls}">
       <span>${name}</span><b>${o.price.toFixed(3)}</b>
-      <em>溢价 ${o.pct}%${d == null ? '' : d > 0 ? ` · 需跌 ${d.toFixed(2)}%` : ` · 已低于 ${Math.abs(d).toFixed(2)}%`}${hint ? ' · ' + hint : ''}</em>
+      <em>溢价 ${o.pct}%${d == null ? '' : d > 0 ? ` · 现价高于参考 ${d.toFixed(2)}%` : ` · 现价低于参考 ${Math.abs(d).toFixed(2)}%`}</em>
     </div>`;
   };
   const d = p.dist;
@@ -3531,13 +3579,13 @@ function etfPremiumZonesHtml() {
         <span>0%</span><span>${R.add}%</span><span>${R.buy}%</span><span>${R.watch}%</span><span>${R.danger}%</span><span>${MAXV}%+</span>
       </div>
       <div class="etf-zone-prices">
-        ${rowOf('add', `加仓价`, pr.add, '可多买')}
-        ${rowOf('buy', `买入价`, pr.buy, '可买入')}
-        ${rowOf('watch', '警戒价', pr.watch, '只减不加')}
-        ${rowOf('cut', '减仓价', pr.cut, '减仓避险')}
+        ${rowOf('add', '较低溢价参考', pr.add)}
+        ${rowOf('buy', '中低溢价参考', pr.buy)}
+        ${rowOf('watch', '高溢价参考', pr.watch)}
+        ${rowOf('cut', '极高溢价参考', pr.cut)}
       </div>
       <div class="etf-legend" style="margin-top:8px">
-        <span>策略：溢价 ≤${R.buy}% 可买入，＜${R.add}% 可多买；≥${R.watch}% 只减不加，≥${R.danger}% 减仓</span>
+        <span>溢价仅供参考，不限制买卖或仓位；高溢价仍有收敛风险。</span>
       </div>
       ${distLine}
     </div>`;
@@ -3635,7 +3683,7 @@ function etfReviewHtml() {
       <tbody>${sellRows || '<tr><td colspan="4">—</td></tr>'}</tbody>
     </table>
 
-    <div class="etf-sec-title" style="margin-top:12px"><span>策略真正会出手的买点</span><span class="sub">MACD 买入信号 ∩ 溢价 ≤${(t.premium && t.premium.rules ? t.premium.rules.buy : 18)}%</span></div>
+    <div class="etf-sec-title" style="margin-top:12px"><span>策略真正会出手的买点</span><span class="sub">MACD 买入信号 · 溢价仅参考</span></div>
     <table class="etf-signal-table">
       <thead><tr><th>日期</th><th>价格</th><th>信号</th><th>当时溢价</th><th>后20日</th></tr></thead>
       <tbody>${sigRows || '<tr><td colspan="5">—</td></tr>'}</tbody>
@@ -3658,26 +3706,41 @@ function etfPremarketHistoryHtml(p) {
   const h = p && p.historyReview;
   const pct = v => (v == null || !isFinite(v)) ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
   if (!h) return '';
+  const up = h.dir === 'up';
+  const title = up ? '历史涨幅回顾' : '历史跌幅回顾';
   const range = h.range ? `${pct(h.range.lo)} ~ ${pct(h.range.hi)}` : '—';
+  // 涨幅日看次日盘中最高（卖档参考），跌幅日看次日盘中最低（低吸参考）
+  const ext = up ? h.high : h.low;
+  const extLabel = up ? '最高' : '最低';
   if (h.count < 5) {
     return `
       <div class="etf-premarket-sec">
-        <div class="etf-premarket-sec-title">历史跌幅回顾（${escHtml(h.period || '近2年')} QQQ 正规盘 ${pct(h.target)}，±30% 区间 ${range}）</div>
-        <div class="etf-alert info"><span class="etf-alert-title">样本不足</span><span class="etf-alert-text">匹配到 ${h.count} 个独立 ETF 交易日，未达5个样本；不据此自动校准买点，也不能估计可靠胜率。</span></div>
+        <div class="etf-premarket-sec-title">${title}（${escHtml(h.period || '近2年')} QQQ 正规盘 ${pct(h.target)}，±30% 区间 ${range}）</div>
+        <div class="etf-alert info"><span class="etf-alert-title">样本不足</span><span class="etf-alert-text">匹配到 ${h.count} 个独立 ETF 交易日，未达5个样本；不据此自动校准${up ? '卖' : '买'}点，也不能估计可靠胜率。</span></div>
       </div>`;
   }
-  const samples = (h.samples || []).map(x => `<span class="etf-history-sample">${escHtml(x.qqqDate)} QQQ ${pct(x.qqqMove)} → ETF ${escHtml(x.etfDate)} 收 ${pct(x.closePct)} / 最低 ${pct(x.lowPct)}</span>`).join('');
+  const samples = (h.samples || []).map(x => `<span class="etf-history-sample">${escHtml(x.qqqDate)} QQQ ${pct(x.qqqMove)} → ETF ${escHtml(x.etfDate)} 开 ${pct(x.openPct)} / 收 ${pct(x.closePct)} / 最高 ${pct(x.highPct)} / 最低 ${pct(x.lowPct)}</span>`).join('');
+  const stats = up ? [
+    [ext && ext.avg, `次日 ETF 盘中最高平均（中位 ${pct(ext && ext.median)}）`],
+    [h.close && h.close.avg, `次日 ETF 收盘平均（中位 ${pct(h.close && h.close.median)}）`],
+    [ext && ext.best, `盘中${extLabel}最好 / 最差 ${pct(ext && ext.worst)}`],
+    [h.close && h.close.best, `收盘最好 / 最差 ${pct(h.close && h.close.worst)}`],
+  ] : [
+    [h.close && h.close.avg, `次日 ETF 收盘平均（中位 ${pct(h.close && h.close.median)}）`],
+    [ext && ext.avg, `次日盘中最大跌幅平均（中位 ${pct(ext && ext.median)}）`],
+    [h.close && h.close.worst, `收盘最差 / 最好 ${pct(h.close && h.close.best)}`],
+    [ext && ext.worst, `盘中最低最差 / 最好 ${pct(ext && ext.best)}`],
+  ];
+  const upNote = up ? `<div class="etf-history-samples">仅作高抛档位参考，不自动上抬卖档；QQQ 涨不等于 ETF 跟涨（溢价影响大），历史统计不代表未来，更不构成追高依据。</div>` : '';
   return `
     <div class="etf-premarket-sec">
-      <div class="etf-premarket-sec-title">历史跌幅回顾（${escHtml(h.period || '近2年')} QQQ 正规盘 ${pct(h.target)}，±30% 区间 ${range} · ${h.count} 次）</div>
+      <div class="etf-premarket-sec-title">${title}（${escHtml(h.period || '近2年')} QQQ 正规盘 ${pct(h.target)}，±30% 区间 ${range} · ${h.count} 次）</div>
       <div class="etf-history-review">
         <div class="etf-history-summary">
-          <div class="etf-history-stat"><b>${pct(h.close && h.close.avg)}</b><span>次日 ETF 收盘平均（中位 ${pct(h.close && h.close.median)}）</span></div>
-          <div class="etf-history-stat"><b>${pct(h.low && h.low.avg)}</b><span>次日盘中最大跌幅平均（中位 ${pct(h.low && h.low.median)}）</span></div>
-          <div class="etf-history-stat"><b>${pct(h.close && h.close.worst)}</b><span>收盘最差 / 最好 ${pct(h.close && h.close.best)}</span></div>
-          <div class="etf-history-stat"><b>${pct(h.low && h.low.worst)}</b><span>盘中最低最差 / 最好 ${pct(h.low && h.low.best)}</span></div>
+          ${stats.map(([v, label]) => `<div class="etf-history-stat"><b>${pct(v)}</b><span>${label}</span></div>`).join('')}
         </div>
         ${samples ? `<div class="etf-history-samples">相近样本：${samples}</div>` : ''}
+        ${upNote}
       </div>
     </div>`;
 }
@@ -3716,9 +3779,8 @@ function etfPremarketHtml() {
     const cur = curPct != null && curPct <= b.pct;
     const cls = hit ? 'good' : 'info';
     const marker = hit ? '✓ ' : (cur ? '→ ' : '');
-    const allowed = t.quote && Number.isFinite(t.quote.premiumPct) && t.quote.premiumPct <= 18;
     return `<div class="etf-alert ${cls}">
-      <span class="etf-alert-title">${marker}${b.price.toFixed(3)}（${b.pct.toFixed(2)}%）· ${allowed ? `参考 ${b.pos}% 日内资金` : '仅观察，不新增仓位'}</span>
+      <span class="etf-alert-title">${marker}${b.price.toFixed(3)}（${b.pct.toFixed(2)}%）· 参考 ${b.pos}% 日内资金</span>
       <span class="etf-alert-text">${escHtml(b.reason)}；触达后仍需止跌与总仓位风控确认。</span>
     </div>`;
   }).join('');
@@ -3791,10 +3853,33 @@ function etfIntradaySignalsHtml() {
 
 // ── 盘中提示（面板内紧凑展示，默认只列最重要的 3 条） ──
 const ETF_ALERT_TOP = 3;
+// 行动卡：直接回答「现在该干嘛」——买 / 卖 / 持有 / 跑路，并给出三个关键价位
+// 非交易时段也显示（按最近一笔行情计算，降透明度并标注），否则盘后看不到效果
+function etfActionHtml() {
+  const a = ETF_TRACK && ETF_TRACK.action;
+  if (!a) return '';
+  const active = etfAlertsActive();
+  const icons = { run: '🏃 跑路', sell: '⚠️ 减仓', buy: '🟢 买入', hold: '🤝 持有不动' };
+  const p = a.prices || {};
+  const chip = (v, label, cls) => `<span${cls ? ` class="${cls}"` : ''}>${label} ${Number.isFinite(v) ? v.toFixed(3) : '—'}</span>`;
+  return `<div class="etf-action etf-action-${escHtml(a.stance || 'hold')}${active ? '' : ' off'}">
+    <div class="etf-action-top">
+      <span class="etf-action-verdict">${icons[a.stance] || escHtml(a.verdict || '')}</span>
+      <span class="etf-action-verdict" style="font-size:11px">${escHtml(a.verdict || '')}${active ? '' : ' · 非交易时段'}</span>
+    </div>
+    <div class="etf-action-prices">
+      ${chip(p.stop, '🏃 跑路线', 'run-line')}
+      ${chip(p.buy, '🟢 下一买档')}
+      ${chip(p.sell, '⚠️ 下一卖档')}
+    </div>
+    <div class="etf-action-reason">${escHtml(a.reason || '')}${active ? '' : '（按最近一笔行情计算，开盘后实时刷新）'}</div>
+  </div>`;
+}
 function etfAlertsHtml() {
   const t = ETF_TRACK || {};
   const active = etfAlertsActive();
-  const list = active ? t.alerts || [] : [];
+  // info 级提示（溢价档位、小幅涨跌等）只进「提示记录」，不占盘中提示位
+  const list = active ? (t.alerts || []).filter(a => a.level !== 'info') : [];
   const shown = ETF_ALERT_EXPAND ? list : list.slice(0, ETF_ALERT_TOP);
   const live = shown.map(a => `
     <div class="etf-alert ${escHtml(a.level || 'info')}">
@@ -3823,6 +3908,7 @@ function etfAlertsHtml() {
       <span class="sub">${active ? '新信号即时提示' : '15:00 后停止通知，仅供回看'}</span>
     </div>
     ${empty}
+    ${etfActionHtml()}
     ${live ? `<div class="etf-alerts">${live}</div>` : ''}
     ${more}
     ${etfIntradaySignalsHtml()}
@@ -3902,18 +3988,42 @@ function etfChaseGateHtml() {
   const cls = ['allow', 'wait', 'block', 'closed'].includes(g.level) ? g.level : 'wait';
   const tag = { allow: '可以小仓', wait: '先别追', block: '不能追', closed: '复盘' }[g.level] || '观察';
   const m = g.metrics || {};
-  const line = Number.isFinite(m.premiumLine) ? m.premiumLine : 18;
-  const premiumWarn = Number.isFinite(m.premium) && m.premium > line
-    ? `<div class="etf-gate-warn">另外：溢价 ${m.premium.toFixed(2)}%（买入线 ${line}%），即使结构允许也不建议加仓。</div>` : '';
+  const premiumRef = `<div class="etf-gate-warn">当前溢价 ${Number.isFinite(m.premium) ? m.premium.toFixed(2) + '%' : '数据缺失'}，仅供参考，不限制买卖或仓位。</div>`;
   return `<div class="etf-gate ${cls}" data-chase-gate="${escHtml(g.level)}">
     <span class="etf-gate-tag">${escHtml(tag)}</span>
     <div class="etf-gate-body">
       <div class="etf-gate-title"><span>${escHtml(g.label || '')}</span><span class="etf-gate-time">${escHtml(g.asOf || '')}</span></div>
       <div class="etf-gate-reason">${escHtml(g.reason || '')}</div>
       ${g.fix ? `<div class="etf-gate-fix">${escHtml(g.fix)}</div>` : ''}
-      ${premiumWarn}
+      ${premiumRef}
     </div>
   </div>`;
+}
+
+function etfInspectIntraday(event) {
+  const el = event.currentTarget, svg = el.querySelector('svg');
+  const points = [...svg.querySelectorAll('[data-inspect-x]')];
+  if (!points.length) return;
+  const hair = svg.querySelector('[data-intraday-crosshair]');
+  if (event.type === 'pointerleave') { hair.setAttribute('visibility', 'hidden'); return; }
+  let index = Number(el.dataset.inspectIndex || points.length - 1);
+  if (event.type === 'keydown') {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    index = event.key === 'Home' ? 0 : event.key === 'End' ? points.length - 1 : Math.max(0, Math.min(points.length - 1, index + (event.key === 'ArrowLeft' ? -1 : 1)));
+  } else {
+    const box = svg.getBoundingClientRect();
+    const x = (event.clientX - box.left) * svg.viewBox.baseVal.width / box.width;
+    index = points.reduce((best, p, i) => Math.abs(Number(p.dataset.inspectX) - x) < Math.abs(Number(points[best].dataset.inspectX) - x) ? i : best, 0);
+  }
+  el.dataset.inspectIndex = index;
+  const p = points[index];
+  hair.setAttribute('x1', p.dataset.inspectX); hair.setAttribute('x2', p.dataset.inspectX); hair.setAttribute('visibility', 'visible');
+  document.getElementById('etf-intraday-readout').textContent = p.dataset.inspectText;
+  if (event.type === 'keydown') {
+    const x = Number(p.dataset.inspectX);
+    if (x < el.scrollLeft + 44 || x > el.scrollLeft + el.clientWidth - 44) el.scrollLeft = Math.max(0, x - el.clientWidth / 2);
+  }
 }
 
 // ── 分时图 ──
@@ -3921,16 +4031,19 @@ function etfIntradayHtml() {
   const t = ETF_TRACK;
   const d = t && t.intraday;
   const q = (t && t.quote) || {};
-  if (!d || !d.points || d.points.length < 2) return etfHeroHtml() + etfSessionQuoteHtml() + `<div class="etf-empty">${escHtml(d && d.note || '分时数据不可用')}</div>` + etfQuoteInlineHtml();
+  const tMarket = etfTMarket(), tState = EtfTStrategy.evaluate(ETF_TRADES, tMarket, ETF_T_RULES);
+  const guide = t && t.intradaySignals && t.intradaySignals.guide;
+  const bandHistory = t && t.intradaySignals && t.intradaySignals.bands || [];
+  const tHtml = etfTIntradayHtml(tState, tMarket, guide, bandHistory);
+  if (!d || !d.points || d.points.length < 2) return etfHeroHtml() + etfSessionQuoteHtml() + tHtml + `<div class="etf-empty">${escHtml(d && d.note || '分时数据不可用')}</div>` + etfQuoteInlineHtml();
   const pts = d.points;
   const prevClose = d.prevClose || q.prevClose || pts[0].price;
-  const guide = t.intradaySignals && t.intradaySignals.guide;
-  const bandHistory = t.intradaySignals && t.intradaySignals.bands || [];
   const guideBands = [
     { key: 'buy', field: 'lowBand', label: '低吸参考', color: 'var(--up)' },
     { key: 'sell', field: 'highBand', label: '反弹观察', color: 'var(--down)' },
   ];
   const bandsAt = new Map(bandHistory.map(r => [r.time, r]));
+  const targetsAt = new Map(pts.map(p => [p.t, etfTReferenceAt(tState, d.date, p.t)]));
   const viewportWidth = etfChartWidth(24), H = 190, PL = 36, PR = 44, PT = 24, PB = 22;
   const allDay = typeof ETF_INTRADAY_VIEW !== 'undefined' && ETF_INTRADAY_VIEW.all && (!ETF_INTRADAY_VIEW.date || ETF_INTRADAY_VIEW.date === d.date);
   const sessionGap = allDay ? 16 : 28;
@@ -3941,6 +4054,7 @@ function etfIntradayHtml() {
   const vals = [];
   pts.forEach(p => { vals.push(p.price); if (p.avg != null) vals.push(p.avg); });
   vals.push(prevClose);
+  for (const ref of targetsAt.values()) { if (ref) vals.push(ref.target); }
   bandHistory.forEach(r => guideBands.forEach(x => { if (r[x.field]) vals.push(r[x.field].low, r[x.field].high); }));
   let lo = Math.min(...vals), hi = Math.max(...vals);
   if (!(hi > lo)) hi = lo + 0.01;
@@ -4018,47 +4132,60 @@ function etfIntradayHtml() {
   const signalEvents = t.intradaySignals && t.intradaySignals.events || [];
   const markers = signalEvents.map(e => {
     const x = xTime(e.time), y = Y(e.price);
-    const label = e.side === 'sell' ? `${e.risk ? '减' : '卖'} ${e.price.toFixed(3)}` : e.side === 'buy' ? `买 ${e.price.toFixed(3)}` : '观察';
+    const label = e.side === 'sell' ? `${e.risk ? '风险减' : '高抛'} ${e.price.toFixed(3)}` : e.side === 'buy' ? `低吸 ${e.price.toFixed(3)}` : '观察';
     const color = e.side === 'buy' ? 'var(--up)' : e.side === 'sell' ? 'var(--down)' : 'var(--text-secondary)';
     const mark = e.side === 'watch'
       ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="var(--text-secondary)" stroke="var(--etf-panel)" stroke-width="2"/>`
       : `<path d="M${x.toFixed(1)} ${(y + (e.side === 'buy' ? -5 : 5)).toFixed(1)} l-5 ${e.side === 'buy' ? 9 : -9} h10 Z" fill="${color}" stroke="var(--etf-panel)" stroke-width="2"/>`;
     const labelY = e.side === 'sell' ? Math.min(H - PB - 2, y + 15) : Math.max(PT + 8, y - 9);
     const labelX = e.side === 'watch' ? x : Math.max(PL + 24, Math.min(W - PR - 24, x));
-    return `<g data-intraday-side="${escHtml(e.side)}"><title>${escHtml(e.time)} ${escHtml(e.title)} ${e.price.toFixed(3)}，候选信号不代表成交</title>${mark}<text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="${color}">${label}</text></g>`;
+    return `<g data-intraday-side="${escHtml(e.side)}"><title>${escHtml(e.time)} ${escHtml(e.title)} ${e.price.toFixed(3)}，候选信号不代表成交</title>${mark}<text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="var(--text-primary)">${label}</text></g>`;
   }).join('');
   const bandRange = band => band ? `${band.low.toFixed(3)}–${band.high.toFixed(3)}` : '—';
   const hoverPoints = pts.map((p, i) => {
-    const reference = bandsAt.get(p.t);
-    return `<circle cx="${X(i).toFixed(1)}" cy="${Y(p.price).toFixed(1)}" r="6" fill="transparent"><title>${escHtml(p.t)} 价格 ${p.price.toFixed(3)} · 均价 ${p.avg == null ? '—' : p.avg.toFixed(3)} · 当时低吸 ${bandRange(reference && reference.lowBand)} · 当时反弹观察 ${bandRange(reference && reference.highBand)}</title></circle>`;
+    const reference = bandsAt.get(p.t), target = targetsAt.get(p.t);
+    const text = `${p.t} · 价格 ${p.price.toFixed(3)} · 均价 ${p.avg == null ? '—' : p.avg.toFixed(3)} · 当时低吸挂单 ${bandRange(reference && reference.lowBand)} · 高抛参考 ${bandRange(reference && reference.highBand)}${target ? ` · 费用后接回上限 ${target.target.toFixed(3)}（${target.shares}份）` : ''}`;
+    return `<circle data-inspect-x="${X(i).toFixed(1)}" data-inspect-text="${escHtml(text)}" cx="${X(i).toFixed(1)}" cy="${Y(p.price).toFixed(1)}" r="12" fill="transparent"><title>${escHtml(text)}</title></circle>`;
   }).join('');
-  const minuteTable = `<details><summary class="etf-panic-note">查看分钟数据与信号（${pts.length} 点）</summary><div style="max-height:220px;overflow:auto"><table style="width:100%;font-size:10px"><thead><tr><th>时间</th><th>价格</th><th>均价</th><th>低吸区</th><th>反弹观察区</th><th>信号</th></tr></thead><tbody>${pts.map(p => `<tr><td>${escHtml(p.t)}</td><td>${p.price.toFixed(3)}</td><td>${p.avg == null ? '—' : p.avg.toFixed(3)}</td><td>${bandRange(bandsAt.get(p.t) && bandsAt.get(p.t).lowBand)}</td><td>${bandRange(bandsAt.get(p.t) && bandsAt.get(p.t).highBand)}</td><td>${signalEvents.filter(e => e.time === p.t).map(e => escHtml(e.title)).join('；') || '—'}</td></tr>`).join('')}</tbody></table></div></details>`;
-  const bandMarks = guideBands.map(x => {
-    const segments = []; let segment = [];
-    for (const row of bandHistory) {
-      if (!row[x.field] || (segment.length && minuteAt(row.time) - minuteAt(segment[segment.length - 1].time) !== 1)) {
-        if (segment.length) segments.push(segment);
-        segment = [];
-      }
-      if (row[x.field]) segment.push(row);
-    }
-    if (segment.length) segments.push(segment);
-    const marks = segments.map(rows => {
-      const edge = key => rows.map((r, i) => `${i ? 'L' : 'M'}${xTime(r.time).toFixed(1)} ${Y(r[x.field][key]).toFixed(1)}`).join(' ');
-      const bottom = [...rows].reverse().map(r => `L${xTime(r.time).toFixed(1)} ${Y(r[x.field].low).toFixed(1)}`).join(' ');
-      const fill = edge('high') + ' ' + bottom + ' Z';
-      return `<path data-band-segment="${x.key}" d="${fill}" fill="${x.color}" opacity="0.10"/><path d="${edge('high')}" fill="none" stroke="${x.color}" stroke-width="1" stroke-dasharray="${x.key === 'buy' ? '2 3' : '6 3'}"/><path d="${edge('low')}" fill="none" stroke="${x.color}" stroke-width="1" stroke-dasharray="${x.key === 'buy' ? '2 3' : '6 3'}"/>`;
-    }).join('');
-    return marks ? `<g data-reference-zone="${x.key}"><title>${x.label}动态带：每分钟使用当时已知数据，不代表买卖确认</title>${marks}</g>` : '';
+  let targetPath = '', priorTarget = null;
+  for (let i = 0; i < pts.length; i++) {
+    const ref = targetsAt.get(pts[i].t);
+    if (!ref) { priorTarget = null; continue; }
+    const consecutive = priorTarget && ref.shares === priorTarget.shares && minuteAt(pts[i].t) - minuteAt(pts[i - 1].t) === 1;
+    targetPath += `${consecutive ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(ref.target).toFixed(1)} `;
+    priorTarget = ref;
+  }
+  const lastTarget = targetsAt.get(pts[n - 1].t);
+  const targetMarks = targetPath ? `<g data-t-target><title>真实卖出后的费用后接回上限；份额变化后按当时剩余可恢复份额重算，不回填卖出前</title>
+    <path d="${targetPath.trim()}" fill="none" stroke="var(--text-primary)" stroke-width="2" stroke-dasharray="8 3 2 3"/>
+    ${lastTarget ? `<text x="${(lastX - 4).toFixed(1)}" y="${Math.max(PT + 10, Y(lastTarget.target) - 5).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--text-primary)">接回≤${lastTarget.target.toFixed(3)}</text>` : ''}
+  </g>` : '';
+  const minuteTable = `<details><summary class="etf-panic-note">查看分钟数据与信号（${pts.length} 点）</summary><div style="max-height:220px;overflow:auto"><table style="width:100%;font-size:10px"><thead><tr><th>时间</th><th>价格</th><th>均价</th><th>低吸挂单价</th><th>高抛参考价</th><th>费用后接回上限</th><th>信号</th></tr></thead><tbody>${pts.map(p => `<tr><td>${escHtml(p.t)}</td><td>${p.price.toFixed(3)}</td><td>${p.avg == null ? '—' : p.avg.toFixed(3)}</td><td>${bandRange(bandsAt.get(p.t) && bandsAt.get(p.t).lowBand)}</td><td>${bandRange(bandsAt.get(p.t) && bandsAt.get(p.t).highBand)}</td><td>${targetsAt.get(p.t) ? targetsAt.get(p.t).target.toFixed(3) + ' / ' + targetsAt.get(p.t).shares + '份' : '—'}</td><td>${signalEvents.filter(e => e.time === p.t).map(e => escHtml(e.title)).join('；') || '—'}</td></tr>`).join('')}</tbody></table></div></details>`;
+  const anchorName = { vwap: '分时均价', open: '开盘价', swingLow: '摆动低点', swingHigh: '摆动高点' };
+  const guideRefLines = [];
+  if (guide && guide.lowBand) guideRefLines.push({ key: 'buy', v: guide.lowBand.low, c: 'var(--up)',
+    label: `低吸挂单 ${guide.lowBand.low.toFixed(3)} · ${anchorName[guide.lowBand.anchor] || guide.lowBand.anchor} · 距现价 ${guide.lowBand.spacePct.toFixed(2)}%`,
+    title: `低吸挂单参考价：现价下方≥0.3%的最高结构位（${anchorName[guide.lowBand.anchor] || guide.lowBand.anchor}）。触价不等于买入，需止跌确认；跌破 ${guide.stopPrice ? guide.stopPrice.toFixed(3) : '止损价'} 止损。` });
+  else if (guide && guide.lowWait) guideRefLines.push({ key: 'buy', v: guide.lowWait.price, c: 'var(--up)',
+    label: `等回落 ${guide.lowWait.price.toFixed(3)} · ${anchorName[guide.lowWait.anchor] || guide.lowWait.anchor}`,
+    title: '回落空间不足0.3%，先等价格回落到该结构位再评估，不追卖也不接飞刀。' });
+  if (guide && guide.highBand) guideRefLines.push({ key: 'sell', v: guide.highBand.low, c: 'var(--down)',
+    label: `高抛参考 ${guide.highBand.low.toFixed(3)} · ${anchorName[guide.highBand.anchor] || guide.highBand.anchor} · 距现价 ${guide.highBand.spacePct.toFixed(2)}%`,
+    title: '高抛减仓参考价：现价上方≥0.2%的最近结构位。反弹到该位置需转弱确认再分批减仓，不因触价自动卖出。' });
+  const bandMarks = guideRefLines.filter(r => isFinite(r.v)).map(r => {
+    const y = Y(r.v);
+    return `<g data-reference-zone="${r.key}"><title>${escHtml(r.title)}</title>
+      <line x1="${PL}" y1="${y.toFixed(1)}" x2="${W - PR}" y2="${y.toFixed(1)}" stroke="${r.c}" stroke-width="1" stroke-dasharray="${r.key === 'buy' ? '2 3' : '6 3'}" opacity="0.75"/>
+      <text x="${PL + 3}" y="${(y - 3).toFixed(1)}" font-size="8.5" font-weight="600" fill="${r.c}">${escHtml(r.label)}</text></g>`;
   }).join('');
-  const guideHtml = guide ? `<div class="etf-intraday-guide" data-intraday-guide>
-    <div class="etf-guide-card buy"><b>低吸 ${guide.lowBand.low.toFixed(3)}–${guide.lowBand.high.toFixed(3)}</b><b>${escHtml(guide.buyState)}</b><span>${escHtml(guide.buyNote)}</span></div>
-    <div class="etf-guide-card sell"><b>反弹观察 ${guide.highBand ? guide.highBand.low.toFixed(3) + '–' + guide.highBand.high.toFixed(3) : '均价待确认'}</b><b>${escHtml(guide.sellState)}</b><span>${escHtml(guide.sellNote)}</span></div>
-  </div><div class="etf-panic-note">最新参考区 · 截至 ${escHtml(guide.asOf)}。${escHtml(guide.note)}</div>` : '<div class="etf-panic-note">当前连续分时不足，暂无最新参考区；历史参考带仍可回看。</div>';
+  const guideHtml = tMarket.live || tMarket.stale ? '' : guide ? `<div class="etf-intraday-guide" data-intraday-guide>
+    <div class="etf-guide-card buy"><b>低吸 ${guide.lowBand ? guide.lowBand.low.toFixed(3) : guide.lowWait ? '等回落 ' + guide.lowWait.price.toFixed(3) : '暂无结构位'}</b><b>${escHtml(guide.buyState)}</b><span>${escHtml(guide.buyNote)}</span></div>
+    <div class="etf-guide-card sell"><b>高抛 ${guide.highBand ? guide.highBand.low.toFixed(3) : guide.highHold ? '上方无阻力' : '均价待确认'}</b><b>${escHtml(guide.sellState)}</b><span>${escHtml(guide.sellNote)}</span></div>
+  </div><div class="etf-panic-note">最新参考价 · 截至 ${escHtml(guide.asOf)}。${escHtml(guide.note)}</div>` : '<div class="etf-panic-note">当前连续分时不足，暂无最新参考价。</div>';
   const strength = t.intradaySignals && t.intradaySignals.strength;
   const current = strength && strength.current;
   const strengthHtml = current ? `<div class="etf-alert ${current.kind === 'broken' ? 'danger' : current.kind === 'weak' ? 'warn' : 'info'}" data-etf-strength>
-    <b>${escHtml(current.label)}${t.intradaySignals.actionable ? '' : '（回放）'} · ${escHtml(current.time)}</b>
+    <b>${escHtml(current.label)}${t.intradaySignals.actionable ? '' : tMarket.stale ? '（延迟）' : '（回放）'} · ${escHtml(current.time)}</b>
     <div>均价偏离 ${current.avgGap == null ? '—' : current.avgGap.toFixed(2) + '%'} · 近4分钟 ${current.move4 == null ? '—' : current.move4.toFixed(2) + '%'}${current.support == null ? '' : ' · 已知支撑 ' + current.support.toFixed(3)}</div>
     <div>${escHtml(strength.chase || '连续数据不足，不作追买判断')}。偏强不等于允许买入；外盘涨不代表ETF强势。</div>
     <div class="etf-panic-note">${escHtml(strength.note)}</div>
@@ -4074,9 +4201,10 @@ function etfIntradayHtml() {
       <button type="button" onclick="etfPanIntraday('all')" aria-pressed="${!!allDay}">全天</button>
       <span>${allDay ? '全天总览' : '左右滑动看历史'}</span>
     </div>
-    ${etfSessionQuoteHtml()}${strengthHtml}
+    ${etfSessionQuoteHtml()}${tHtml}${strengthHtml}
+    <div id="etf-intraday-readout" class="etf-intraday-readout" aria-live="polite">移动／点击图表查看该分钟数据，键盘左右键逐分钟查看。</div>
     <div class="etf-intraday-plot">
-    <div id="etf-intraday-scroll" class="etf-intraday-scroll" data-date="${escHtml(d.date || '')}" data-scale="${scale}" data-latest-x="${lastX}" onscroll="etfIntradayScroll(this)">
+    <div id="etf-intraday-scroll" class="etf-intraday-scroll" data-date="${escHtml(d.date || '')}" data-scale="${scale}" data-latest-x="${lastX}" onscroll="etfIntradayScroll(this)" tabindex="0" role="group" aria-label="分时走势，左右方向键查看分钟价格和费用后接回上限" onpointermove="etfInspectIntraday(event)" onclick="etfInspectIntraday(event)" onpointerleave="etfInspectIntraday(event)" onkeydown="etfInspectIntraday(event)">
       <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="height:${H}px">
         ${bandMarks}${grid}${tgrid}
         <rect x="${(PL + 120 * scale).toFixed(1)}" y="${PT}" width="${sessionGap}" height="${H - PB - PT}" fill="var(--etf-panel)"/>
@@ -4084,7 +4212,8 @@ function etfIntradayHtml() {
         ${prevLine}${refLines}
         ${avgPath ? `<path d="${avgPath}" fill="none" stroke="var(--etf-avg-line)" stroke-width="1.2" stroke-dasharray="3 2" opacity="0.9"/>` : ''}
         ${pricePath ? `<path d="${pricePath}" fill="none" stroke="${main}" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/>` : ''}
-        ${lastDot}${lastLabel}${hoverPoints}${markers}
+        ${targetMarks}${lastDot}${lastLabel}${hoverPoints}${markers}
+        <line data-intraday-crosshair y1="${PT}" y2="${H - PB}" stroke="var(--text-secondary)" stroke-width="1" visibility="hidden" pointer-events="none"/>
       </svg>
     </div>
     <svg class="etf-intraday-axis" width="${PL}" height="${H}" viewBox="0 0 ${PL} ${H}" aria-hidden="true">
@@ -4096,33 +4225,15 @@ function etfIntradayHtml() {
       <span><i style="background:${main}"></i>价格 ${lastP.toFixed(3)}（${chgFromPrev >= 0 ? '+' : ''}${chgFromPrev.toFixed(2)}%）</span>
       <span><i style="background:var(--etf-avg-line)"></i>均价</span>
       <span><i style="background:var(--text-muted)"></i>昨收</span>
-      <span><i style="background:var(--up)"></i>红带：当时低吸参考</span>
-      <span><i style="background:var(--down)"></i>绿带：当时反弹观察区</span>
+      <span><i style="background:var(--up)"></i>红虚线：低吸挂单参考价</span>
+      <span><i style="background:var(--down)"></i>绿虚线：高抛减仓参考价</span>
       <span>○ 观察：止跌但不买</span>
-      <span><i style="background:var(--up)"></i>▲ 买：小仓候选</span>
-      <span><i style="background:var(--down)"></i>▼ 卖：反弹减仓 · 减：走弱预警</span>
+      <span><i style="background:var(--up)"></i>▲ 低吸：小仓候选，不等于做T接回</span>
+      <span><i style="background:var(--down)"></i>▼ 高抛：反弹转弱 · 风险减：非高抛</span>
+      ${targetPath ? '<span>─ · ─ 费用后接回上限：触价仍需止跌确认</span>' : ''}
     </div>
     ${etfMarketLinkHtml()}${guideHtml}${minuteTable}${etfQuoteInlineHtml()}</div>`;
 }
-
-// ── 买卖信号清单（v5：溢价定仓位、趋势定方向、恐慌抄底优先级最高）──
-//  v2 的问题：溢价 ≥22 直接给「减仓」、≥27 给「清仓」，且买点绑定「溢价 ≤18」——
-//  2026-09 溢价全程 22%~32%，清单整月只有减仓/清仓，而同期场内价 +13.1%，与 MACD
-//  9/18 的金叉强买互相打架；更糟的是一旦在高溢价区被震出，就再也等不到 ≤18% 的买点。
-//  v3：高溢价只输出「持有不加仓 + 仓位上限」——矫枉过正，把高溢价区里的 MACD 死叉/
-//  金叉全吞掉了（8/21 死叉、8/24 跌破 MA21、9/18 金叉在清单里全部消失）。
-//  v4：① 高溢价（≥22%）仓位一律压到 3 成以内（≥27% → 2 成），高溢价只提示
-//      「少量买入 / 持有不加仓」，不追高加仓；
-//      ② 高溢价区恢复 MACD 级别的离散提示：死叉 → 走弱预警，死叉后首次跌破 MA21 →
-//      确认减仓（一轮空头只确认一次），金叉 → 少量买入（≤3 成）；
-//      ③ 只有趋势破坏（连续 3 日收在 MA21×0.98 下方或跌破 MA60）才降到 3 成以内，
-//      溢价 ≥27 且趋势同破才减半。
-//  v5：恐慌抄底窗口升为最高优先级。原因：7/8 溢价 14.87% 因卡在「<15 重仓区」被标成
-//      重仓买入，而 7/30 溢价 15.58%（隔夜费半 -5.33% + %R -98，触发恐慌信号、后 20 日
-//      +12.7%）只因高出 0.7pp 就被标成「买入」——标签被一条硬阈值卡出倒挂。
-//      现在恐慌窗口内（溢价 ≤22%）直接给「重仓买入 / 分批重仓」：触发日先建 65%，
-//      重新站上 MA21 补到 85%。回测 764 日：+310% → +313%（年化 59.0% → 59.3%）。
-//  每段展示：日期段 / 价格 / 溢价 / 信号 / 仓位 / 依据 / 信号后20日涨跌
 
 // ── 仓位阶梯图（买卖信号清单顶部）──
 //  把「建议仓位是怎么走的」一眼看清：蓝色=场内价（左轴），红色阶梯=建议仓位（右轴，0~100%），
@@ -4344,12 +4455,12 @@ function etfSignalsHtml() {
     ${btLine ? `<div class="etf-legend"><span>${btLine}</span></div>` : ''}
     <div class="etf-legend">
       <span><b>v9 调整：MACD 单独翻绿只预警，减仓必须看价格破位</b>。2026-08-19 复盘发现：纳指科技在 MACD 红柱缩短、随后翻绿后并没有继续下跌，而是横盘震荡后重新上涨。结论是：<b>MACD 翻绿只代表动能降温，不代表价格一定会跌</b>，不能单独触发减仓。
-      <b>新的分级</b>：<b style="color:#e6912d">走弱预警</b> = MACD 翻绿 / 红柱连续缩短 / DIF 拐头，但价格仍在 MA21 上方，只停止加仓；<b class="down">减仓</b> = MACD 翻绿并跌破 MA21（纳指科技或纳指100）；<b class="down">清仓/减半</b> = 跌破 MA21 + MA30；<b class="down">跑路清仓</b> = MA21 + MA30 + MA60 三线全破。溢价仍只决定仓位上限，不能把破位信号豁免掉。
+      <b>新的分级</b>：<b style="color:#e6912d">走弱预警</b> = MACD 翻绿 / 红柱连续缩短 / DIF 拐头，但价格仍在 MA21 上方，只停止加仓；<b class="down">减仓</b> = MACD 翻绿并跌破 MA21（纳指科技或纳指100）；<b class="down">清仓/减半</b> = 跌破 MA21 + MA30；<b class="down">跑路清仓</b> = MA21 + MA30 + MA60 三线全破。仓位只按趋势门控执行，溢价仅供参考，不限制买卖或仓位。
       <b>v8.1 清仓铁律</b>（用户原话）：<b>收盘价有一天同时低于 MA21 + MA30 → 马上清仓</b>；<b>同时低于 MA21 + MA30 + MA60 → 跑路清仓</b>；<b>纳指100 出现同样情况 → 也清仓</b>。不等持续、不看溢价。<b>用户定的立场</b>：<b>「三条均线全破」就是清仓标准，不讨论、不豁免</b>——它有时正好出现在阶段底部，但<b>不能去赌</b>；清仓之后若买入机会重新出现（重新翻红 + 站回 MA21），再买回来也不迟。
-      <br>口径：<b>重仓的唯一条件 = MACD 翻红 且 收盘站上 21 日均线</b>，纳指科技 ETF 与纳斯达克 100 都要满足；溢价只决定在这三档里多买/少买一点，<b>永远不能把「便宜」升级成「重仓」</b>。
-      <b>门控</b>：<b class="up">重仓档</b>（四条全满足）→ 按溢价正常加仓，&lt;15% 可到 85%；<b>观察档</b>（MACD 翻绿但价格仍在 MA21 上方）→ 持有观察、不加仓；<b>试仓档</b>（动能恢复但价格还没站回 MA21）→ <b>溢价 ≥15% 只 20%、&lt;15% 才 35%</b>；<b class="down">跑路档</b>（MACD 翻绿且跌破 MA21）→ 减到 20%（&lt;15% 留 35%）。
-      <b>恐慌抄底也守这条铁律</b>：未满足重仓条件时只给<b>「恐慌试仓」</b>（溢价 ≥15% 只 20%、&lt;15% 给 35%），不再喊重仓买入；已站上 MA21 但未翻红 → 65%，翻红才补到 85%。触发后 10 个交易日仍站不回 MA21 则撤回、转<b>「抄底未确认」</b>（2026-01-21、2025-03-04 两次各亏 6.1% / 5.4%）。
-      <b>溢价系数</b>：&lt;15% 满仓、15~18% 九成、18~22% 半仓、22~27% 两成半、≥27% 一成半（18~22% 由八成下调到半仓——2026-01 那波跌就是溢价从 23% 压缩到 15%）。低溢价买点仍需命中「不追高」过滤（威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）。高溢价区保留 MACD 级提示：<b>死叉 → 走弱预警</b>、死叉后首次<b>跌破 MA21 → 减仓</b>、<b>金叉 → 少量买入（≤3 成）</b>。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>=买对了，<b class="down">卖出信号为负</b>=减仓躲过了下跌。</span>
+      <br>口径：<b>重仓的唯一条件 = MACD 翻红 且 收盘站上 21 日均线</b>，纳指科技 ETF 与纳斯达克 100 都要满足；不因溢价高低改变趋势档位。
+      <b>门控</b>：<b class="up">重仓档</b>（四条全满足）→ 按趋势上限分批加仓；<b>观察档</b>（MACD 翻绿但价格仍在 MA21 上方）→ 持有观察、不加仓；<b>试仓档</b>（动能恢复但价格还没站回 MA21）→ <b>20%</b>；<b class="down">跑路档</b>（MACD 翻绿且跌破 MA21）→ 减到 10%。
+      <b>恐慌抄底也守这条铁律</b>：未满足重仓条件时只给<b>20%「恐慌试仓」</b>，不再喊重仓买入；已站上 MA21 但未翻红 → 65%，翻红才补到 85%。触发后 10 个交易日仍站不回 MA21 则撤回、转<b>「抄底未确认」</b>（2026-01-21、2025-03-04 两次各亏 6.1% / 5.4%）。<b>注意</b>：20% 是<b>窗口内的仓位上限</b>，不是「今天又恐慌了」的新买点——窗口由触发日那根 6/6 的日K开启，之后每天都会显示窗口第几天、今日评分、剩余宽限；不认同这是恐慌底就按减仓档 10% 执行（回测见 scripts/etf-panic-sizing-study.js，试仓档 10%/15%/20% 差异都在 1pp 噪音内）。
+      <b>溢价仅参考</b>，不再乘溢价系数或设置买入上限。买点仍需命中「不追高」过滤（威廉%R≤-60 / 收盘&lt;MA21 / 收盘&lt;布林中轨任一）；<b>MACD 翻绿 → 走弱预警</b>、<b>翻绿并跌破 MA21 → 减仓</b>，均线组合破位仍按清仓铁律执行。<b>「信号后20日涨跌」</b>= 假设你在信号出现当天按提示操作，之后 20 个交易日的涨跌幅：<b class="up">买入信号为正</b>=买对了，<b class="down">卖出信号为负</b>=减仓躲过了下跌。</span>
     </div>`;
 }
 
@@ -4464,14 +4575,14 @@ function etfPremiumChartHtml() {
     grid += `<line x1="${PL}" y1="${y.toFixed(1)}" x2="${W - PR}" y2="${y.toFixed(1)}" stroke="var(--etf-grid)" stroke-width="1"/>`
           + `<text x="${PL - 5}" y="${(y + 3.2).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${v.toFixed(0)}%</text>`;
   }
-  // 策略阈值参考线：加仓线 / 买入线 / 警戒线 / 减仓线
-  const R = (p.rules || { add: 15, buy: 18, watch: 22, danger: 27 });
-  const thrDefs = [
+  // 策略阈值参考线：加仓/买入/警戒/减仓（阈值统一来自服务端 premium.rules，前端不再硬编码副本）
+  const R = p.rules;
+  const thrDefs = R ? [
     { v: R.add,    c: '#e84c3d', t: '加仓' },
     { v: R.buy,    c: '#f0752e', t: '买入' },
     { v: R.watch,  c: '#e8a03d', t: '警戒' },
     { v: R.danger, c: '#b8860b', t: '减仓' },
-  ];
+  ] : [];
   let thr = '';
   for (const td of thrDefs) {
     if (!isFinite(td.v) || td.v < lo || td.v > hi) continue;
@@ -4515,42 +4626,19 @@ function etfPremiumChartHtml() {
     </div>`;
 }
 
-// ── 关键指标 ──
-function etfMetricsHtml() {
-  const t = ETF_TRACK;
-  if (!t) return '';
-  const i = t.ind || {};
-  const q = t.quote || {};
-  const f = (v, d = 3) => (v != null && isFinite(v) ? v.toFixed(d) : '—');
-  const now = q.price != null ? q.price : i.price;
-  const ma = (k, v) => ({ k, v: f(v), tone: (now != null && v != null) ? (now >= v ? 'up' : 'down') : 'flat' });
-  const amp = (q.high != null && q.low != null && q.prevClose) ? ((q.high - q.low) / q.prevClose * 100) : null;
-  const items = [
-    ma('MA5', i.ma5), ma('MA10', i.ma10), ma('MA21', i.ma21), ma('MA60', i.ma60),
-    { k: '20日最高', v: f(i.high20), tone: 'flat' },
-    { k: '距20日高', v: i.drawdownFromHigh20 != null ? `${i.drawdownFromHigh20.toFixed(2)}%` : '—', tone: i.drawdownFromHigh20 >= 0 ? 'up' : 'down' },
-    { k: '20日波动', v: i.vol20 != null ? `${i.vol20.toFixed(1)}%` : '—', tone: 'flat' },
-    { k: '今日振幅', v: amp != null ? `${amp.toFixed(2)}%` : '—', tone: 'flat' },
-  ];
-  return `
-    <div class="etf-board-head">
-      <span>关键指标</span>
-      <span class="sub">价格与均线比较：${now != null ? now.toFixed(3) : '—'}</span>
-    </div>
-    <div class="etf-metrics compact">${items.map(x => `
-    <div class="etf-metric">
-      <div class="etf-metric-k">${x.k}</div>
-      <div class="etf-metric-v ${x.tone}">${x.v}</div>
-    </div>`).join('')}</div>`;
-}
-
 function etfTMarket() {
   const t = ETF_TRACK || {}, q = t.quote || {};
   const now = Date.now();
   const at = q.quoteTime ? Date.parse(q.quoteTime.replace(' ', 'T') + '+08:00') : NaN;
   const plan = t.dayPlan || t.premarket;
-  return { date: t.today || todayLocalStr(), quote: q,
-    live: !ETF_LOAD_ERR && etfAlertsActive(now) && t.intradaySignals && t.intradaySignals.actionable && Number.isFinite(at) && now - at <= 90000 && at <= now + 5000,
+  const date = t.today || todayLocalStr();
+  const trading = etfAlertsActive(now);
+  const age = Number.isFinite(at) ? now - at : NaN;
+  const live = !ETF_LOAD_ERR && trading && t.intradaySignals && t.intradaySignals.actionable && Number.isFinite(age) && age <= 90000 && age >= -5000;
+  // 延迟态：还在交易时段、报价也是当天的，但行情已经跟不上（源延迟或分时缺口）。
+  // 这时不降级成「回看」，价格照常给、标注延迟秒数，但不作为当前买卖指令。
+  const stale = !live && !ETF_LOAD_ERR && trading && q.quoteDate === date && Number.isFinite(age) && age > 90000;
+  return { date, quote: q, live, stale, ageSec: Number.isFinite(age) ? Math.round(age / 1000) : null,
     tier: t.positionPlan && t.positionPlan.tier, events: t.intradaySignals && t.intradaySignals.events || [],
     abort: !!(t.intradaySignals && t.intradaySignals.strength && t.intradaySignals.strength.current && ['weak', 'broken'].includes(t.intradaySignals.strength.current.kind)) || !!(plan && plan.stop && ((q.prevClose > 0 && (q.price / q.prevClose - 1) * 100 <= plan.stop.pricePct)
       || (plan.inputs && Number.isFinite(plan.inputs.qqqPrePct) && plan.inputs.qqqPrePct <= plan.stop.qqqAbort))) };
@@ -4573,7 +4661,7 @@ function etfTUpdate() {
       const minute = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
       const events = market.events.filter(e => { const age = minute(time) - minute(e.time); return age >= 1 && age <= 2; });
       ETF_T_SAMPLES.push({ date: market.date, time, price: q.price, premium: q.premiumPct, tier: market.tier, abort: market.abort, live: true,
-        sell: events.some(e => e.side === 'sell'), rebound: events.some(e => e.side === 'buy' || e.side === 'watch') });
+        sell: events.some(e => e.side === 'sell' && !e.risk), rebound: events.some(e => e.side === 'buy' || e.side === 'watch') });
       ETF_T_SAMPLES = ETF_T_SAMPLES.slice(-5000);
       try { localStorage.setItem(ETF_T_SAMPLES_KEY, JSON.stringify(ETF_T_SAMPLES)); } catch {}
     }
@@ -4585,6 +4673,11 @@ function etfTUpdate() {
   }
   const el = document.getElementById('etf-t-cycle');
   if (el && !el.contains(document.activeElement)) el.innerHTML = etfTHtml();
+  const chart = document.getElementById('etf-intraday');
+  if (chart) {
+    const html = etfIntradayHtml();
+    if (chart.innerHTML !== html) { chart.innerHTML = html; etfInitIntradayScroll(); }
+  }
 }
 
 function etfTSaveRules() {
@@ -4601,8 +4694,13 @@ function etfTSaveRules() {
 function etfTPrepare(action, cycleId = '') {
   const state = EtfTStrategy.evaluate(ETF_TRADES, etfTMarket(), ETF_T_RULES);
   const c = state.cycles.find(c => String(c.id) === String(cycleId));
-  ETF_T_FORM = { action, cycleId: String(cycleId), date: todayLocalStr(), time: nowStr().slice(0, 5), price: '', fee: '', shares: action === 'sell' ? String(state.remainingQuota) : c ? String(action === 'buy' ? c.pending : c.held) : '' };
-  const el = document.getElementById('etf-t-cycle'); if (el) el.innerHTML = etfTHtml();
+  ETF_T_FORM = { action, cycleId: String(cycleId), date: todayLocalStr(), time: nowStr().slice(0, 5), price: '', fee: '', shares: action === 'sell' ? String(state.remainingQuota) : c ? String(action === 'buy' ? state.active && state.active.id === c.id ? state.recoverable : c.pending : c.held) : '' };
+  const el = document.getElementById('etf-t-cycle');
+  if (el) {
+    el.innerHTML = etfTHtml();
+    el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    document.getElementById('etf-cycle-price').focus({ preventScroll: true });
+  }
 }
 
 function etfTRecordFill() {
@@ -4634,6 +4732,100 @@ function etfTEndCycle(id) {
   ETF_TRADES = next; etfTUpdate();
 }
 
+function etfTIntradayHtml(state, market, guide, bands) {
+  const time = (market.quote.quoteTime || '').slice(11, 16);
+  const price = Number(market.quote && market.quote.price);
+  // 行情延迟时仍按盘中口径展示，只是不把价格当"现在就能成交"的指令
+  const active = !!(market.live || market.stale);
+  const delayLabel = market.stale && market.ageSec != null
+    ? market.ageSec >= 60 ? `${Math.floor(market.ageSec / 60)} 分` : `${market.ageSec} 秒` : '';
+  const minute = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
+  const events = (market.events || []).filter(e => {
+    const age = minute(time) - minute(e.time);
+    return active ? age >= 1 && age <= 2 : age >= 0;
+  });
+  const buy = [...events].reverse().find(e => e.side === 'buy');
+  const sell = [...events].reverse().find(e => e.side === 'sell' && !e.risk);
+  const risk = [...events].reverse().find(e => e.side === 'sell' && e.risk);
+  const range = band => band ? `${band.low.toFixed(3)}–${band.high.toFixed(3)}` : '等待确认';
+  const c = state.active;
+  const target = c && c.sale.date === market.date && !c.exited && !c.fly ? state.buyTarget : null;
+  const buyPrice = target != null ? `≤ ${target.toFixed(3)}` : buy ? buy.price.toFixed(3)
+    : guide && guide.lowBand ? guide.lowBand.low.toFixed(3)
+    : guide && guide.lowWait ? `等回落 ${guide.lowWait.price.toFixed(3)}` : range(guide && guide.lowBand);
+  const buyUpper = target != null ? target : buy ? buy.price : guide && guide.lowBand && guide.lowBand.high;
+  const pairedSale = target != null && c.sale.price > target;
+  const sellLow = sell ? sell.price : guide && guide.highBand && guide.highBand.low;
+  const validSell = pairedSale || Number.isFinite(sellLow) && Number.isFinite(buyUpper) && sellLow > buyUpper;
+  const sellPrice = pairedSale ? c.sale.price.toFixed(3) : validSell ? sell ? sell.price.toFixed(3) : range(guide && guide.highBand)
+    : guide && guide.highHold ? '—' : '暂无有效高抛价';
+  // 挂单价距现价多远 + 相对上一分钟有没有漂移：结构位在均价/开盘价/摆动点之间切换时会跳价，
+  // 不给提示容易被当成"价格看错了"或误读成现价可买。
+  const buyLevel = target != null ? target : buy ? buy.price : guide && guide.lowBand ? guide.lowBand.low : null;
+  const sellLevel = pairedSale ? c.sale.price : sell ? sell.price : validSell && guide && guide.highBand ? guide.highBand.low : null;
+  const shift = (() => {
+    if (!Array.isArray(bands) || !guide || !guide.asOf) return null;
+    const i = bands.findIndex(b => b && b.time === guide.asOf);
+    if (i <= 0) return null;
+    const prev = bands[i - 1], cur = bands[i];
+    const delta = key => prev && cur && prev[key] && cur[key] && Number.isFinite(prev[key].low) && Number.isFinite(cur[key].low)
+      ? +(cur[key].low - prev[key].low).toFixed(3) : null;
+    return { buy: delta('lowBand'), sell: delta('highBand') };
+  })();
+  const gapText = (level, delta) => {
+    if (!active || !Number.isFinite(level) || !Number.isFinite(price) || price <= 0) return '';
+    const pct = (level / price - 1) * 100;
+    const moved = delta != null && Math.abs(delta) >= 0.002 ? `（较前一分 ${delta > 0 ? '+' : ''}${delta.toFixed(3)}）` : '';
+    return ` · 距现价 ${pct > 0 ? '+' : ''}${pct.toFixed(2)}%${moved}`;
+  };
+  const buyBlocked = time >= '14:30' || !['heavy', 'try'].includes(market.tier) || market.abort || state.risk || market.live && risk
+    || c && (c.sale.date !== market.date || c.exited > 0 || c.fly || state.recoverable <= 0);
+  const buyNote = market.stale ? target != null ? '接回上限 · 行情延迟' : '低吸参考 · 行情延迟，仅挂单参考'
+    : !market.live ? buy ? `当日买入信号 · 回看 ${escHtml(buy.time)}` : target != null ? '当日接回上限 · 回看' : '当日低吸参考 · 回看'
+    : buyBlocked ? '风控未通过 · 暂不买入'
+    : c ? state.action === 'buy' ? '止跌确认 · 接回候选' : '接回上限 · 等止跌与价差确认'
+    : buy ? '止跌确认 · 小仓候选' : '低吸参考 · 止跌后再买';
+  const sellNote = pairedSale ? `实际卖出 · ${escHtml(c.sale.time)}`
+    : !validSell && guide && guide.highHold ? (active ? '现价在结构位上方 · 不设高抛价' : '当日无高抛价 · 回看')
+    : !validSell ? '未形成有效价差 · 不做T'
+    : market.stale ? '高抛参考 · 行情延迟，仅挂单参考'
+    : !market.live ? sell ? `当日高抛信号 · 回看 ${escHtml(sell.time)}` : '当日高抛参考 · 回看'
+    : sell ? '转弱确认 · 高抛候选' : '高抛参考 · 转弱后再卖';
+  const riskPrice = state.action === 'exit' ? market.quote.price : risk && risk.price;
+  const riskNote = Number.isFinite(riskPrice) ? `<div class="etf-panic-note" data-t-risk-price>${state.action === 'exit' ? '回补仓止损' : '风险减仓'} ${riskPrice.toFixed(3)} · ${escHtml(state.action === 'exit' ? time : risk.time)}${active ? '' : ' · 回看'}（非做T高抛价）</div>` : '';
+  // 深档只当观察位：跌破当日已见低点说明低点失守，此时接才是飞刀，回测里这类成交最差
+  const dayLow = guide && guide.dayLow;
+  const stopPrice = guide && Number.isFinite(guide.stopPrice) ? guide.stopPrice : null;
+  const lowBroken = !!(dayLow && Number.isFinite(dayLow.price));
+  // 失守位和 -0.5% 成本止损常常只差一两厘，两句并一句，避免卡片上两个相邻价格各说一套
+  const mergeStop = lowBroken && stopPrice != null
+    && Math.abs(dayLow.price - stopPrice) <= Math.max(0.002, stopPrice * 0.002);
+  const pctOfBuy = x => Number.isFinite(buyLevel) && buyLevel > 0 && Number.isFinite(x) ? (x / buyLevel - 1) * 100 : null;
+  const stopPct = mergeStop ? pctOfBuy(stopPrice) : null;
+  const breakNote = lowBroken
+    ? `<div class="etf-panic-note" data-break-level>跌破 ${dayLow.price.toFixed(3)}（今日低点 ${escHtml(dayLow.time || '')}）即低点失守${stopPct != null ? ` = 本笔止损（约 ${stopPct.toFixed(1)}%）` : ''}：转弱信号优先，不接飞刀；要买等重新站上分时均价再评估。</div>` : '';
+  const referenceNote = target == null ? `<div class="etf-panic-note">参考价为结构位挂单价（分时均价/开盘价/摆动低点，空间≥0.3%）；高抛=上方最近结构位。回测41个交易日：机械做T为负期望，触价不等于成交，须配合止跌/转弱确认${stopPrice != null && !mergeStop ? `；低吸止损 ${stopPrice.toFixed(3)}（-0.5%）` : ''}。</div>` : '';
+  return `<div class="etf-t-intraday" data-etf-t-intraday data-t-action="${state.action || ''}">
+    <div class="etf-alert-top"><b>${market.live ? '盘中买卖参考' : market.stale ? '盘中参考 · 行情延迟' : '当日买卖价 · 回看'}</b><span>${escHtml(active
+      ? `${time}${Number.isFinite(price) && price > 0 ? ` · 现价 ${price.toFixed(3)}` : ''}${delayLabel ? ` · 延迟 ${delayLabel}` : ''}`
+      : `${market.quote.quoteDate || market.date || ''} ${guide && guide.asOf || time}`)}</span></div>
+    <div class="etf-intraday-guide">
+      <div class="etf-guide-card buy"><span>买入价</span><b>${buyPrice}</b><span>${buyNote}${gapText(buyLevel, shift && shift.buy)}</span></div>
+      <div class="etf-guide-card sell"><span>${pairedSale ? '实际卖出价' : '高抛参考价'}</span><b>${sellPrice}</b><span>${sellNote}${gapText(sellLevel, shift && shift.sell)}</span></div>
+    </div>
+    ${riskNote}${breakNote}${referenceNote}
+  </div>`;
+}
+
+function etfTReferenceAt(state, date, time) {
+  const c = state.active;
+  if (!c || c.sale.date !== date || c.sale.time > time || c.abandoned || c.exited > 0) return null;
+  const earlier = ETF_TRADES.filter(t => `${t.date} ${t.time || '00:00'}` <= `${date} ${time}`);
+  const bought = earlier.filter(t => String(t.tCycleId) === String(c.id) && t.tAction === 'buy').reduce((s, t) => s + t.shares, 0);
+  const qty = Math.floor(Math.max(0, Math.min(c.sale.shares - bought, c.sale.tBase - EtfTStrategy.position(earlier).shares)) / 100) * 100;
+  return qty > 0 ? { target: EtfTStrategy.targetPrice(c.sale, qty, c.rules), shares: qty } : null;
+}
+
 function etfTHtml() {
   const m = etfTMarket(), state = EtfTStrategy.evaluate(ETF_TRADES, m, ETF_T_RULES);
   const num = v => v == null ? '—' : v.toFixed(2);
@@ -4658,7 +4850,7 @@ function etfTHtml() {
   }).join('');
   const param = (key, label, value, step) => `<label>${label}<input id="etf-t-rule-${key}" class="etf-inp" type="number" step="${step}" min="0" value="${value}"></label>`;
   const input = (key, label, type, value, step = '') => `<label>${label}<input id="etf-cycle-${key}" class="etf-inp" type="${type}" ${step ? `step="${step}"` : ''} value="${escHtml(value)}" oninput="ETF_T_FORM.${key}=this.value"></label>`;
-  return `<div class="etf-alert info"><b>${escHtml(state.state)}</b><div>${escHtml(state.note)}</div><div>今日额度 ${state.cap} 份；成交和采样仅存本浏览器，清理站点数据会丢失，请保留券商成交记录。提示不自动下单。原有高溢价/趋势风控照常适用，做T不保证盈利。</div></div>
+  return `<div class="etf-alert info"><b>${escHtml(state.state)}</b><div>${escHtml(state.note)}</div><div>今日额度 ${state.cap} 份；成交和采样仅存本浏览器，清理站点数据会丢失，请保留券商成交记录。提示不自动下单。趋势、时段和失效风控照常适用，溢价仅参考，做T不保证盈利。</div></div>
     <div class="etf-panic-note">固定每天最多一轮、底仓20%；净价差默认≥${(ETF_T_RULES.gap * 100).toFixed(2)}%，14:30后不接回；回补仓跌${(ETF_T_RULES.stop * 100).toFixed(2)}%提示退出，卖后涨${(ETF_T_RULES.fly * 100).toFixed(2)}%不追。</div>
     <button class="etf-btn" onclick="etfTPrepare('sell')">记录实际做T卖出</button>
     <div class="etf-trade-form etf-cycle-form">
@@ -4677,7 +4869,7 @@ function etfTHtml() {
     ${recordedDays}
     <div class="etf-panic-note">按卖出日分组的差额以当前市价计算，并非当日结算净收益；采样回撤仅页面在线期间，不包含未观测波动。旧普通交易未录费用按0计。</div>
     ${cycles || '<div class="etf-empty">暂无做T实际成交。先在“我的持仓”记录真实底仓。</div>'}
-    <details class="etf-plan-fold"><summary>本页实时采样回放（非完整历史回测）</summary>${replay || '<div>无历史实时风控采样，不会拿收盘数据伪造全天买入条件。</div>'}<div class="etf-panic-note">每次用下一连续分钟模拟成交，含费用和滑点；只覆盖页面打开时的采样，空档不交易，缺历史溢价/趋势不追认买入。累计结果仅这些采样，不是策略稳定收益率。</div></details>`;
+    <details class="etf-plan-fold"><summary>本页实时采样回放（非完整历史回测）</summary>${replay || '<div>无历史实时风控采样，不会拿收盘数据伪造全天买入条件。</div>'}<div class="etf-panic-note">每次用下一连续分钟模拟成交，含费用和滑点；只覆盖页面打开时的采样，空档不交易，趋势或失效风控未通过时不追认买入；溢价仅参考。累计结果仅这些采样，不是策略稳定收益率。</div></details>`;
 }
 
 // ── 我的持仓 ──
@@ -4781,6 +4973,16 @@ function etfSignalsSectionInner() {
   return etfSignalsHtml();
 }
 
+// 数据延迟 / 子源降级提示：服务端 stale 或 degraded 时展示（其余卡片照常渲染）
+function etfStaleNoteHtml() {
+  const dg = ETF_TRACK && ETF_TRACK.degraded;
+  const dgHtml = (dg && dg.length)
+    ? `<div class="etf-alert info"><span class="etf-alert-title">子源降级</span><span class="etf-alert-text">${dg.join('、')} 抓取失败，相关卡片数据可能缺失，其余功能不受影响。</span></div>`
+    : '';
+  if (!ETF_STALE) return dgHtml;
+  return `<div class="etf-alert warn"><span class="etf-alert-title">数据延迟</span><span class="etf-alert-text">上游行情异常，正在展示上一轮缓存数据，恢复后自动刷新。</span></div>` + dgHtml;
+}
+
 function renderEtfView() {
   const t = ETF_TRACK;
   ETF_RENDERED_DATE = t && t.session ? t.session.lastTradingDate : null;
@@ -4797,13 +4999,14 @@ function renderEtfView() {
       <div class="etf-board-sec" id="etf-alerts">${etfAlertsHtml()}</div>
     </div>
     ${ETF_LOAD_ERR ? `<div class="etf-section"><div class="etf-alert danger"><span class="etf-alert-title">数据异常</span><span class="etf-alert-text">${ETF_LOAD_ERR}</span></div></div>` : ''}
+    <div id="etf-stale-note">${etfStaleNoteHtml()}</div>
     <div id="etf-advice-wrap">${etfAdviceHtml()}</div>
     <div class="etf-section">
       <div class="etf-sec-title"><span>MACD 柱（日K）</span><span class="sub">信号口径与 macd买卖 视图一致</span></div>
       <div id="etf-macd">${etfMacdHtml()}</div>
     </div>
     <div class="etf-section">
-      <div class="etf-sec-title"><span>买卖信号清单</span><span class="sub">溢价定仓位（高溢价 ≤3成）· 恐慌抄底优先 · 死叉减仓 / 金叉少量买入 · 全历史 ${t && t.comboSignals && t.comboSignals.signals ? t.comboSignals.signals.length : '—'} 段</span></div>
+      <div class="etf-sec-title"><span>买卖信号清单</span><span class="sub">趋势定仓位 · 溢价仅参考 · 恐慌抄底优先 · 动能预警 / 价格破位减仓 · 全历史 ${t && t.comboSignals && t.comboSignals.signals ? t.comboSignals.signals.length : '—'} 段</span></div>
       <div id="etf-signals">${etfSignalsSectionInner()}</div>
     </div>
     <div class="etf-section">
@@ -4818,7 +5021,7 @@ function renderEtfView() {
       <div id="etf-premium-chart">${etfPremiumChartHtml()}</div>
     </div>
     <div class="etf-section">
-      <div class="etf-sec-title"><span>溢价档位 · 买入线</span><span class="sub">${(t && t.premium && t.premium.rules) ? `≤${t.premium.rules.buy}% 买入 · ＜${t.premium.rules.add}% 多买` : '策略阈值'}</span></div>
+      <div class="etf-sec-title"><span>溢价档位 · 仅参考</span><span class="sub">不限制买卖或仓位</span></div>
       <div id="etf-zones">${etfPremiumZonesHtml()}</div>
     </div>
     <div class="etf-section">
@@ -4846,6 +5049,7 @@ function updateEtfLive() {
   const gateBoard = document.getElementById('etf-gate-board');
   if (gateBoard) gateBoard.style.display = gateHtml ? '' : 'none';
   set('etf-advice-wrap', etfAdviceHtml());   // 含仓位建议 / 恐慌抄底（实时价变化）
+  set('etf-stale-note', etfStaleNoteHtml());
   set('etf-zones', etfPremiumZonesHtml());
   set('etf-premarket', etfPremarketHtml()); // 盘前提示（日内高抛低吸计划）
   set('etf-alerts', etfAlertsHtml());
@@ -4853,6 +5057,10 @@ function updateEtfLive() {
   etfInitIntradayScroll();
   etfTUpdate();
   set('etf-macd', etfMacdHtml());         // 盘中最后一根柱会随实时价变化
+  // 低频区块：innerHTML 未变化时 set() 自动跳过，不会打断折叠/图表交互状态
+  set('etf-signals', etfSignalsSectionInner());
+  set('etf-review', etfReviewHtml());
+  set('etf-premium-chart', etfPremiumChartHtml());
 }
 
 function renderList() {
@@ -5151,8 +5359,10 @@ function rerender() {
   else if (r.view === 'macd') renderMacdView();
   else if (r.view === 'etf') {
     // 已在视图内则只刷新动态区块（避免 10 秒重绘打断输入）；跨交易日或首次进入才整页渲染
+    // 注意：判断依据是 #etf-intraday（整页渲染必有），不要用 hero——历史版本误写成
+    // id="etf-hero"（实际只有 class），永真导致每轮轮询全量重建、表单焦点丢失。
     const tradingDate = ETF_TRACK && ETF_TRACK.session ? ETF_TRACK.session.lastTradingDate : null;
-    if (!document.getElementById('etf-hero') || ETF_RENDERED_DATE !== tradingDate) {
+    if (!document.getElementById('etf-intraday') || ETF_RENDERED_DATE !== tradingDate) {
       renderEtfView();
     } else {
       updateEtfLive();

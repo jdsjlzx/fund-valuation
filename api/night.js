@@ -33,7 +33,7 @@ module.exports = async (req, res) => {
       return res.status(502).json({ error: 'anti-crawl html' });
     }
     const q = j && j.data && j.data.quote;
-    if (!q || q.current_night_session == null) {
+    if (!q || (q.current_night_session == null && q.current_ext == null)) {
       return res.status(404).json({ error: 'no night data' });
     }
     return res.status(200).json({
@@ -42,6 +42,10 @@ module.exports = async (req, res) => {
       percentNight: q.percent_night_session,
       chgNight: q.chg_night_session,
       timestampNight: q.timestamp_night_session,
+      currentExt: q.current_ext,
+      percentExt: q.percent_ext,
+      timestampExt: q.timestamp_ext,
+      current: q.current,
     });
   } catch (e) {
     return res.status(502).json({ error: e.message });

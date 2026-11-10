@@ -2,6 +2,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const EtfTStrategy = require('../public/etf-t-strategy.js');
+const tChartFixture = { EtfTStrategy, ETF_TRADES: [], ETF_T_RULES: EtfTStrategy.defaults,
+  etfTMarket: () => ({ date: '2026-11-05', quote: {}, live: false }) };
 const test = require('node:test');
 const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
@@ -20,6 +23,17 @@ function input(points, overrides = {}) {
     session: { trading: true }, intraday: { date: '2026-11-05', points: points.map(p => ({ ...p })) }, ind: {}, signals: [], positionPlan: { tier: 'try' }, ...overrides };
 }
 const rebound = [point('13:00', 2.94), point('13:01', 2.92), point('13:02', 2.925), point('13:03', 2.931)];
+
+test('接近历史买点不生成当前操作提示，历史信号保持不变', () => {
+  const fixture = input(rebound, { signals: [{ date: '2026-09-18', side: 'buy', close: 2.916 }] });
+  const history = plain(fixture.signals);
+  for (const price of [2.888, 2.916, 2.94]) {
+    fixture.quote.price = price;
+    const alerts = context.buildEtfAlerts(fixture);
+    assert.ok(alerts.every(e => e.key !== 'near_last_buy' && e.title !== '回踩最近买点'));
+    assert.deepEqual(plain(fixture.signals), history);
+  }
+});
 
 test('原始分时排除零成交占位、午休及盘后点，不补造早盘', () => {
   const parsed = context.parseEtfMinuteData({ date: '20261105', data: ['0930 2.946 0 0', '1030 2.946 0 0', '1031 2.990 100 29900', '1200 2.98 100 29900', '1500 2.921 200 59000', '1501 2.921 200 59000'] });
@@ -123,7 +137,7 @@ test('参考和确认信号共用30分钟窗口，早期低点退出后不算大
 });
 
 test('状态说明给出尚缺反弹幅度和两分钟确认，而不是触带即买卖', () => {
-  const fixture = input([point('13:00', 2.94), point('13:01', 2.93), point('13:02', 2.92)]); fixture.quote.premiumPct = 17;
+  const fixture = input([point('13:00', 2.94, 2.9), point('13:01', 2.935, 2.9), point('13:02', 2.93, 2.9)]); fixture.quote.premiumPct = 17;
   const guide = context.buildEtfIntradaySignals(fixture).guide;
   assert.match(guide.buyNote, /反弹还差/);
   assert.match(guide.buyNote, /两分钟回升/);
@@ -133,8 +147,8 @@ test('状态说明给出尚缺反弹幅度和两分钟确认，而不是触带�
 test('相似历史回顾剔除当日未来收盘并按ETF交易日去重', () => {
   const historyContext = vm.createContext({});
   vm.runInContext(declaration(server, 'buildPremarketHistoryReview'), historyContext);
-  const rows = Array.from({ length: 65 }, (_, i) => ({ date: new Date(Date.UTC(2026, 6, 1 + i)).toISOString().slice(0, 10), close: 3, low: 2.9 }));
-  rows.push({ date: '2026-11-06', close: 2.8, low: 2.7 });
+  const rows = Array.from({ length: 65 }, (_, i) => ({ date: new Date(Date.UTC(2026, 6, 1 + i)).toISOString().slice(0, 10), close: 3, low: 2.9, high: 3.1 }));
+  rows.push({ date: '2026-11-06', close: 2.8, low: 2.7, high: 2.9 });
   const indices = { qqq: { dates: ['2026-07-01', '2026-11-04', '2026-11-05'], ret: { '2026-07-01': -5, '2026-11-04': -5, '2026-11-05': -5 } } };
   const beforeClose = historyContext.buildPremarketHistoryReview(rows, indices, -5, '2026-11-06');
   assert.equal(beforeClose.count, 1);
@@ -162,28 +176,28 @@ test('首次盘中触价立即记录，可生成alerts而不等待第二次请�
   ctx.intradaySignals = context.buildEtfIntradaySignals(ctx);
   const alerts = context.buildEtfAlerts(ctx);
   assert.ok(alerts.some(e => e.key.includes('intraday_level_')));
-  assert.ok(alerts.filter(e => e.key.includes('intraday_level_')).every(e => e.time === '13:04' && !e.text.includes('直接买入')));
+  assert.ok(alerts.filter(e => e.key.includes('intraday_level_')).every(e => e.time === '13:04' && /不因触价直接买入|仅记录触达/.test(e.text)));
   const repeat = context.buildPremarketPlan(ctx, ctx.premarket, { debugTime: '2026-11-05T05:03:00Z' });
   assert.equal(repeat.touches.length, ctx.premarket.touches.length);
 });
 
-test('止跌需要两分钟确认，只有高溢价观察提示没有买入指令', () => {
+test('止跌需要两分钟确认，高溢价不再拦截实时买入候选', () => {
   const result = context.buildEtfIntradaySignals(input(rebound));
   assert.equal(result.events.length, 1);
   assert.equal(result.events[0].time, '13:03');
-  assert.equal(result.events[0].side, 'watch');
-  assert.match(result.events[0].text, /不新增仓位/);
+  assert.equal(result.events[0].side, 'buy');
+  assert.match(result.events[0].text, /溢价仅供参考/);
   assert.equal(context.buildEtfIntradaySignals(input(rebound.slice(0, 3))).events.length, 0);
 });
 
-test('允许溢价且趋势未跑路时实时止跌才是小仓候选', () => {
+test('实时止跌保留趋势风控，缺失溢价不再拦截候选', () => {
   const ctx = input(rebound);
   ctx.quote.premiumPct = 17;
   assert.equal(context.buildEtfIntradaySignals(ctx).events[0].side, 'buy');
   ctx.positionPlan.tier = 'run';
   assert.equal(context.buildEtfIntradaySignals(ctx).events[0].side, 'watch');
   ctx.positionPlan.tier = 'try'; ctx.quote.premiumPct = null;
-  assert.equal(context.buildEtfIntradaySignals(ctx).events[0].side, 'watch');
+  assert.equal(context.buildEtfIntradaySignals(ctx).events[0].side, 'buy');
 });
 
 test('日内买入候选遵守QQQ作废与14:30截止', () => {
@@ -257,12 +271,15 @@ test('零成交分时或午休不触发档位提醒', () => {
   assert.equal(context.buildPremarketPlan(ctx, null, { debugTime: '2026-11-05T05:04:00Z' }).touches.length, 0);
 });
 
-test('已记录买入候选遇到溢价升高时不得再次给买入提示', () => {
+test('已记录买入候选不因溢价升高降级，仍遵守当前趋势', () => {
   const ctx = input(rebound); ctx.quote.premiumPct = 17;
   ctx.intradaySignals = context.buildEtfIntradaySignals(ctx);
   assert.equal(ctx.intradaySignals.events[0].side, 'buy');
   ctx.quote.premiumPct = 40;
-  const alert = context.buildEtfAlerts(ctx).find(e => e.key.startsWith('intraday_rebound_'));
+  let alert = context.buildEtfAlerts(ctx).find(e => e.key.startsWith('intraday_rebound_'));
+  assert.equal(alert.side, 'buy');
+  ctx.positionPlan.tier = 'run';
+  alert = context.buildEtfAlerts(ctx).find(e => e.key.startsWith('intraday_rebound_'));
   assert.equal(alert.side, 'watch');
   assert.match(alert.title, /禁止买入/);
 });
@@ -289,15 +306,17 @@ test('参考区只使用已闭合分钟，未来极低价不影响当前低吸�
   ctx.intraday.points.push(point('13:05', 1));
   const after = context.buildEtfIntradaySignals(ctx).guide;
   assert.deepEqual(plain(after), plain(before));
-  assert.equal(after.lowBand.low, 2.92);
+  assert.equal(after.lowBand, null);
+  assert.equal(after.highBand.low, 2.94);
+  assert.equal(after.highBand.anchor, 'open');
   assert.equal(after.buyState, '止跌确认 · 小仓候选');
 });
 
-test('高溢价和观察档只给低吸观察，不因进入参考区升级买入', () => {
+test('高溢价允许止跌候选，观察档仍不能因触区升级买入', () => {
   const ctx = input(rebound);
   let guide = context.buildEtfIntradaySignals(ctx).guide;
-  assert.equal(guide.buyState, '低吸仅观察');
-  assert.match(guide.buyNote, /37.00%/);
+  assert.equal(guide.buyState, '止跌确认 · 小仓候选');
+  assert.doesNotMatch(guide.buyNote, /溢价.*不新增/);
   ctx.quote.premiumPct = 10; ctx.positionPlan.tier = 'watch';
   guide = context.buildEtfIntradaySignals(ctx).guide;
   assert.equal(guide.buyState, '低吸仅观察');
@@ -306,67 +325,236 @@ test('高溢价和观察档只给低吸观察，不因进入参考区升级买�
 
 test('高抛参考区内仍等待转弱，强势超过参考区不自动卖', () => {
   const ctx = input([point('13:00', 2.95, 2.95), point('13:01', 2.95, 2.95), point('13:02', 2.95, 2.95)]);
-  assert.equal(context.buildEtfIntradaySignals(ctx).guide.sellState, '反弹观察区内 · 等转弱');
+  assert.equal(context.buildEtfIntradaySignals(ctx).guide.sellState, '上方无阻力 · 持有观察');
   ctx.intraday.points[2].price = 2.98;
-  assert.equal(context.buildEtfIntradaySignals(ctx).guide.sellState, '反弹持有观察');
+  assert.equal(context.buildEtfIntradaySignals(ctx).guide.sellState, '上方无阻力 · 持有观察');
 });
 
 test('回踩参考区内未止跌时显示等待，不直接买', () => {
   const ctx = input([point('13:00', 2.94), point('13:01', 2.93), point('13:02', 2.92)]);
   ctx.quote.premiumPct = 17;
-  assert.equal(context.buildEtfIntradaySignals(ctx).guide.buyState, '低吸区内 · 等止跌');
+  assert.equal(context.buildEtfIntradaySignals(ctx).guide.buyState, '低于结构位 · 等企稳');
+  assert.match(context.buildEtfIntradaySignals(ctx).guide.buyNote, /不接飞刀/);
 });
 
 test('参考区跨午休重置，只用最新连续分钟而非上午低位', () => {
   const ctx = input([point('11:30', 1), point('13:00', 3), point('13:01', 3.01), point('13:02', 3.02)]);
-  assert.equal(context.buildEtfIntradaySignals(ctx).guide.lowBand.low, 3);
-  assert.equal(context.buildEtfIntradaySignals(ctx).guide.from, '13:00');
+  const guide = context.buildEtfIntradaySignals(ctx).guide;
+  assert.equal(guide.lowBand.low, 2.95);
+  assert.equal(guide.lowBand.anchor, 'vwap');
+  assert.equal(guide.from, '13:00');
 });
 
-test('连续分钟不足不绘制参考区，缺均价不造高抛区', () => {
+test('连续分钟不足不生成参考价，缺均价仍可用开盘价作高抛参考', () => {
   const gap = input([point('13:00', 2.9), point('13:03', 3), point('13:04', 3.01)]);
   assert.equal(context.buildEtfIntradaySignals(gap).guide, null);
   const noAvg = input(rebound.map(p => ({ ...p, avg: null })));
   const guide = context.buildEtfIntradaySignals(noAvg).guide;
-  assert.equal(guide.highBand, null);
-  assert.equal(guide.sellState, '均价待确认');
+  assert.equal(guide.highBand.anchor, 'open');
+  assert.equal(guide.highBand.low, 2.94);
 });
 
 test('盘后参考区明确回看而不生成当前高抛或买入指令', () => {
   const ctx = input(rebound); ctx.session.trading = false;
   const guide = context.buildEtfIntradaySignals(ctx).guide;
   assert.equal(guide.buyState, '低吸仅观察');
-  assert.equal(guide.sellState, '反弹观察区回看');
+  assert.equal(guide.sellState, '反弹参考回看');
   assert.match(guide.buyNote, /非实时/);
 });
 
-test('图表绘制动态参考带并隐藏零成交提示，不把参考带当买卖确认', () => {
+test('图表绘制参考价线并隐藏零成交提示，不把参考价当买卖确认', () => {
   const fixture = input(rebound); fixture.session.trading = false;
   fixture.intraday.note = '零成交时段未绘制，可能暂停交易或数据尚未到达；不据此生成信号。';
   fixture.intraday.inactiveRange = '09:30–10:30';
   const result = context.buildEtfIntradaySignals(fixture);
-  const browser = vm.createContext({ ETF_TRACK: { ...fixture, intradaySignals: result }, etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
-  vm.runInContext([declaration(html, 'etfIntradayOffset'), declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
+  const browser = vm.createContext({ ...tChartFixture, ETF_TRACK: { ...fixture, intradaySignals: result }, etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
+  vm.runInContext([declaration(html, 'etfIntradayOffset'), declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfTIntradayHtml'), declaration(html, 'etfTReferenceAt'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
   const rendered = browser.etfIntradayHtml();
-  assert.match(rendered, /data-reference-zone="buy"/);
   assert.match(rendered, /data-reference-zone="sell"/);
-  assert.match(rendered, /低吸 2.920–2.929/);
-  assert.match(rendered, /最新参考区/);
-  assert.match(rendered, /累计成交均价附近的反弹观察区/);
-  assert.match(rendered, /data-band-segment="buy"/);
-  assert.match(rendered, /<th>低吸区<\/th>/);
+  assert.doesNotMatch(rendered, /data-reference-zone="buy"/);
+  assert.match(rendered, /高抛参考 2\.940/);
+  assert.match(rendered, /最新参考价/);
+  assert.match(rendered, /结构位挂单参考/);
+  assert.doesNotMatch(rendered, /data-band-segment/);
+  assert.match(rendered, /<th>低吸挂单价<\/th>/);
   assert.doesNotMatch(rendered, /零成交时段未绘制|可能暂停交易或数据尚未到达/);
 });
 
-test('逐分钟参考带保持前缀一致，后续新低与均价不改写早盘', () => {
+test('做T接回线不回填实卖前，部分接回按当时份额重算且明细可读', () => {
+  const base = { id: 1, date: '2026-11-04', side: 'buy', shares: 10000, price: 3 };
+  const sale = { id: 2, date: '2026-11-05', time: '13:01', side: 'sell', tAction: 'sell', shares: 2000, price: 2.94, fee: 5, tBase: 10000, tCap: 2000, tRules: { ...EtfTStrategy.defaults } };
+  const partial = { id: 3, date: sale.date, time: '13:03', side: 'buy', tAction: 'buy', tCycleId: '2', price: 2.91, shares: 1000, fee: 5 };
+  const fixture = input(rebound);
+  const m = { date: sale.date, quote: fixture.quote, live: true, tier: 'try', events: [] };
+  const browser = vm.createContext({ ...tChartFixture, ETF_TRADES: [base, sale, partial], etfTMarket: () => m,
+    ETF_TRACK: { ...fixture, intradaySignals: context.buildEtfIntradaySignals(fixture) },
+    etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
+  vm.runInContext(['etfIntradayOffset', 'etfTIntradayHtml', 'etfTReferenceAt', 'etfIntradayHtml'].map(n => declaration(html, n)).join('\n'), browser);
+  const state = EtfTStrategy.evaluate(browser.ETF_TRADES, m);
+  assert.equal(browser.etfTReferenceAt(state, sale.date, '13:00'), null);
+  assert.equal(browser.etfTReferenceAt(state, '2026-11-06', '13:01'), null);
+  const before = browser.etfTReferenceAt(state, sale.date, '13:02');
+  const after = browser.etfTReferenceAt(state, sale.date, '13:03');
+  assert.equal(before.shares, 2000); assert.equal(after.shares, 1000);
+  assert.equal(before.target, EtfTStrategy.targetPrice(sale, 2000));
+  assert.equal(after.target, EtfTStrategy.targetPrice(sale, 1000));
+  const rendered = browser.etfIntradayHtml();
+  assert.match(rendered, /data-etf-t-intraday/);
+  assert.match(rendered, /data-t-target/);
+  assert.match(rendered, /费用后接回上限/);
+  assert.match(rendered, /买入价/);
+  assert.match(rendered, /实际卖出价/);
+  assert.match(rendered, new RegExp(`≤ ${state.buyTarget.toFixed(3)}`));
+  assert.doesNotMatch(rendered, /记录实际接回|仅记账|成交明细／费用参数/);
+  assert.match(rendered, /data-intraday-crosshair/);
+  assert.match(rendered, /data-inspect-text=/);
+  assert.match(rendered, /onkeydown="etfInspectIntraday/);
+  browser.ETF_TRADES.push({ ...partial, id: 4, time: '13:04' });
+  assert.doesNotMatch(browser.etfIntradayHtml(), /data-t-target/);
+});
+
+test('盘中价格卡显示风险减仓确认价，不混入成交记录按钮', () => {
+  const browser = vm.createContext({ escHtml: String });
+  vm.runInContext(declaration(html, 'etfTIntradayHtml'), browser);
+  const m = { date: '2026-11-05', quote: { price: 2.94, quoteTime: '2026-11-05 13:04' }, live: true,
+    events: [{ time: '13:03', side: 'sell', price: 2.93, risk: 'weak' }] };
+  const state = EtfTStrategy.evaluate([{ id: 1, date: m.date, side: 'buy', price: 3, shares: 10000 }], m);
+  const rendered = browser.etfTIntradayHtml(state, m);
+  assert.match(rendered, /风险减仓 2\.930 · 13:03/);
+  assert.match(rendered, /暂无有效高抛价/);
+  assert.doesNotMatch(rendered, /<b>2\.930<\/b>/);
+  assert.match(rendered, /风控未通过 · 暂不买入/);
+  assert.doesNotMatch(rendered, /<button|记录普通减仓|记录实际高抛|仅记账/);
+});
+
+test('非实时仍展示当日买卖参考价，标明回看而不提示当前交易', () => {
+  const browser = vm.createContext({ escHtml: String });
+  vm.runInContext(declaration(html, 'etfTIntradayHtml'), browser);
+  const m = { date: '2026-11-05', quote: { quoteDate: '2026-11-05', quoteTime: '2026-11-05 16:14' }, live: false };
+  const guide = { asOf: '15:00', lowBand: { low: 2.92, high: 2.929 }, highBand: { low: 2.945, high: 2.955 } };
+  const rendered = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, guide);
+  assert.match(rendered, /当日买卖价 · 回看/);
+  assert.match(rendered, /2026-11-05 15:00/);
+  assert.match(rendered, /买入价[\s\S]*2\.920/);
+  assert.match(rendered, /高抛参考价[\s\S]*2\.945–2\.955/);
+  assert.match(rendered, /当日低吸参考 · 回看/);
+  assert.match(rendered, /当日高抛参考 · 回看/);
+  assert.doesNotMatch(rendered, /仅记账|暂不买入|止跌后再买|转弱后再卖|<button/);
+  assert.match(browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m), /等待确认/);
+  m.events = [{ time: '10:49', side: 'buy', price: 2.931 }, { time: '13:10', side: 'sell', price: 2.95 }];
+  const confirmed = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, guide);
+  assert.match(confirmed, /<b>2\.931<\/b>/);
+  assert.match(confirmed, /<b>2\.950<\/b>/);
+  assert.match(confirmed, /当日买入信号 · 回看/);
+  assert.match(confirmed, /当日高抛信号 · 回看/);
+  assert.doesNotMatch(confirmed, /候选|data-t-action="buy"|data-t-action="sell"/);
+});
+
+test('无持仓或做T记录也显示实时买卖参考价，不显示账户说明', () => {
+  const browser = vm.createContext({ escHtml: String });
+  vm.runInContext(declaration(html, 'etfTIntradayHtml'), browser);
+  const m = { date: '2026-11-05', quote: { price: 2.94, quoteTime: '2026-11-05 13:04' }, live: true, tier: 'try', events: [] };
+  const guide = { lowBand: { low: 2.92, high: 2.929 }, highBand: { low: 2.945, high: 2.955 } };
+  const rendered = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, guide);
+  assert.match(rendered, /买入价[\s\S]*2\.920/);
+  assert.match(rendered, /高抛参考价[\s\S]*2\.945/);
+  assert.match(rendered, /止跌后再买/);
+  assert.match(rendered, /转弱后再卖/);
+  assert.doesNotMatch(rendered, /仅记账|底仓不足|额度|记录实际|成交明细|<button/);
+  assert.match(rendered, /结构位挂单价/);
+});
+
+test('新鲜确认买卖点显示确认价格，过期和未闭合信号退回参考区', () => {
+  const browser = vm.createContext({ escHtml: String });
+  vm.runInContext(declaration(html, 'etfTIntradayHtml'), browser);
+  const m = { date: '2026-11-05', quote: { price: 2.94, quoteTime: '2026-11-05 13:04' }, live: true, tier: 'try', events: [
+    { time: '13:02', side: 'buy', price: 2.931 }, { time: '13:03', side: 'sell', price: 2.95 },
+    { time: '13:04', side: 'buy', price: 1 }, { time: '12:59', side: 'sell', price: 4 },
+  ] };
+  const rendered = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m);
+  assert.match(rendered, /<b>2\.931<\/b>/);
+  assert.match(rendered, /<b>2\.950<\/b>/);
+  assert.match(rendered, /止跌确认 · 小仓候选/);
+  assert.match(rendered, /转弱确认 · 高抛候选/);
+  assert.doesNotMatch(rendered, /1\.000|4\.000/);
+  m.events = []; m.quote.quoteTime = '2026-11-05 14:30';
+  const late = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m);
+  assert.match(late, /等待确认/);
+  assert.match(late, /暂不买入/);
+  assert.doesNotMatch(late, /<b>2\.940<\/b>/);
+});
+
+test('收盘低吸参考不与早盘风险减仓价拼成亏损做T组合', () => {
+  const browser = vm.createContext({ escHtml: String });
+  vm.runInContext(declaration(html, 'etfTIntradayHtml'), browser);
+  const m = { date: '2026-11-10', quote: { quoteDate: '2026-11-10', quoteTime: '2026-11-10 16:14' }, live: false,
+    events: [{ time: '10:43', side: 'sell', price: 2.878, risk: 'broken' }] };
+  const guide = { asOf: '15:00', lowBand: { low: 2.884, high: 2.893 }, highBand: { low: 2.882, high: 2.891 } };
+  const rendered = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, guide);
+  assert.match(rendered, /2\.884/);
+  assert.match(rendered, /暂无有效高抛价/);
+  assert.match(rendered, /风险减仓 2\.878 · 10:43 · 回看/);
+  assert.doesNotMatch(rendered, /<b>2\.878<\/b>|<b>2\.882–2\.891<\/b>/);
+  m.events.push({ time: '13:10', side: 'sell', price: 2.88 });
+  assert.match(browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, guide), /暂无有效高抛价/);
+  m.events.push({ time: '14:10', side: 'sell', price: 2.91 });
+  const higher = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, guide);
+  assert.match(higher, /<b>2\.910<\/b>/);
+  assert.match(higher, /结构位挂单价/);
+});
+
+test('盘中买入价标注现价距离与结构位漂移，收盘回看不冒充盘中距离', () => {
+  const browser = vm.createContext({ escHtml: String });
+  vm.runInContext(declaration(html, 'etfTIntradayHtml'), browser);
+  const guide = { asOf: '10:31', lowBand: { low: 2.92, high: 2.929 }, highBand: null, highHold: true };
+  const bands = [{ time: '10:30', lowBand: { low: 2.915 } }, { time: '10:31', lowBand: { low: 2.92 } }];
+  const m = { date: '2026-11-05', quote: { price: 2.94, quoteTime: '2026-11-05 10:32' }, live: true, tier: 'try', events: [] };
+  const live = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, guide, bands);
+  assert.match(live, /10:32 · 现价 2\.940/);
+  assert.match(live, /距现价 -0\.68%（较前一分 \+0\.005）/);
+  assert.match(live, /<b>—<\/b>/);
+  assert.match(live, /现价在结构位上方 · 不设高抛价/);
+  const steady = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, guide, [{ time: '10:30', lowBand: { low: 2.92 } }, { time: '10:31', lowBand: { low: 2.92 } }]);
+  assert.match(steady, /距现价 -0\.68%/);
+  assert.doesNotMatch(steady, /较前一分/);
+  const closed = { ...m, live: false, quote: { quoteDate: '2026-11-05', quoteTime: '2026-11-05 16:14', price: 2.94 } };
+  const replay = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], closed), closed, guide, bands);
+  assert.doesNotMatch(replay, /距现价|现价 2\.940/);
+  assert.match(replay, /当日无高抛价 · 回看/);
+  const lag = { ...m, live: false, stale: true, ageSec: 125 };
+  const delayed = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], lag), lag, guide, bands);
+  assert.match(delayed, /盘中参考 · 行情延迟/);
+  assert.match(delayed, /10:32 · 现价 2\.940 · 延迟 2 分/);
+  assert.match(delayed, /距现价 -0\.68%/);
+  assert.match(delayed, /行情延迟，仅挂单参考/);
+  assert.doesNotMatch(delayed, /回看|止跌后再买/);
+});
+
+test('跨日做T记录不冒充当日接回价，价格卡仍使用当天参考区', () => {
+  const browser = vm.createContext({ escHtml: String });
+  vm.runInContext(declaration(html, 'etfTIntradayHtml'), browser);
+  const m = { date: '2026-11-05', quote: { price: 2.94, quoteTime: '2026-11-05 13:04' }, live: true, tier: 'try', events: [] };
+  const guide = { lowBand: { low: 2.92, high: 2.929 }, highBand: { low: 2.945, high: 2.955 } };
+  const state = { active: { sale: { date: '2026-11-04' } }, buyTarget: 2.8, recoverable: 1000 };
+  const rendered = browser.etfTIntradayHtml(state, m, guide);
+  assert.match(rendered, /2\.920/);
+  assert.match(rendered, /暂不买入/);
+  assert.doesNotMatch(rendered, /2\.800/);
+});
+
+test('逐分钟参考价保持前缀一致，结构位只随已闭合分钟演化', () => {
   const past = [point('10:31', 3, 3.01), point('10:32', 2.98, 3), point('10:33', 2.99, 2.995)];
   const before = context.buildEtfIntradayBands(past);
   const full = context.buildEtfIntradayBands([...past, point('10:34', 2.8, 2.9)]);
   assert.deepEqual(plain(full.slice(0, 3)), plain(before));
   assert.equal(before[0].lowBand, null);
-  assert.equal(before[2].lowBand.low, 2.98);
-  assert.equal(before[2].highBand.low, +(2.995 * (1 - before[2].halfWidthPct / 100)).toFixed(3));
-  assert.equal(full[3].lowBand.low, 2.8);
+  assert.equal(before[2].lowBand, null);
+  assert.equal(before[2].highBand.low, 3);
+  assert.equal(before[2].highBand.anchor, 'open');
+  assert.equal(full[3].lowBand, null);
+  assert.equal(full[3].highBand.low, 2.9);
+  assert.equal(full[3].highBand.anchor, 'vwap');
+  assert.equal(full[3].lowWait, null);
 });
 
 test('逐分钟回放的每个前缀都与全天对应参考带一致', () => {
@@ -378,28 +566,30 @@ test('逐分钟回放的每个前缀都与全天对应参考带一致', () => {
   }
 });
 
-test('低吸动态带只用最近30个连续分钟，不沿用过期低位', () => {
+test('低吸挂单价不沿用过期低位，窗口滑动只影响摆动点', () => {
   const points = Array.from({ length: 33 }, (_, i) => point(`13:${String(i).padStart(2, '0')}`, i === 0 ? 1 : 3));
   const bands = context.buildEtfIntradayBands(points);
-  assert.equal(bands[29].lowBand.low, 1);
-  assert.equal(bands[30].lowBand.low, 3);
+  assert.equal(bands[29].lowBand.low, 2.95);
+  assert.equal(bands[29].lowBand.anchor, 'vwap');
+  assert.equal(bands[30].lowBand.low, 2.95);
   assert.equal(bands[30].from, '13:01');
 });
 
-test('午休缺失断开动态带，缺均价仅缺高抛带', () => {
+test('午休缺失断开摆动点与连续窗口，缺均价仍可用开盘价作高抛参考', () => {
   const points = [...rebound, point('14:00', 2.9), point('14:01', 2.91), point('14:02', 2.92, null)];
   const bands = context.buildEtfIntradayBands(points);
   assert.equal(bands[4].lowBand, null);
   assert.equal(bands[5].lowBand, null);
-  assert.equal(bands[6].lowBand.low, 2.9);
-  assert.equal(bands[6].highBand, null);
+  assert.equal(bands[6].lowBand, null);
+  assert.equal(bands[6].highBand.low, 2.94);
+  assert.equal(bands[6].highBand.anchor, 'open');
   const fixture = input(points); fixture.session.trading = false;
   const result = context.buildEtfIntradaySignals(fixture);
-  const browser = vm.createContext({ ETF_TRACK: { ...fixture, intradaySignals: result }, etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
-  vm.runInContext([declaration(html, 'etfIntradayOffset'), declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
+  const browser = vm.createContext({ ...tChartFixture, ETF_TRACK: { ...fixture, intradaySignals: result }, etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
+  vm.runInContext([declaration(html, 'etfIntradayOffset'), declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfTIntradayHtml'), declaration(html, 'etfTReferenceAt'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
   const rendered = browser.etfIntradayHtml();
-  assert.equal((rendered.match(/data-band-segment="buy"/g) || []).length, 2);
-  assert.equal((rendered.match(/data-band-segment="sell"/g) || []).length, 1);
+  assert.equal((rendered.match(/data-reference-zone="buy"/g) || []).length, 0);
+  assert.equal((rendered.match(/data-reference-zone="sell"/g) || []).length, 1);
 });
 
 test('未闭合或未来分钟不进入动态带', () => {
@@ -412,6 +602,7 @@ test('15:00起即使session缓存仍为盘中，也不得新增提示记录或�
   let now = Date.parse('2026-11-05T06:59:00Z'), records = 0, toasts = 0;
   const browser = vm.createContext({ Date: class extends Date { static now() { return now; } }, ETF_TRACK: { session: { trading: true } },
     ETF_ALERT_SEEN: null, ETF_ALERT_URGENT: /^intraday_/, etfAlertLogToday: () => {}, nowStr: () => '14:59',
+    ETF_ALERT_COOLDOWN_MS: 600_000, ETF_ALERT_COOLDOWN: new Map(),
     etfRecordAlert: () => { records++; return true; }, etfToast: () => toasts++, document: { querySelectorAll: () => [] } });
   vm.runInContext(declaration(html, 'etfAlertsActive') + '\n' + declaration(html, 'processEtfAlerts'), browser);
   browser.processEtfAlerts([{ key: 'intraday_a' }]);
@@ -453,17 +644,17 @@ test('盘前参考计划独立默认折叠，开盘收盘及次日都可展开�
 });
 
 test('图表用中文区分观察和买卖候选，不把观察标为买', () => {
-  const browser = vm.createContext({ ETF_TRACK: { intraday: { points: [point('13:00', 2.94), point('13:01', 2.92)] }, quote: { prevClose: 2.98 },
+  const browser = vm.createContext({ ...tChartFixture, ETF_TRACK: { intraday: { points: [point('13:00', 2.94), point('13:01', 2.92)] }, quote: { prevClose: 2.98 },
     intradaySignals: { events: [{ time: '13:00', price: 2.94, side: 'watch', title: '观察' }, { time: '13:01', price: 2.92, side: 'buy', title: '买入候选' }, { time: '13:01', price: 2.92, side: 'sell', title: '减仓候选' }] } },
     etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
-  vm.runInContext([declaration(html, 'etfIntradayOffset'), declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
+  vm.runInContext([declaration(html, 'etfIntradayOffset'), declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfTIntradayHtml'), declaration(html, 'etfTReferenceAt'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
   const rendered = browser.etfIntradayHtml();
   assert.match(rendered, /data-intraday-side="watch"/);
   assert.match(rendered, />观察<\/text>/);
-  assert.match(rendered, />买 2.920<\/text>/);
-  assert.match(rendered, />卖 2.920<\/text>/);
-  assert.match(rendered, /fill="var\(--up\)"[^>]*>买 2.920<\/text>/);
-  assert.match(rendered, /fill="var\(--down\)"[^>]*>卖 2.920<\/text>/);
+  assert.match(rendered, />低吸 2.920<\/text>/);
+  assert.match(rendered, />高抛 2.920<\/text>/);
+  assert.match(rendered, /fill="var\(--text-primary\)"[^>]*>低吸 2.920<\/text>/);
+  assert.match(rendered, /fill="var\(--text-primary\)"[^>]*>高抛 2.920<\/text>/);
   assert.doesNotMatch(rendered, />[WBS]<\/text>/);
 });
 
@@ -501,10 +692,10 @@ test('分时默认最近一小时，手动查看和切换上午下午刷新后�
 
 test('全天缩放到一屏，保留买卖标记，返回30分钟视窗恢复宽图', () => {
   const el = { dataset: { date: '2026-11-05', scale: '5', latestX: '1264' }, clientWidth: 380, scrollLeft: 928, innerHTML: '' };
-  const browser = vm.createContext({ ETF_INTRADAY_VIEW: { date: '2026-11-05', offset: 0, follow: true },
+  const browser = vm.createContext({ ...tChartFixture, ETF_INTRADAY_VIEW: { date: '2026-11-05', offset: 0, follow: true },
     ETF_TRACK: { intraday: { date: '2026-11-05', points: [point('10:31', 2.99), point('15:00', 2.92)] }, quote: {}, intradaySignals: { events: [] } },
     document: { getElementById: () => el }, etfChartWidth: () => 360, escHtml: String, etfHeroHtml: () => '', etfSessionQuoteHtml: () => '', etfMarketLinkHtml: () => '', etfQuoteInlineHtml: () => '' });
-  vm.runInContext(['etfIntradayOffset', 'etfIntradayScroll', 'etfInitIntradayScroll', 'etfPanIntraday', 'etfChaseGateHtml', 'etfIntradayHtml'].map(n => declaration(html, n)).join('\n'), browser);
+  vm.runInContext(['etfIntradayOffset', 'etfIntradayScroll', 'etfInitIntradayScroll', 'etfPanIntraday', 'etfChaseGateHtml', 'etfTIntradayHtml', 'etfTReferenceAt', 'etfIntradayHtml'].map(n => declaration(html, n)).join('\n'), browser);
   browser.etfPanIntraday('all');
   assert.equal(browser.ETF_INTRADAY_VIEW.all, true);
   assert.equal(el.scrollLeft, 0);
@@ -537,6 +728,7 @@ function soundBrowser(events) {
     ETF_TRACK: { session: { trading: true }, intradaySignals: { actionable: true, events } },
     ETF_SOUND: true, ETF_NOTIFY: false, ETF_ALERT_SEEN: null, ETF_ALERT_LOG: [],
     ETF_ALERT_URGENT: /^(buy_opportunity|macd_flip_neg|intraday_)/,
+    ETF_ALERT_COOLDOWN_MS: 600_000, ETF_ALERT_COOLDOWN: new Map(),
     etfAlertLogToday: () => '2026-11-05', etfSaveAlertLog: () => {}, nowStr: () => '13:04',
     etfToast: a => toasts.push(a), currentRoute: () => ({ view: 'qdii' }), window: { AudioContext }, document: { querySelectorAll: () => [] },
     localStorage: { setItem() {} }, renderEtfPosition() {} });
@@ -598,6 +790,7 @@ test('声音开关静默解锁音频，普通弹窗不触发声音', () => {
 test('分时行情头展示现价涨跌幅溢价和指数，不展示ETF名称日期或盘中状态', () => {
   const browser = vm.createContext({ ETF_TRACK: { name: '纳指科技ETF', quote: { price: 2.921, prevClose: 2.946, changePct: -0.85 },
     premium: { current: 37.08, band: { level: 'extreme', label: '极高' } }, session: { trading: true } },
+    LAST_STALE: false,
     LAST_MAP: { SSE: { regularMarketChangePercent: 1.23, tradingToday: false }, QQQ: { regularMarketChangePercent: -0.54, marketState: 'PRE' } },
     escHtml: String, etfMarketMotionBadgeHtml: () => '', cls: () => 'down', fmtPct: v => v == null ? '--' : v.toFixed(2) + '%' });
   vm.runInContext(['effectiveChange', 'etfHeroHtml', 'etfSessionQuoteHtml'].map(n => declaration(html, n)).join('\n'), browser);
@@ -625,9 +818,9 @@ test('分时行情头展示现价涨跌幅溢价和指数，不展示ETF名称�
 });
 
 test('分时数据缺失时仍保留行情头，独立顶部行情区域不再渲染或刷新', () => {
-  const browser = vm.createContext({ ETF_TRACK: { quote: { price: 2.921 } },
+  const browser = vm.createContext({ ...tChartFixture, ETF_TRACK: { quote: { price: 2.921 } },
     etfHeroHtml: time => `<div class="etf-hero">${time}</div>`, etfSessionQuoteHtml: () => '<div class="etf-session-quote"></div>', escHtml: String, etfQuoteInlineHtml: () => '' });
-  vm.runInContext([declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
+  vm.runInContext([declaration(html, 'etfChaseGateHtml'), declaration(html, 'etfTIntradayHtml'), declaration(html, 'etfTReferenceAt'), declaration(html, 'etfIntradayHtml')].join('\n'), browser);
   assert.match(browser.etfIntradayHtml(), /etf-hero/);
   assert.match(browser.etfIntradayHtml(), /分时数据不可用/);
   assert.doesNotMatch(declaration(html, 'renderEtfView'), /id="etf-hero"/);
@@ -744,9 +937,14 @@ test('联动提示不跨过ETF风控，不因上证QQQ反弹直接给买入', ()
   browser.ETF_TRACK = { quote: { quoteTime: '2026-11-05 13:04', premiumPct: 17 }, positionPlan: { tier: 'try' },
     intradaySignals: { actionable: true, guide: { buyState: '止跌确认 · 小仓候选' }, events: [{ time: '13:03', side: 'buy' }] } };
   assert.match(browser.etfMarketLinkHtml(), /低吸候选/);
-  browser.ETF_TRACK.quote.premiumPct = 40;
+  for (const premium of [20, 40, null]) {
+    browser.ETF_TRACK.quote.premiumPct = premium;
+    assert.match(browser.etfMarketLinkHtml(), /低吸候选/);
+  }
+  browser.ETF_TRACK.positionPlan.tier = 'watch';
   assert.match(browser.etfMarketLinkHtml(), /不允许新增买入/);
   assert.doesNotMatch(browser.etfMarketLinkHtml(), /低吸候选/);
+  browser.ETF_TRACK.positionPlan.tier = 'try';
   browser.ETF_TRACK.quote.premiumPct = 17;
   browser.ETF_TRACK.intradaySignals.events[0].time = '12:59';
   assert.match(browser.etfMarketLinkHtml(), /等ETF确认/);
@@ -885,4 +1083,51 @@ test('指数标题更新不等待ETF请求，下一轮采样仍按十秒调度',
   assert.deepEqual(order, ['sample', 'title', 'etf', 'render', 10000]);
   resolveETF(); await Promise.resolve();
   assert.equal(order.at(-1), 'render');
+});
+
+test('盘中行情滞后时闸门给延迟提示，不套用收盘复盘结论', () => {
+  const fixture = input(rebound, { now: Date.parse('2026-11-05T13:09:00+08:00') });
+  fixture.quote.quoteTime = '2026-11-05 13:04';
+  const r = context.buildEtfIntradaySignals(fixture);
+  assert.equal(r.actionable, false);
+  assert.equal(r.chaseGate.level, 'wait');
+  assert.match(r.chaseGate.label, /行情延迟/);
+  assert.match(r.chaseGate.reason, /滞后约 5 分/);
+  assert.doesNotMatch(r.chaseGate.label, /不该追|全天/);
+});
+
+test('guide 给出当日已见低点作为失守观察位', () => {
+  const guide = context.buildEtfIntradaySignals(input(rebound)).guide;
+  assert.equal(guide.dayLow.price, 2.92);
+  assert.equal(guide.dayLow.time, '13:01');
+});
+
+test('低吸卡片把今日低点写成失守观察位，不当挂单价', () => {
+  const browser = vm.createContext({ escHtml: String });
+  vm.runInContext(declaration(html, 'etfTIntradayHtml'), browser);
+  const m = { date: '2026-11-05', quote: { price: 2.94, quoteTime: '2026-11-05 10:32' }, live: true, tier: 'try', events: [] };
+  const guide = { asOf: '10:31', lowBand: { low: 2.92, high: 2.929 }, highBand: null, highHold: true, dayLow: { price: 2.874, time: '10:05' } };
+  const rendered = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, guide, []);
+  assert.match(rendered, /data-break-level/);
+  assert.match(rendered, /跌破 2\.874（今日低点 10:05）即低点失守/);
+  assert.match(rendered, /要买等重新站上分时均价/);
+  assert.doesNotMatch(rendered, /<b>2\.874<\/b>/);
+  const noLow = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, { ...guide, dayLow: null }, []);
+  assert.doesNotMatch(noLow, /data-break-level/);
+});
+
+test('失守位与成本止损贴近时合并成一句，不并列两个价格', () => {
+  const browser = vm.createContext({ escHtml: String });
+  vm.runInContext(declaration(html, 'etfTIntradayHtml'), browser);
+  const m = { date: '2026-11-05', quote: { price: 2.9, quoteTime: '2026-11-05 10:32' }, live: true, tier: 'try', events: [] };
+  const guide = { asOf: '10:31', lowBand: { low: 2.886, high: 2.89 }, highBand: null, highHold: true,
+    stopPrice: 2.872, dayLow: { price: 2.874, time: '10:05' } };
+  const merged = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, guide, []);
+  assert.match(merged, /即低点失守 = 本笔止损（约 -0\.5%）/);
+  assert.doesNotMatch(merged, /低吸止损/);
+  // 止损离失守位太远时不能合并，否则等于把 -2.5% 的亏损说成 -0.5%
+  const far = browser.etfTIntradayHtml(EtfTStrategy.evaluate([], m), m, { ...guide, stopPrice: 2.814 }, []);
+  assert.match(far, /即低点失守：/);
+  assert.doesNotMatch(far, /本笔止损/);
+  assert.match(far, /低吸止损 2\.814（-0\.5%）/);
 });

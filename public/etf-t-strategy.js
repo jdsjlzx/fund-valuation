@@ -95,6 +95,10 @@
     const used = current.reduce((s, c) => s + c.sale.shares, 0);
     const exit = pos.shares > 0 ? all.find(c => c.held > 0 && c.stopPrice != null && price <= c.stopPrice) : null;
     const round = exit || active || current[current.length - 1] || null;
+    const riskEvent = market.live && pos.shares > 0 ? recentEvents.find(e => e.side === 'sell' && e.risk) : null;
+    const buyTarget = active && recoverable > 0 ? targetPrice(active.sale, recoverable, active.rules) : null;
+    const reboundConfirmed = !!(active && active.sale.date === date && recentEvents.some(e =>
+      (e.side === 'buy' || e.side === 'watch') && e.time >= active.sale.time));
     let state = '等待高抛', note = `每天最多卖出底仓20%，今日总额度 ${Math.max(0, cap || 0)} 份；只有转弱确认后才是卖出候选。`, action = null;
     if (!market.live) { state = '非实时 · 仅记账'; note = '不发交易候选；已成交记录仍可录入，历史提示不补造订单。'; }
     else if (exit) { state = '接回后止损候选'; note = `接回仓位跌破 ${(exit.stopPrice).toFixed(3)}，按实际可卖回补仓位 ${Math.min(exit.held, pos.shares)} 份考虑退出；只提示，不自动卖出。`; action = 'exit'; }
@@ -104,18 +108,22 @@
       else if (active.exited > 0) { state = '本轮已退出 · 不再接回'; note = '回补仓已发生退出，不反复加回；剩余缺口保留减仓。'; }
       else if (minute >= '14:30') { state = '14:30后不再接回'; note = '保留已减仓结果，不为凑成一轮而追买。'; }
       else if (active.fly) { state = '卖后上涨 · 不追买'; note = `现价高于实际卖价 ${active.sale.price.toFixed(3)} 至少1%，记录卖飞风险，不保证低价接回。`; }
-      else if (!Number.isFinite(quote.premiumPct) || quote.premiumPct > 18) { state = '高溢价／数据缺失 · 禁止接回'; note += ' 当前未通过原有溢价买入风控。'; }
-      else if (!['heavy', 'try'].includes(market.tier) || market.abort) { state = '趋势／失效风控 · 禁止接回'; note += ' 不因做T而绕过原有买入条件。'; }
+      else if (!['heavy', 'try'].includes(market.tier) || market.abort || riskEvent) { state = '趋势／失效风控 · 禁止接回'; note += ' 不因做T而绕过原有买入条件。'; }
       else if (recoverable <= 0) { state = '总持仓已恢复 · 不再接回'; note = '其他交易已恢复本轮卖出前的总持仓，禁止额外叠加接回。'; }
-      else if (price <= targetPrice(active.sale, recoverable, active.rules) && recentEvents.some(e => e.side === 'buy' || e.side === 'watch')) {
-        state = '低价接回候选'; note += ' 价格已覆盖费用、滑点和最低净价差，且出现止跌确认；成交后手动记录。'; action = 'buy';
-      }
-    } else if (current.length) { state = '今日一轮已结束'; note = '每天最多一轮，不反复追逐小波动；已接回仓位仍监控止损。'; }
+      else if (price <= buyTarget && reboundConfirmed) {
+        state = '低价接回候选'; note += ' 价格已覆盖费用、滑点和最低净价差，且卖出后出现新止跌确认；成交后手动记录。'; action = 'buy';
+      } else if (price > buyTarget) {
+        state = '价差不足 · 等低价'; note += ` 现价仍需回落 ${((1 - buyTarget / price) * 100).toFixed(2)}% 才到费用后上限，触价后仍需新的止跌确认。`;
+      } else { state = '价格达标 · 等止跌'; note += ' 费用后价差已达标，但尚无卖出后的新止跌确认，不因触价直接接回。'; }
+    } else if (riskEvent) { state = '风险减仓 · 非高抛'; note = 'ETF持续走弱或破位，这是已有仓位风险预警，不是反弹高抛机会；不启动做T候选，也不承诺减仓后能够接回。'; }
+    else if (current.length) { state = '今日一轮已结束'; note = '每天最多一轮，不反复追逐小波动；已接回仓位仍监控止损。'; }
     else if (pos.shares < 500 || cap < 100) { state = '底仓不足'; note = '先记录真实底仓；没有可卖份额时不做T，不模拟裸卖。'; }
-    else if (recentEvents.some(e => e.side === 'sell')) { state = '分批高抛候选'; action = 'sell'; }
+    else if (recentEvents.some(e => e.side === 'sell' && !e.risk)) { state = '分批高抛候选'; action = 'sell'; }
+    const risk = riskEvent ? { title: riskEvent.title || '持续走弱 · 风险减仓预警', time: riskEvent.time,
+      note: '风险减仓与做T高抛分开，停止接跌；如实际减仓，用普通卖出记录，不建立等待接回轮次。' } : null;
     const closed = all.filter(c => c.complete);
     const days = [...new Set(all.map(c => c.sale.date))].map(d => ({ date: d, net: Number.isFinite(price) ? all.filter(c => c.sale.date === d).reduce((s, c) => s + (c.relativeHolding || 0), 0) : null }));
-    return { state, note, action, round, pos, cap: Math.max(0, cap || 0), remainingQuota: Math.max(0, (cap || 0) - used), cycles: all, recoverable,
+    return { state, note, action, risk, round, active, buyTarget, reboundConfirmed, pos, cap: Math.max(0, cap || 0), remainingQuota: Math.max(0, (cap || 0) - used), cycles: all, recoverable,
       stats: { rounds: all.length, closed: closed.length, wins: Number.isFinite(price) ? closed.filter(c => c.relativeHolding > 0).length : null,
         pairedNet: all.reduce((s, c) => s + c.pairedNet, 0),
         exitPnl: all.reduce((s, c) => s + c.exitPnl, 0),
@@ -167,14 +175,14 @@
     const trades = [];
     for (let i = 0; i < samples.length - 1; i++) {
       const now = samples[i], next = samples[i + 1];
-      if (next.date !== now.date || minutes(next.time) - minutes(now.time) !== 1 || !now.live || !next.live || !Number.isFinite(now.premium)
+      if (next.date !== now.date || minutes(next.time) - minutes(now.time) !== 1 || !now.live || !next.live
         || !(now.price > 0) || !(next.price > rules.slippage) || minutes(now.time) >= 900 || minutes(next.time) > 900) continue;
       if (!sale && now.sell) {
         const price = next.price - rules.slippage, f = fee(cap * price, rules);
         sale = { id: 1, date: next.date, time: next.time, price, shares: cap, fee: f, tRules: rules };
         cash += price * cap - f; held -= cap;
         trades.push({ side: 'sell', ...sale });
-      } else if (sale && sale.date === now.date && !bought && now.rebound && next.time < '14:30' && Number.isFinite(next.premium) && now.premium <= 18 && next.premium <= 18
+      } else if (sale && sale.date === now.date && !bought && now.rebound && next.time < '14:30'
         && ['try', 'heavy'].includes(now.tier) && ['try', 'heavy'].includes(next.tier) && !now.abort && !next.abort
         && now.price <= targetPrice(sale, cap, rules) && next.price <= targetPrice(sale, cap, rules)) {
         returnedPrice = next.price + rules.slippage;
