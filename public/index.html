@@ -1148,6 +1148,29 @@
 
     /* ══════════ 纳指科技ETF 专用视图 ══════════ */
     :root { --etf-grid: rgba(255,255,255,0.07); --etf-panel: rgba(255,255,255,0.035); }
+    /* 盘前计划板块 · 护眼配色（低饱和暖绿，避免 #555 一类暗灰在深色底上看不清） */
+    :root {
+      --etf-eye-bg: linear-gradient(180deg, rgba(96,178,140,0.085) 0%, rgba(96,178,140,0.035) 100%);
+      --etf-eye-panel: rgba(96,178,140,0.10);
+      --etf-eye-line: rgba(120,190,158,0.20);
+      --etf-eye-text: #d7e4dc;      /* 主信息：亮但不刺眼 */
+      --etf-eye-sub: #a3bcac;       /* 次要信息：告别 #555 暗灰 */
+      --etf-eye-accent: #86cba9;    /* 标题强调 */
+      --etf-eye-up: #d97b6e;        /* 涨：柔化红，降低刺眼感 */
+      --etf-eye-down: #63b18f;      /* 跌：柔化绿 */
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --etf-eye-bg: linear-gradient(180deg, #eff8f1 0%, #f7fbf7 100%);
+        --etf-eye-panel: #e6f3ea;
+        --etf-eye-line: #cfe6d7;
+        --etf-eye-text: #22302a;
+        --etf-eye-sub: #5c7568;
+        --etf-eye-accent: #2f7d5b;
+        --etf-eye-up: #bf5340;
+        --etf-eye-down: #2c8b6a;
+      }
+    }
     @media (prefers-color-scheme: light) {
       :root { --etf-grid: rgba(0,0,0,0.07); --etf-panel: rgba(0,0,0,0.025); }
     }
@@ -1220,8 +1243,25 @@
     .etf-history-stat { padding: 5px 7px; border-radius: 6px; background: var(--etf-panel); border: 1px solid var(--border-badge); }
     .etf-history-stat b { display: block; font-size: 11px; color: var(--text-primary); font-variant-numeric: tabular-nums; }
     .etf-history-stat span { display: block; margin-top: 1px; font-size: 9.5px; color: var(--text-muted); }
-    .etf-history-samples { font-size: 9.5px; color: var(--text-muted); line-height: 1.6; }
-    .etf-history-sample { display: inline-block; margin-right: 8px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    /* 样本行：改成表格（日期 | 开 | 收 | 最高 | 最低），数字柔化配色，不再用暗灰 */
+    .etf-hist-block { margin-top: 6px; }
+    .etf-hist-cap { font-size: 9.5px; font-weight: 700; color: var(--etf-eye-sub); letter-spacing: .4px; margin-bottom: 3px; }
+    .etf-hist-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .etf-hist-table { width: 100%; border-collapse: collapse; font-size: 9.5px; font-variant-numeric: tabular-nums; }
+    .etf-hist-table th {
+      font-weight: 600; color: var(--etf-eye-sub); text-align: right;
+      padding: 3px 4px; border-bottom: 1px solid var(--etf-eye-line); white-space: nowrap;
+    }
+    .etf-hist-table td {
+      padding: 4px; text-align: right; white-space: nowrap;
+      color: var(--etf-eye-text); border-bottom: 1px dashed var(--etf-eye-line);
+    }
+    .etf-hist-table tr:last-child td { border-bottom: none; }
+    .etf-hist-table th:nth-child(-n+2), .etf-hist-table td:nth-child(-n+2) { text-align: left; }
+    .etf-hist-table td.d { color: var(--etf-eye-sub); }
+    .etf-hist-table td.u { color: var(--etf-eye-up); }
+    .etf-hist-table td.dn { color: var(--etf-eye-down); }
+    .etf-hist-note { margin-top: 5px; font-size: 9.5px; line-height: 1.55; color: var(--etf-eye-sub); }
 
     .etf-more {
       margin-top: 6px; text-align: center; font-size: 10px; color: var(--text-secondary);
@@ -1231,6 +1271,23 @@
     .etf-plan-fold > summary { cursor: pointer; font-size: 11px; font-weight: 700; color: var(--text-primary); padding: 5px 0; }
     .etf-plan-fold > summary .sub { float: right; font-size: 9.5px; font-weight: 400; color: var(--text-secondary); }
     .etf-plan-fold[open] > summary { margin-bottom: 8px; }
+    /* 盘前计划板块：护眼底色挂在外层卡片上（避免卡片套卡片），内部只负责提亮文字层级 */
+    .etf-eye-board {
+      background: var(--etf-eye-bg);
+      border-color: var(--etf-eye-line);
+    }
+    .etf-eye-panel { padding: 0; }
+    .etf-eye-panel > summary { color: var(--etf-eye-text); }
+    .etf-eye-panel > summary .sub { color: var(--etf-eye-sub); }
+    .etf-eye-panel .etf-board-head { color: var(--etf-eye-accent); }
+    .etf-eye-panel .etf-board-head .sub { color: var(--etf-eye-sub); }
+    .etf-eye-panel .etf-premarket-sec-title { color: var(--etf-eye-sub); }
+    .etf-eye-panel .etf-alert.info { background: var(--etf-eye-panel); border-color: var(--etf-eye-line); }
+    .etf-eye-panel .etf-alert-text { color: var(--etf-eye-text); }
+    .etf-eye-panel .etf-history-stat { background: var(--etf-eye-panel); border-color: var(--etf-eye-line); }
+    .etf-eye-panel .etf-history-stat b { color: var(--etf-eye-text); }
+    .etf-eye-panel .etf-history-stat span { color: var(--etf-eye-sub); }
+    .etf-eye-panel .etf-premarket-adj-item { color: var(--etf-eye-sub); }
     .etf-alert-log { margin-top: 5px; }
 
     .etf-hero { margin-bottom: 7px; }
@@ -1648,6 +1705,11 @@
     .etf-alert-title { font-weight: 700; color: var(--text-primary); }
     .etf-alert-time { flex: 0 0 auto; font-size: 9.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
     .etf-alert-text { display: block; color: var(--text-secondary); }
+    /* 生成逻辑：逐条成行，替代原来一整段 " · " 串 */
+    .etf-logic-list { display: grid; gap: 3px; margin-top: 3px; }
+    .etf-logic-item { position: relative; padding-left: 9px; color: var(--text-secondary); line-height: 1.55; font-variant-numeric: tabular-nums; }
+    .etf-logic-item::before { content: '·'; position: absolute; left: 2px; top: 0; color: var(--text-muted); }
+    .etf-logic-item.key { color: var(--text-primary); }
 
     /* ── 行动卡：一句话回答 买/卖/持有/跑路 + 关键价位 ── */
     .etf-action { margin: 0 0 6px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border-badge); background: var(--etf-panel); display: flex; flex-direction: column; gap: 4px; }
@@ -1672,14 +1734,14 @@
 
     /* ── 追涨闸门：现在这个价能不能追 ── */
     .etf-gate { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0 4px; padding: 8px 9px; border-radius: 7px; border: 1px solid var(--border-badge); background: var(--etf-panel); }
-    #etf-gate-board .etf-board-sec { border-top: 0; }
-    #etf-gate-board .etf-gate { margin: 0; padding: 9px 10px; }
+    #etf-gate-board { margin: 8px 12px 0; }
+    #etf-gate-board .etf-gate { margin: 0; padding: 9px 10px; border-radius: 10px; }
     .etf-gate-tag { flex: 0 0 auto; font-size: 10px; font-weight: 700; line-height: 1.5; padding: 2px 7px; border-radius: 4px; background: rgba(128,136,160,0.16); color: var(--text-secondary); }
     .etf-gate-body { min-width: 0; flex: 1; }
     .etf-gate-title { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; font-weight: 700; color: var(--text-primary); }
-    .etf-gate-time { flex: 0 0 auto; font-size: 9.5px; font-weight: 400; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .etf-gate-time { flex: 0 0 auto; font-size: 9.5px; font-weight: 400; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
     .etf-gate-reason { margin-top: 2px; font-size: 11px; line-height: 1.5; color: var(--text-secondary); }
-    .etf-gate-fix { margin-top: 1px; font-size: 10.5px; line-height: 1.5; color: var(--text-muted); }
+    .etf-gate-fix { margin-top: 1px; font-size: 10.5px; line-height: 1.5; color: var(--text-secondary); }
     .etf-gate-warn { margin-top: 3px; font-size: 10px; color: #e8a03d; }
     .etf-gate.block { border-color: rgba(224,64,64,0.42); background: linear-gradient(180deg, rgba(224,64,64,0.10), transparent 80%); }
     .etf-gate.block .etf-gate-tag { background: rgba(224,64,64,0.18); color: #e04040; }
@@ -1690,7 +1752,7 @@
     .etf-gate.allow { border-color: rgba(74,159,224,0.42); background: linear-gradient(180deg, rgba(74,159,224,0.10), transparent 80%); }
     .etf-gate.allow .etf-gate-tag { background: rgba(74,159,224,0.18); color: #4a9fe0; }
     .etf-gate.allow .etf-gate-title { color: #4a9fe0; }
-    .etf-gate.closed { background: var(--etf-panel); border-color: var(--border-badge); }
+    .etf-gate.closed { background: linear-gradient(180deg, rgba(136,153,170,0.10), rgba(136,153,170,0.03)); border-color: var(--border-badge); }
     .etf-gate.closed .etf-gate-tag { background: rgba(128,136,160,0.16); color: var(--text-secondary); }
     .etf-gate.closed .etf-gate-title { color: var(--text-primary); }
     .etf-intraday-plot { position: relative; min-width: 0; }
@@ -3719,7 +3781,26 @@ function etfPremarketHistoryHtml(p) {
         <div class="etf-alert info"><span class="etf-alert-title">样本不足</span><span class="etf-alert-text">匹配到 ${h.count} 个独立 ETF 交易日，未达5个样本；不据此自动校准${up ? '卖' : '买'}点，也不能估计可靠胜率。</span></div>
       </div>`;
   }
-  const samples = (h.samples || []).map(x => `<span class="etf-history-sample">${escHtml(x.qqqDate)} QQQ ${pct(x.qqqMove)} → ETF ${escHtml(x.etfDate)} 开 ${pct(x.openPct)} / 收 ${pct(x.closePct)} / 最高 ${pct(x.highPct)} / 最低 ${pct(x.lowPct)}</span>`).join('');
+  const cls = v => (v == null || !isFinite(v)) ? 'd' : (v > 0 ? 'u' : v < 0 ? 'dn' : 'd');
+  const md = d => String(d || '').slice(5);   // 2026-11-09 → 11-09
+  const sampleRows = (h.samples || []).map(x => `<tr>
+        <td class="d" title="${escHtml(x.qqqDate)}">${escHtml(md(x.qqqDate))} <b>${pct(x.qqqMove)}</b></td>
+        <td class="d" title="${escHtml(x.etfDate)}">${escHtml(md(x.etfDate))}</td>
+        <td class="${cls(x.openPct)}">${pct(x.openPct)}</td>
+        <td class="${cls(x.closePct)}">${pct(x.closePct)}</td>
+        <td class="${cls(x.highPct)}">${pct(x.highPct)}</td>
+        <td class="${cls(x.lowPct)}">${pct(x.lowPct)}</td>
+      </tr>`).join('');
+  const sampleTable = sampleRows ? `
+    <div class="etf-hist-block">
+      <div class="etf-hist-cap">相近样本（QQQ 日 → ETF 次日）</div>
+      <div class="etf-hist-wrap">
+        <table class="etf-hist-table">
+          <thead><tr><th>QQQ</th><th>ETF</th><th>开</th><th>收</th><th>最高</th><th>最低</th></tr></thead>
+          <tbody>${sampleRows}</tbody>
+        </table>
+      </div>
+    </div>` : '';
   const stats = up ? [
     [ext && ext.avg, `次日 ETF 盘中最高平均（中位 ${pct(ext && ext.median)}）`],
     [h.close && h.close.avg, `次日 ETF 收盘平均（中位 ${pct(h.close && h.close.median)}）`],
@@ -3731,7 +3812,7 @@ function etfPremarketHistoryHtml(p) {
     [h.close && h.close.worst, `收盘最差 / 最好 ${pct(h.close && h.close.best)}`],
     [ext && ext.worst, `盘中最低最差 / 最好 ${pct(ext && ext.best)}`],
   ];
-  const upNote = up ? `<div class="etf-history-samples">仅作高抛档位参考，不自动上抬卖档；QQQ 涨不等于 ETF 跟涨（溢价影响大），历史统计不代表未来，更不构成追高依据。</div>` : '';
+  const upNote = up ? `<div class="etf-hist-note">仅作高抛档位参考，不自动上抬卖档；QQQ 涨不等于 ETF 跟涨（溢价影响大），历史统计不代表未来，更不构成追高依据。</div>` : '';
   return `
     <div class="etf-premarket-sec">
       <div class="etf-premarket-sec-title">${title}（${escHtml(h.period || '近2年')} QQQ 正规盘 ${pct(h.target)}，±30% 区间 ${range} · ${h.count} 次）</div>
@@ -3739,7 +3820,7 @@ function etfPremarketHistoryHtml(p) {
         <div class="etf-history-summary">
           ${stats.map(([v, label]) => `<div class="etf-history-stat"><b>${pct(v)}</b><span>${label}</span></div>`).join('')}
         </div>
-        ${samples ? `<div class="etf-history-samples">相近样本：${samples}</div>` : ''}
+        ${sampleTable}
         ${upNote}
       </div>
     </div>`;
@@ -3753,7 +3834,7 @@ function etfPremarketHtml() {
   const p = t.premarket;
   const day = t.dayPlan;
   const title = p && p.mode === 'next' ? '下个交易日 · 参考计划' : '盘前提示 · 参考计划';
-  const fold = body => `<details class="etf-plan-fold" ${ETF_PLAN_OPEN ? 'open' : ''} ontoggle="if(this.isConnected) ETF_PLAN_OPEN=this.open"><summary>${title}<span class="sub">展开／收起</span></summary>${body}</details>`;
+  const fold = body => `<details class="etf-plan-fold etf-eye-panel" ${ETF_PLAN_OPEN ? 'open' : ''} ontoggle="if(this.isConnected) ETF_PLAN_OPEN=this.open"><summary>${title}<span class="sub">展开／收起</span></summary>${body}</details>`;
   const dayReview = p && (p.mode === 'next' || p.mode === 'closed') ? `
     <div class="etf-premarket-sec">
       <div class="etf-premarket-sec-title">今日计划记录（${escHtml(t.today || '')}）</div>
@@ -3810,6 +3891,9 @@ function etfPremarketHtml() {
       ${p.adjustments.slice(-3).map(a => `<div class="etf-premarket-adj-item">· ${a.trigger} → ${a.delta}</div>`).join('')}
     </div>` : '';
 
+  const logicLines = ((Array.isArray(p.logicLines) && p.logicLines.length) ? p.logicLines : String(p.logic || '—').split(' · '))
+    .flatMap(l => String(l).split(' · '));
+
   const planBody = `
     <div class="etf-board-head">
       <span>参考计划详情</span>
@@ -3817,7 +3901,7 @@ function etfPremarketHtml() {
     </div>
     <div class="etf-alert info">
       <span class="etf-alert-title">生成逻辑</span>
-      <span class="etf-alert-text">${p.logic || '—'}</span>
+      <div class="etf-logic-list">${logicLines.map(l => `<div class="etf-logic-item${/预期开盘/.test(l) ? ' key' : ''}">${escHtml(l)}</div>`).join('')}</div>
     </div>
     ${etfPremarketHistoryHtml(p)}
     <div class="etf-premarket-sec">
@@ -4988,10 +5072,10 @@ function renderEtfView() {
   ETF_RENDERED_DATE = t && t.session ? t.session.lastTradingDate : null;
   document.getElementById('app').innerHTML = `
     ${tabbarHtml('etf')}
-    <div class="etf-board" id="etf-gate-board" style="${etfChaseGateHtml() ? '' : 'display:none'}">
-      <div class="etf-board-sec" id="etf-gate">${etfChaseGateHtml()}</div>
+    <div id="etf-gate-board" style="${etfChaseGateHtml() ? '' : 'display:none'}">
+      <div id="etf-gate">${etfChaseGateHtml()}</div>
     </div>
-    <div class="etf-board">
+    <div class="etf-board etf-eye-board">
       <div class="etf-board-sec" id="etf-premarket">${etfPremarketHtml()}</div>
     </div>
     <div class="etf-board">

@@ -4966,6 +4966,8 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
   if (premium != null) logicParts.push(`当前溢价 ${premium.toFixed(1)}%（${zone.label}）`);
   if (buyReasons.length) logicParts.push(buyReasons.join('；'));
   const logic = logicParts.join(' · ');
+  // 结构化输出：供前端按行排版（原因逐条拆开，避免一整段" · "串读不动）
+  const logicLines = buyReasons.length ? [...logicParts.slice(0, -1), ...buyReasons] : [...logicParts];
 
   return {
     mode,
@@ -4993,6 +4995,7 @@ function buildPremarketPlan(ctx, lastPlan, opts = {}) {
     held,
     historyReview,
     logic,
+    logicLines,
   };
 }
 
