@@ -32,3 +32,6 @@ data/intl-closes.json
 # ETF 磁盘兜底缓存（运行时生成，不入库）
 data/etf-mkt-cache.json
 data/etf-day-plan.json
+
+# 新浪期货历史快照（夜盘漂移修正用，运行时生成，不入库）
+data/futures-hist.json

@@ -1650,6 +1650,10 @@ function computeOvernightQuote({
     for (let i = hist.length - 1; i >= 0; i--) {
       if (hist[i].ts <= selected.at) { anchor = hist[i]; break; }
     }
+    // 重启兜底：内存/磁盘历史都晚于锚点时间（如停机几分钟后重启）时，用最早一条
+    // 历史当基点。误差仅剩"锚点时刻→最早历史"空档期的期货波动（通常几分钟），
+    // 远小于放任锚点整批冻结 20 分钟的漂移。
+    if (!anchor && hist.length && hist[0].ts > selected.at) anchor = hist[0];
     if (anchor && Number.isFinite(anchor.chgPct)) {
       const chg = selected.chg + (etfFut.chgPct - anchor.chgPct);
       selected = { source: 'xueqiu-drift', chg,
@@ -1689,8 +1693,36 @@ function computeOvernightQuote({
 // 每次取到新浪期货报价都记录 {报价时间, 相对昨结涨跌}，漂移时取锚点时刻的
 // 期货值算增量。增量口径自洽，新浪与富途昨结基准不同不影响差值。
 const SINA_FUTURES_HIST = new Map();   // sym → [{ ts, chgPct }]（ts = 新浪报价时间）
-const DRIFT_MIN_MS = 5 * 60_000;       // 锚点滞后超过 5 分钟才启用漂移
+// 锚点滞后超过 90 秒即启用漂移修正。此前 5 分钟门槛导致雪球批次之间（约每 20 分钟
+// 一批）有长达 5 分钟的"冻结窗口"：读数一动不动而真实夜盘在走，用户看到明显漂移。
+// 90 秒内锚点本身是真实成交价，比期货增量更准；超过后用期货增量连续修正。
+const DRIFT_MIN_MS = 90 * 1000;
 const FUT_HIST_TTL_MS = 90 * 60_000;
+// 历史快照持久化：内存历史在重启后清零，重启前的雪球锚点（最多 20 分钟一批）
+// 找不到基点就会退回"整批冻结"，这是漂移修正失效的主要场景。落盘后重启可续。
+const FUT_HIST_FILE = path.join(__dirname, 'data', 'futures-hist.json');
+function loadFuturesHist() {
+  try {
+    const j = JSON.parse(fs.readFileSync(FUT_HIST_FILE, 'utf8'));
+    const cutoff = Date.now() - FUT_HIST_TTL_MS;
+    for (const [sym, arr] of Object.entries(j || {})) {
+      if (!Array.isArray(arr)) continue;
+      const clean = arr.filter(e => e && Number.isFinite(e.ts) && Number.isFinite(e.chgPct) && e.ts >= cutoff);
+      if (clean.length) SINA_FUTURES_HIST.set(sym, clean);
+    }
+  } catch { /* 首次运行无文件 */ }
+}
+let _futHistLastSave = 0;
+function saveFuturesHist(force) {
+  try {
+    if (!force && Date.now() - _futHistLastSave < 60_000) return;   // 最多 1 分钟写一次
+    _futHistLastSave = Date.now();
+    fs.mkdirSync(path.dirname(FUT_HIST_FILE), { recursive: true });
+    const obj = {};
+    for (const [sym, arr] of SINA_FUTURES_HIST) if (arr.length) obj[sym] = arr;
+    fs.writeFileSync(FUT_HIST_FILE, JSON.stringify(obj));
+  } catch { /* 忽略 */ }
+}
 function recordFuturesHist(map) {
   const now = Date.now();
   for (const [sym, f] of Object.entries(map || {})) {
@@ -1702,7 +1734,9 @@ function recordFuturesHist(map) {
     while (arr.length && now - arr[0].ts > FUT_HIST_TTL_MS) arr.shift();
     SINA_FUTURES_HIST.set(sym, arr);
   }
+  saveFuturesHist();
 }
+loadFuturesHist();
 
 app.get('/api/quotes', async (req, res) => {
   const diag = req.query.diag === '1';
@@ -5150,6 +5184,7 @@ function buildEtfIntradayStrength(points, date) {
 //    「距日内高点回落」作为拦截条件甚至是负贡献（+0.30%），所以都不单独使用。
 //  这里只判盘中结构，溢价/趋势风控已在 guide 与 chase 文案里，避免长期高溢价把结论钉死成永远不能买。
 function buildEtfChaseGate(ctx, points, current, actionable) {
+  if (!Array.isArray(points) || !points.length) return null;   // 停牌/无成交分时：不出闸门结论
   const quote = ctx.quote || {};
   const last = points[points.length - 1];
   const prevClose = quote.prevClose > 0 ? quote.prevClose : null;
@@ -5219,6 +5254,13 @@ function buildEtfIntradaySignals(ctx) {
   if (!d || d.date !== ctx.today || !Array.isArray(d.points)) return result;
   const time = (quote.quoteTime || '').slice(11, 16);
   const points = d.points.filter(p => isEtfContinuousMinute(p.t) && p.t <= time && (!(ctx.session && ctx.session.trading) || p.t < time) && p.price > 0 && p.volume > 0);
+  if (!points.length) {
+    // 停牌（溢价风险警示常开盘停到 10:30）或集合竞价未成交：分时全为 volume=0，过滤后为空。
+    // 此前会带着空 points 走到 buildEtfChaseGate 读 points[0] 抛异常，拖垮整个 /api/etf-track，
+    // premarket/intradaySignals 全部消失、前端永远停在"数据加载中"。这里提前返回空信号。
+    if (ctx.session && ctx.session.trading) result.note = '分时无成交（可能停牌或尚未开盘），暂不生成日内信号；停牌时段价格冻结在昨收，不据此判断涨跌。';
+    return result;
+  }
   result.asOf = points.length ? points[points.length - 1].t : null;
   const quoteAt = Date.parse((quote.quoteTime || '').replace(' ', 'T') + '+08:00');
   const now = ctx.now == null ? Date.now() : ctx.now;
