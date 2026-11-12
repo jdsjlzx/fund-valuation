@@ -3565,6 +3565,19 @@ function buildHeavyGate(rows, usIdx) {
     const bar = bars[i] || {};
     const etfAbove = C[i] > ma21[i];
     const etfRed = bar.dif != null && bar.dea != null && bar.dif > bar.dea;
+    // ── 破位后的「修复段」识别（mirror usRepair 的 3% 口径）──
+    // run 档触发条件是「MACD 翻绿 + 跌破 MA21」双确认，但触发后到站回 MA21 之前
+    // 一直喊"减仓跑路"：破位后的反弹段里继续杀跌容易卖在修复起点，也不友好。
+    // 自近 20 日收盘低点反弹 ≥3%（与美股止跌确认同阈值）视为修复段：仓位上限不变
+    // （铁律不动），只把文案从"减仓跑路"切到"修复中 · 维持低仓"。
+    const low20 = Math.min(...C.slice(Math.max(0, i - 19), i + 1));
+    const etfRebound = low20 > 0 ? (C[i] / low20 - 1) * 100 : null;
+    const histCur = (bar.dif != null && bar.dea != null) ? bar.dif - bar.dea : null;
+    const pb = i > 0 ? (bars[i - 1] || {}) : {};
+    const histPrev = (pb.dif != null && pb.dea != null) ? pb.dif - pb.dea : null;
+    const histImproving = histCur != null && histPrev != null && histCur > histPrev;
+    const etfRepair = !etfAbove && !etfRed && etfRebound != null && etfRebound >= 3;
+    const gapToMa21 = ma21[i] > 0 ? (ma21[i] / C[i] - 1) * 100 : null;
     let usAbove = null, usRed = null, usZero = null, usClose = null, usMa = null, dv = null, dvDea = null;
     let usBelow30 = null, usBelow60 = null;
     const ui = usAt ? usAt[i] : -1;
@@ -3593,6 +3606,7 @@ function buildHeavyGate(rows, usIdx) {
     out[i] = {
       tier: heavy ? 'heavy' : (run ? 'run' : (macdWatch ? 'watch' : 'try')), etfAbove, etfRed, usAbove, usRed, usZero, hasUs, miss,
       usBelow30, usBelow60,
+      etfRepair, etfRebound: etfRebound == null ? null : +etfRebound.toFixed(2), histImproving, gapToMa21: gapToMa21 == null ? null : +gapToMa21.toFixed(2),
       close: +C[i].toFixed(3), ma21: +ma21[i].toFixed(3),
       dif: bar.dif == null ? null : +bar.dif.toFixed(4), dea: bar.dea == null ? null : +bar.dea.toFixed(4),
       usClose: usClose == null ? null : +usClose.toFixed(2), usMa21: usMa == null ? null : +usMa.toFixed(2),
@@ -3844,6 +3858,7 @@ function buildEtfPositionSeries(klines, navMap, live, panicActive, usIdx) {
       // 重仓铁律的逐日判定：tier = heavy/watch/try/run + 四项条件，供前端说明「为什么不能重仓」
       tier, gate: g ? {
         tier: g.tier, etfAbove: g.etfAbove, etfRed: g.etfRed, usAbove: g.usAbove, usRed: g.usRed, usZero: g.usZero, hasUs: g.hasUs,
+        etfRepair: g.etfRepair, etfRebound: g.etfRebound, histImproving: g.histImproving, gapToMa21: g.gapToMa21,
         usClose: g.usClose, usMa21: g.usMa21, usDif: g.usDif, miss: g.miss,
       } : null,
       // 美股中期趋势（MA50）：仅用于展示，不再单独封顶（v7 起由 tier 接管）
@@ -3892,12 +3907,20 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
       run: Math.min(POS_RUN_CAP, POS_TRY_CAP),
       maxNotHeavy: POS_MAX_NOT_HEAVY,
     },
-    label: tier === 'heavy' ? '重仓条件已满足' : (tier === 'run' ? '破位 · 减仓跑路' : (tier === 'watch' ? '动能转弱 · 持有观察' : '未确认 · 只能试仓')),
+    label: tier === 'heavy' ? '重仓条件已满足'
+      : (tier === 'run'
+        ? (gt.etfRepair ? `破位后修复中 · 维持低仓（自低点 +${gt.etfRebound}%）` : '破位 · 减仓跑路')
+        : (tier === 'watch' ? '动能转弱 · 持有观察' : '未确认 · 只能试仓')),
   };
+  gateInfo.repair = !!gt.etfRepair;
+  gateInfo.etfRebound = gt.etfRebound != null ? gt.etfRebound : null;
+  gateInfo.gapToMa21 = gt.gapToMa21 != null ? gt.gapToMa21 : null;
   gateInfo.note = tier === 'heavy'
     ? `ETF 站上 MA21（${ma21Txt0}）且 MACD 翻红，纳指100 也站上 MA21 且动能不为负（MACD 翻红 或 DIF 在零轴上方）→ 两条都确认，可以按趋势仓位上限分批加仓`
     : (tier === 'run'
-      ? `触发：${gateInfo.miss.join('、')} → 价格已经破 MA21，按铁律减仓到 ${runPct}%，未恢复趋势确认前不能重仓`
+      ? (gt.etfRepair
+        ? `破位未解除（${gateInfo.miss.join('、')}），但已自近 20 日低点反弹 +${gt.etfRebound}%（≥3% 修复确认${gt.histImproving ? '、MACD 绿柱收敛' : ''}）→ 维持减仓后的低仓 ${runPct}%：不再追加减仓（反弹段杀跌容易卖在修复起点），也不加仓；还差 ${gt.gapToMa21}% 收盘站回 MA21，站回且 MACD 翻红后再恢复。反弹回落到距低点 <3% 会自动切回"减仓跑路"口径`
+        : `触发：${gateInfo.miss.join('、')} → 价格已经破 MA21，按铁律减仓到 ${runPct}%，未恢复趋势确认前不能重仓`)
       : (tier === 'watch'
         ? `还差：${gateInfo.miss.join('、')} → MACD 转弱但价格仍在 MA21 上方，先停止加仓/观察，不直接减仓`
         : `还差：${gateInfo.miss.join('、')} → 动能已翻红但价格还没站回 MA21，只能试仓 ${tryPct}%`));
@@ -4009,16 +4032,32 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
     }
   } else if (tier === 'run') {
     const prevPos = prev ? Math.round(prev.target * 100) : null;
-    action = `减仓跑路 · ${posPct}%`; tone = 'danger';
-    headline = `${gateInfo.miss.join('、')}——价格已经破 MA21，按重仓铁律减仓，先降到 ${posPct}%${prevPos != null && prevPos > posPct ? `（昨日 ${prevPos}%）` : ''}。`
-      + '溢价仅供参考，不改变破位风控；'
-      + `等 ETF MACD 重新翻红且收盘站回 MA21（${ma21Txt0}）才谈加仓。`;
-    points = [
-      { tag: '门控', text: `破位：${gateInfo.miss.join('、') || 'MACD 翻绿且跌破 MA21'}` },
-      { tag: '仓位', text: `降到 ${posPct}%${prevPos != null && prevPos > posPct ? `（昨日 ${prevPos}%）` : ''}，只留防守底仓` },
-      { tag: '抬仓', text: `ETF MACD 重新翻红，且收盘站回 MA21 ${ma21Txt0}` },
-      { tag: '溢价', text: `当前 ${p == null ? '—' : p.toFixed(2) + '%'}（${zone.label}），仅参考，不改变破位风控`, },
-    ];
+    const repairTxt = gateInfo.repair
+      ? `已自近 20 日低点反弹 +${gt.etfRebound}%（≥3% 修复确认${gt.histImproving ? '、MACD 绿柱收敛' : ''}）`
+      : null;
+    if (gateInfo.repair) {
+      action = `修复中 · 维持低仓 ${posPct}%`; tone = 'warn';
+      headline = `破位未解除（${gateInfo.miss.join('、')}），但${repairTxt}——降仓动作已完成（${posPct}%），反弹段不再追加减仓，避免卖在修复起点；也不加仓，还差 ${gt.gapToMa21}% 收盘站回 MA21（${ma21Txt0}），站回且 MACD 翻红后再恢复。`
+        + '溢价仅供参考，不改变破位风控。';
+      points = [
+        { tag: '状态', text: `破位：${gateInfo.miss.join('、') || 'MACD 翻绿且跌破 MA21'}；${repairTxt}` },
+        { tag: '仓位', text: `维持 ${posPct}% 低仓${prevPos != null && prevPos > posPct ? `（已从昨日 ${prevPos}% 降完）` : ''}：不追加卖出，也不加仓` },
+        { tag: '恢复线', text: `收盘站回 MA21 ${ma21Txt0}（还差 ${gt.gapToMa21}%）且 MACD 翻红 → 退出减仓档` },
+        { tag: '失效', text: '反弹回落到距近 20 日低点 <3% → 自动切回"减仓跑路"口径，每日复算' },
+        { tag: '溢价', text: `当前 ${p == null ? '—' : p.toFixed(2) + '%'}（${zone.label}），仅参考，不改变破位风控`, },
+      ];
+    } else {
+      action = `减仓跑路 · ${posPct}%`; tone = 'danger';
+      headline = `${gateInfo.miss.join('、')}——价格已经破 MA21，按重仓铁律减仓，先降到 ${posPct}%${prevPos != null && prevPos > posPct ? `（昨日 ${prevPos}%）` : ''}。`
+        + '溢价仅供参考，不改变破位风控；'
+        + `等 ETF MACD 重新翻红且收盘站回 MA21（${ma21Txt0}）才谈加仓。`;
+      points = [
+        { tag: '门控', text: `破位：${gateInfo.miss.join('、') || 'MACD 翻绿且跌破 MA21'}` },
+        { tag: '仓位', text: `降到 ${posPct}%${prevPos != null && prevPos > posPct ? `（昨日 ${prevPos}%）` : ''}，只留防守底仓` },
+        { tag: '抬仓', text: `ETF MACD 重新翻红，且收盘站回 MA21 ${ma21Txt0}` },
+        { tag: '溢价', text: `当前 ${p == null ? '—' : p.toFixed(2) + '%'}（${zone.label}），仅参考，不改变破位风控`, },
+      ];
+    }
   } else if (tier === 'watch') {
     action = `持有观察 · ${posPct}%`; tone = 'warn';
     headline = `${gateInfo.miss.join('、')}——只是动能转弱，价格仍在 MA21（${ma21Txt0}）上方，先停止加仓、不直接减仓；若 MACD 翻绿并跌破 MA21，再降到减仓档。`;
@@ -4127,7 +4166,9 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
           ? `恐慌抄底已获价格确认（站上 MA21）→ ${tier === 'heavy' ? `MACD 也翻红，按 ${posPct}% 目标仓位执行` : `${tier === 'watch' ? 'MACD 转弱但尚未破位' : 'MACD 未翻红'}，按 ${posPct}% 目标仓位执行`}`
           : `恐慌窗口内（${panicWin && panicWin.startDate ? panicWin.startDate + ' 起' : '进行中'}）仍未站上 MA21 → 按 ${posPct}% 试仓档执行；该档覆盖减仓档 ${runPct}%，不认同恐慌底就按 ${runPct}%`)
     : tier === 'run'
-      ? `${gateInfo.miss.join('、')} → 减仓档上限 ${runPct}%，当前目标 ${posPct}%，价格已破 MA21，不能重仓`
+      ? (gt.etfRepair
+        ? `${gateInfo.miss.join('、')} → 减仓档上限 ${runPct}%，当前目标 ${posPct}%；破位后自低点已反弹 +${gt.etfRebound}%，维持低仓不追加卖出，站回 MA21 且 MACD 翻红后才抬仓`
+        : `${gateInfo.miss.join('、')} → 减仓档上限 ${runPct}%，当前目标 ${posPct}%，价格已破 MA21，不能重仓`)
       : tier === 'watch'
         ? `${gateInfo.miss.join('、')} → 动能观察档：价格仍在 MA21 上方，只停止加仓，不因 MACD 单独翻绿直接减仓`
         : tier === 'try'

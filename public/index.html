@@ -1509,6 +1509,9 @@
     .etf-pos-gate.watch .etf-pos-gate-tag { color: #d29922; background: rgba(232,160,61,0.14); }
     .etf-pos-gate.run { border-left-color: #2ea043; }
     .etf-pos-gate.run .etf-pos-gate-tag { color: #2ea043; background: rgba(46,160,67,0.14); }
+    /* 破位后修复中：仓位仍是减仓档（run），但视觉上从"红色跑路"降为"琥珀修复" */
+    .etf-pos-gate.run.repair { border-left-color: #d29922; }
+    .etf-pos-gate.run.repair .etf-pos-gate-tag { color: #d29922; background: rgba(232,160,61,0.14); }
     .etf-gate-item { white-space: nowrap; }
     .etf-gate-item.on b { color: #c93526; }
     .etf-gate-item.off { color: var(--text-muted); }
@@ -3408,8 +3411,8 @@ function etfPosAdviceHtml() {
   const mark = v => (v === true ? '✓' : (v === false ? '✗' : '—'));
   const item = (label, v, extra) => `<span class="etf-gate-item ${v === true ? 'on' : 'off'}">${esc(label)} <b>${mark(v)}</b>${extra ? ` <i>${esc(extra)}</i>` : ''}</span>`;
   const gateLine = g ? `
-        <div class="etf-pos-gate ${esc(g.tier)}">
-          <span class="etf-pos-gate-tag">${g.tier === 'heavy' ? '重仓条件已满足 ✓' : (g.tier === 'run' ? '破位 · 减仓跑路 ⚠' : (g.tier === 'watch' ? '动能转弱 · 持有观察 ⚠' : '未确认 · 只能试仓 ⚠'))}</span>
+        <div class="etf-pos-gate ${esc(g.tier)}${g.tier === 'run' && g.repair ? ' repair' : ''}">
+          <span class="etf-pos-gate-tag">${g.tier === 'heavy' ? '重仓条件已满足 ✓' : (g.tier === 'run' ? (g.repair ? `破位后修复中 · 维持低仓 ↻${g.etfRebound != null ? '（自低点 +' + g.etfRebound + '%）' : ''}` : '破位 · 减仓跑路 ⚠') : (g.tier === 'watch' ? '动能转弱 · 持有观察 ⚠' : '未确认 · 只能试仓 ⚠'))}</span>
           ${item('ETF 站上 MA21', g.etfAbove, g.ma21 != null ? g.ma21.toFixed(3) : '')}
           ${item('ETF MACD 翻红', g.etfRed)}
           ${item('纳指100 站上 MA21', g.usAbove, g.usClose != null ? g.usClose.toFixed(0) : '')}
