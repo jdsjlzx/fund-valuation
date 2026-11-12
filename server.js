@@ -1571,7 +1571,9 @@ function parseSinaResponse(text, requestedSymbols) {
 //    SPY      → ES (标普500 期货)
 //    VIXY     → 无合适期货代理，保留 sina 盘后数据（可能滞后）
 // ─────────────────────────────────────────────────────────────
-const FUTURES_PROXY = { QQQ: 'NQ', IXIC: 'NQ', SPY: 'ES' };
+// IWM 也纳入：罗素夜盘在雪球同样是一批一批推，锚点常年滞后 1 小时，
+// 有期货代理才能用增量修正（此前它只能卡在「旧成交 + 滞后」状态）。
+const FUTURES_PROXY = { QQQ: 'NQ', IXIC: 'NQ', SPY: 'ES', IWM: 'ES' };
 
 // 个股夜盘代理：ET 20:00 后 ECN 夜盘价免费 API 取不到。
 // 回退方案：夜盘涨跌 = sina 20:00 ET 盘后涨跌 + β × (NQ/ES 期货从 20:00 到现在的 delta)
@@ -1603,6 +1605,77 @@ function stockFuturesProxy(sym) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  Alpaca 夜盘（Blue Ocean ATS）直连
+//
+//  20:00–04:00 ET 的成交只发生在 Blue Ocean / Bruce / MOON 这几个 ATS，
+//  交易所和 Yahoo/CNBC/TradingView 的「盘后」都到 20:00 为止。国内只有雪球
+//  转售这批数据，且约 20 分钟一批；要拿到分钟级真实成交只能自己接 ATS 源。
+//  Alpaca 免费套餐即提供 feed=overnight（BOATS 实时指示报价 + 15 分钟延迟成交），
+//  是唯一零成本的自助入口。key 放环境变量或 data/alpaca.json，没配就静默跳过。
+// ─────────────────────────────────────────────────────────────
+const ALPACA_DATA = 'https://data.alpaca.markets';
+let _alpacaCfg;
+function alpacaConfig() {
+  if (_alpacaCfg !== undefined) return _alpacaCfg;
+  let id = (process.env.ALPACA_KEY_ID || '').trim();
+  let secret = (process.env.ALPACA_SECRET_KEY || '').trim();
+  if (!id || !secret) {
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'alpaca.json'), 'utf8'));
+      id = String(j.keyId || j.key || '').trim();
+      secret = String(j.secretKey || j.secret || '').trim();
+    } catch { /* 未配置 */ }
+  }
+  _alpacaCfg = id && secret ? { id, secret } : null;
+  if (_alpacaCfg) console.log('[alpaca] 夜盘 ATS 数据源已启用');
+  return _alpacaCfg;
+}
+const ALPACA_OVERNIGHT_CACHE = new Map();   // symbols → { ts, map }
+const ALPACA_TTL_MS = 10_000;
+// 返回 Map<symbol, { price, at, bid, ask }>。取买卖中价当「当前夜盘价」：
+// 免费套餐的 quote 是实时指示价，成交要延迟 15 分钟，用成交价会倒退。
+async function fetchAlpacaOvernight(symbols) {
+  const cfg = alpacaConfig();
+  if (!cfg || !symbols || !symbols.length) return new Map();
+  const key = symbols.join(',');
+  const hit = ALPACA_OVERNIGHT_CACHE.get(key);
+  if (hit && Date.now() - hit.ts < ALPACA_TTL_MS) return hit.map;
+  try {
+    const url = `${ALPACA_DATA}/v2/stocks/snapshots?symbols=${encodeURIComponent(key)}&feed=overnight`;
+    const r = await fetch(url, {
+      headers: { 'APCA-API-KEY-ID': cfg.id, 'APCA-API-SECRET-KEY': cfg.secret },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) throw new Error(`alpaca ${r.status} ${(await r.text()).slice(0, 120)}`);
+    const body = await r.json();
+    const src = body.snapshots || body;
+    const map = new Map();
+    for (const [sym, s] of Object.entries(src || {})) {
+      const q = s && s.latestQuote;
+      const bid = Number(q && q.bp), ask = Number(q && q.ap);
+      const trade = Number(s && s.latestTrade && s.latestTrade.p);
+      const barClose = Number(s && s.minuteBar && s.minuteBar.c);
+      let price = null;
+      if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
+        // 买卖价差过大（清淡时段个别报价跳空）时退到成交价，避免中价失真
+        const mid = (bid + ask) / 2;
+        price = (ask - bid) / mid > 0.01 && Number.isFinite(trade) && trade > 0 ? trade : mid;
+      } else if (Number.isFinite(trade) && trade > 0) price = trade;
+      else if (Number.isFinite(barClose) && barClose > 0) price = barClose;
+      if (!(price > 0)) continue;
+      const ts = Date.parse((q && q.t) || (s.latestTrade && s.latestTrade.t) || '');
+      map.set(sym, { price, at: Number.isFinite(ts) ? ts : null, bid, ask });
+    }
+    ALPACA_OVERNIGHT_CACHE.set(key, { ts: Date.now(), map });
+    return map;
+  } catch (e) {
+    console.error('[alpaca]', e.message);
+    ALPACA_OVERNIGHT_CACHE.set(key, { ts: Date.now(), map: new Map() });
+    return new Map();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 //  夜盘涨跌幅统一计算 —— eastmoney 主源路径 与 新浪兜底路径 共用
 //
 //  口径：以「正股收盘价」为基准（富途/长桥/雪球 percent_night_session 同款）。
@@ -1617,6 +1690,7 @@ function computeOvernightQuote({
   sina,
   yahoo,
   xq,
+  alpaca,
   etfFut,
   overnightSessionStart,
   esDelta,
@@ -1631,6 +1705,9 @@ function computeOvernightQuote({
     if (!(Number.isFinite(price) && price > 0 && closeForOvernight > 0 && inSession(at))) return;
     candidates.push({ source, price, at, chg: Number.isFinite(percent) ? percent : (price / closeForOvernight - 1) * 100 });
   };
+  // ATS 直连（Alpaca/BOATS）是唯一的一手成交，排在最前：它是真实报价，
+  // 不需要漂移修正。没配 key 时 alpaca 为 undefined，行为与之前完全一致。
+  add('alpaca', alpaca?.price, alpaca?.at);
   add('xueqiu', xq?.currentNight, xq?.timestampNight, xq?.percentNight);
   add('xueqiu-ext', xq?.currentExt, xq?.timestampExt, xq?.percentExt);
   // 只采信分钟价与其配对时间，不能把不带时间的 fulldayPrice 与日K时间拼接。
@@ -1641,30 +1718,37 @@ function computeOvernightQuote({
   let selected = latest && now - latest.at <= maxLag ? latest : null;
   let stale = false;
   // 雪球夜盘 ~20 分钟一批推送，锚点成交价会滞后于真实盘口；
-  // 用「锚点之后的期货增量」修正（QQQ/SPY 与 NQ/ES β≈1；增量口径自洽，
-  // 不受新浪期货昨结基准与富途显示差异影响）。找不到锚点期货值时维持纯锚定价。
-  if (selected && isEtf && now - selected.at > DRIFT_MIN_MS
-    && etfFut && Number.isFinite(etfFut.chgPct) && inSession(etfFut.sourceTimeMs)) {
-    const hist = SINA_FUTURES_HIST.get(FUTURES_PROXY[symbol]) || [];
-    let anchor = null;
-    for (let i = hist.length - 1; i >= 0; i--) {
-      if (hist[i].ts <= selected.at) { anchor = hist[i]; break; }
-    }
-    // 重启兜底：内存/磁盘历史都晚于锚点时间（如停机几分钟后重启）时，用最早一条
-    // 历史当基点。误差仅剩"锚点时刻→最早历史"空档期的期货波动（通常几分钟），
-    // 远小于放任锚点整批冻结 20 分钟的漂移。
-    if (!anchor && hist.length && hist[0].ts > selected.at) anchor = hist[0];
-    if (anchor && Number.isFinite(anchor.chgPct)) {
-      const chg = selected.chg + (etfFut.chgPct - anchor.chgPct);
+  // 用「锚点之后的期货增量」修正（QQQ/SPY 与 NQ/ES β≈1；增量口径自洽）。
+  // 增量必须用期货「价格比」算：新浪 hf_NQ 的 chgPct 以昨结算为基准，而昨结算
+  // 在 17:00 ET 结算后会滚动到当日结算，chgPct 会整体跳一个当日涨跌幅
+  // （11-11 实测：NQ 真实 -0.59%，新浪 chgPct 只有 +0.02%）。
+  // 价格比与基准无关，任何时候都成立。
+  const futSym = isEtf ? FUTURES_PROXY[symbol] : null;
+  if (latest && futSym && etfFut && inSession(etfFut.sourceTimeMs)
+    && now - etfFut.sourceTimeMs <= XUEQIU_ETF_MAX_LAG_MS
+    && now - latest.at > DRIFT_MIN_MS && now - latest.at <= DRIFT_ANCHOR_MAX_MS) {
+    // 锚点即使超出常规采信窗（30 分钟）也优先「锚定 + 漂移」，
+    // 因为退回纯期货估算要把基准从收盘换成结算，误差比漂移大得多。
+    const delta = futuresDeltaSince(futSym, latest.at, etfFut.price);
+    if (delta != null) {
+      const chg = latest.chg + delta;
       selected = { source: 'xueqiu-drift', chg,
         price: closeForOvernight > 0 ? closeForOvernight * (1 + chg / 100) : null, at: now };
       stale = false;
     }
   }
-  if (!selected && etfFut && Number.isFinite(etfFut.chgPct) && inSession(etfFut.sourceTimeMs)
+  // 纯期货估算：基准必须是「20:00 ET 盘后收盘价 + 期货自 20:00 起的增量」。
+  // 旧写法直接把期货相对结算的 chgPct 套在正股收盘价上，等于把收盘前
+  // 16:00–20:00 那段盘后波动重复加了一次（11-11 实测偏 0.6pp、符号都能错）。
+  if (!selected && etfFut && futSym && inSession(etfFut.sourceTimeMs)
     && now - etfFut.sourceTimeMs <= XUEQIU_ETF_MAX_LAG_MS) {
-    selected = { source: 'futures', chg: etfFut.chgPct,
-      price: closeForOvernight > 0 ? closeForOvernight * (1 + etfFut.chgPct / 100) : null, at: etfFut.sourceTimeMs };
+    const delta = futuresDeltaSince(futSym, overnightSessionStart, etfFut.price);
+    const post20 = sina?.postMarketChangePercent;
+    if (delta != null && Number.isFinite(post20)) {
+      const chg = post20 + delta;
+      selected = { source: 'futures', chg,
+        price: closeForOvernight > 0 ? closeForOvernight * (1 + chg / 100) : null, at: etfFut.sourceTimeMs };
+    }
   }
   if (!selected && latest) { selected = latest; stale = true; }
   if (!selected && !isEtf) {
@@ -1690,14 +1774,21 @@ function computeOvernightQuote({
 
 // ── 期货历史快照（雪球锚点漂移用）──
 // 雪球夜盘 timestampNight 是 ~20 分钟一批推送，批次间隔内夜盘价在动；
-// 每次取到新浪期货报价都记录 {报价时间, 相对昨结涨跌}，漂移时取锚点时刻的
-// 期货值算增量。增量口径自洽，新浪与富途昨结基准不同不影响差值。
-const SINA_FUTURES_HIST = new Map();   // sym → [{ ts, chgPct }]（ts = 新浪报价时间）
+// 每次取到新浪期货报价都记录 {报价时间, 成交价}，漂移时取锚点时刻的报价算
+// 价格比增量。存价格而不是 chgPct：新浪 chgPct 的基准（昨结算）会在 17:00 ET
+// 结算后滚动，跨该时点做差会凭空多出/少掉一个当日涨跌幅。
+const SINA_FUTURES_HIST = new Map();   // sym → [{ ts, price }]（ts = 新浪报价时间）
 // 锚点滞后超过 90 秒即启用漂移修正。此前 5 分钟门槛导致雪球批次之间（约每 20 分钟
 // 一批）有长达 5 分钟的"冻结窗口"：读数一动不动而真实夜盘在走，用户看到明显漂移。
 // 90 秒内锚点本身是真实成交价，比期货增量更准；超过后用期货增量连续修正。
 const DRIFT_MIN_MS = 90 * 1000;
-const FUT_HIST_TTL_MS = 90 * 60_000;
+// 漂移最多能拉多久：雪球在夜盘清淡时段会 1 小时才推一批（11-11 实测 QQQ 滞后 59 分），
+// 30 分钟采信窗会把这类锚点整批丢掉、退回纯期货。给到 3 小时，用期货增量兜住。
+const DRIFT_ANCHOR_MAX_MS = 3 * 60 * 60_000;
+// 期货历史要覆盖整轮夜盘（20:00–04:00 ET），否则「自 20:00 起的增量」没有基点。
+// 一分钟一条（4→8 小时约 480 条/标的），避免 5 秒一条把落盘文件撑到几 MB。
+const FUT_HIST_TTL_MS = 8 * 60 * 60_000;
+const FUT_HIST_MIN_GAP_MS = 60_000;
 // 历史快照持久化：内存历史在重启后清零，重启前的雪球锚点（最多 20 分钟一批）
 // 找不到基点就会退回"整批冻结"，这是漂移修正失效的主要场景。落盘后重启可续。
 const FUT_HIST_FILE = path.join(__dirname, 'data', 'futures-hist.json');
@@ -1707,7 +1798,8 @@ function loadFuturesHist() {
     const cutoff = Date.now() - FUT_HIST_TTL_MS;
     for (const [sym, arr] of Object.entries(j || {})) {
       if (!Array.isArray(arr)) continue;
-      const clean = arr.filter(e => e && Number.isFinite(e.ts) && Number.isFinite(e.chgPct) && e.ts >= cutoff);
+      // 旧格式只有 chgPct，无法做价格比，直接丢弃（一分钟内会重新攒够）
+      const clean = arr.filter(e => e && Number.isFinite(e.ts) && Number.isFinite(e.price) && e.price > 0 && e.ts >= cutoff);
       if (clean.length) SINA_FUTURES_HIST.set(sym, clean);
     }
   } catch { /* 首次运行无文件 */ }
@@ -1726,17 +1818,91 @@ function saveFuturesHist(force) {
 function recordFuturesHist(map) {
   const now = Date.now();
   for (const [sym, f] of Object.entries(map || {})) {
-    if (!f || !Number.isFinite(f.chgPct)) continue;
+    if (!f || !Number.isFinite(f.price) || f.price <= 0) continue;
     const arr = SINA_FUTURES_HIST.get(sym) || [];
     const ts = Number.isFinite(f.sourceTimeMs) ? f.sourceTimeMs : now;
-    if (arr.length && arr[arr.length - 1].ts === ts) arr[arr.length - 1].chgPct = f.chgPct;
-    else arr.push({ ts, chgPct: f.chgPct });
+    const last = arr[arr.length - 1];
+    // 降采样到 60 秒一条，间隔内直接丢弃（不覆盖最后一条）。
+    // 这里曾经写成「间隔不足就替换最后一条」，而新浪期货每 5 秒刷新一次报价，
+    // 于是历史永远只剩 1 条当前报价（11-12 实测 data/futures-hist.json 里
+    // NQ/ES 各 1 条、ts 就是当下）。futuresDeltaSince 找不到早于锚点的基点，
+    // 退化成 hist[0] 即当前价，增量恒为 0 —— 漂移表面在跑，实际等于没做，
+    // 页面上永远是十几分钟前那批雪球价。保留更早的采样才有基点。
+    if (!last || ts - last.ts >= FUT_HIST_MIN_GAP_MS) arr.push({ ts, price: f.price });
     while (arr.length && now - arr[0].ts > FUT_HIST_TTL_MS) arr.shift();
     SINA_FUTURES_HIST.set(sym, arr);
   }
   saveFuturesHist();
 }
+// 期货自 sinceMs 以来的涨跌幅（百分比，按价格比）。用价格比而非 chgPct 差值：
+// 新浪的昨结算会在 17:00 ET 结算后滚动，跨该时点做差会带进一个当日涨跌幅。
+// nowPrice 传入当前报价（本轮 fetch 的实时值），缺省退回历史最后一条。
+function futuresDeltaSince(sym, sinceMs, nowPrice) {
+  if (!sym || !Number.isFinite(sinceMs)) return null;
+  const hist = SINA_FUTURES_HIST.get(sym) || [];
+  if (!hist.length) return null;
+  let anchor = null;
+  for (let i = hist.length - 1; i >= 0; i--) {
+    if (hist[i].ts <= sinceMs) { anchor = hist[i]; break; }
+  }
+  // 重启兜底：历史都晚于基准时间（如停机后重启、历史被裁到 8 小时内）时用最早一条，
+  // 误差只剩「基准时刻→最早历史」那段空档的期货波动，远小于放任锚点整批冻结。
+  if (!anchor) anchor = hist[0];
+  if (!anchor || !(anchor.price > 0)) return null;
+  const last = Number.isFinite(nowPrice) && nowPrice > 0 ? nowPrice : hist[hist.length - 1].price;
+  if (!(last > 0)) return null;
+  return (last / anchor.price - 1) * 100;
+}
 loadFuturesHist();
+// 用新浪自己的期货分钟线补齐历史基点（同源，不会把两家报价差当成波动）。
+// 本地采样只能攒「进程活着」那段时间，重启后最早一条就是当下，于是
+// 「自 20:00 起的增量」和「锚点前的基点」都缺，漂移要么为 0、要么退化成
+// 纯期货估算。分钟线一次能拿到整轮夜盘（北京 07:00 = ET 18:00 期货开盘），
+// 重启后 1 秒内就能接着漂。合并按分钟去重，本地实时采样优先。
+const SINA_FUT_MINLINE = 'https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20_{sym}=/GlobalFuturesService.getGlobalFuturesMinLine?symbol={sym}';
+let _futSeedAt = 0;
+async function seedFuturesHist(force) {
+  const now = Date.now();
+  if (!force && now - _futSeedAt < 30 * 60_000) return;
+  _futSeedAt = now;
+  const cutoff = now - FUT_HIST_TTL_MS;
+  for (const sym of ['NQ', 'ES', 'YM']) {
+    const arr = SINA_FUTURES_HIST.get(sym) || [];
+    // 已有覆盖面（最早一条早于 20 分钟前、最后一条是 5 分钟内）就不用重复拉
+    if (!force && arr.length && arr[0].ts <= now - 20 * 60_000 && arr[arr.length - 1].ts >= now - 5 * 60_000) continue;
+    try {
+      const r = await fetch(SINA_FUT_MINLINE.replace(/\{sym\}/g, sym), {
+        headers: { Referer: 'https://finance.sina.com.cn', 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!r.ok) continue;
+      const txt = await r.text();
+      const i = txt.indexOf('('), j = txt.lastIndexOf(')');
+      if (i < 0 || j <= i) continue;
+      const rows = (JSON.parse(txt.slice(i + 1, j)) || {}).minLine_1d || [];
+      const pts = [];
+      for (const row of rows) {
+        if (!Array.isArray(row)) continue;
+        // 首行 10 列、后续 6 列，价格都紧跟在 "HH:MM" 之后，时间取末尾的 datetime
+        const ti = row.findIndex(v => typeof v === 'string' && /^\d{2}:\d{2}$/.test(v));
+        const dt = row[row.length - 1];
+        if (ti < 0 || typeof dt !== 'string' || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(dt)) continue;
+        const price = parseFloat(row[ti + 1]);
+        const ts = Date.parse(dt.replace(' ', 'T') + '+08:00');
+        if (Number.isFinite(ts) && Number.isFinite(price) && price > 0 && ts >= cutoff) pts.push({ ts, price });
+      }
+      if (!pts.length) continue;
+      const byMin = new Map(arr.map(e => [Math.floor(e.ts / 60_000), e]));
+      for (const p of pts) {
+        const k = Math.floor(p.ts / 60_000);
+        if (!byMin.has(k)) byMin.set(k, p);
+      }
+      const merged = [...byMin.values()].sort((a, b) => a.ts - b.ts);
+      SINA_FUTURES_HIST.set(sym, merged);
+    } catch { /* 网络失败不影响主流程，本地采样继续 */ }
+  }
+  saveFuturesHist(true);
+}
 
 app.get('/api/quotes', async (req, res) => {
   const diag = req.query.diag === '1';
@@ -1787,7 +1953,7 @@ app.get('/api/quotes', async (req, res) => {
     const sinaReferences = usState === 'OVERNIGHT' ? ['QQQ', 'SPY'] : [];
     const sinaAll = [...new Set([...sinaSymbols, ...emMissing, ...emSymbols.filter((s) => emMap[s]), ...sinaReferences])];
 
-    const [emData, sinaData, krData, twData, jpData, yhData, yhExtData, futuresData, xueqiuData] = await Promise.all([
+    const [emData, sinaData, krData, twData, jpData, yhData, yhExtData, futuresData, xueqiuData, alpacaData] = await Promise.all([
       emSymbols.map((s) => emMap[s]).filter(Boolean),
       (async () => {
         if (sinaAll.length === 0) return [];
@@ -1872,6 +2038,10 @@ app.get('/api/quotes', async (req, res) => {
             return new Map();
           })
         : Promise.resolve(new Map()),
+      // 夜盘时段：Blue Ocean ATS 直连（Alpaca），有 key 才有值
+      usState === 'OVERNIGHT' && emSymbols.length
+        ? fetchAlpacaOvernight(emSymbols).catch(() => new Map())
+        : Promise.resolve(new Map()),
     ]);
 
     // Merge: for symbols that have both eastmoney and sina data,
@@ -1880,20 +2050,17 @@ app.get('/api/quotes', async (req, res) => {
     // POST/CLOSED: EM f2 是盘后实时价，比新浪更新更快，优先用 EM
     // （FUTURES_PROXY / STOCK_BETA / stockFuturesProxy 已提到模块作用域，见文件上方）
     const sinaMap = (sinaData && sinaData.map) || {};
-    // 期货相对 20:00 ET 的 delta（代理 20:00 之后的夜盘波动）
-    // 使用 NQ 和 ES 的当前涨跌幅减去 QQQ/SPY 20:00 盘后涨跌，近似"20:00 以后的增量"
+    // 本轮夜盘起点 + 雪球夜盘覆盖情况（判定逻辑详见 usOvernightSessionStart 说明）
+    const overnightSessionStart = usOvernightSessionStart();
+    // 期货相对 20:00 ET 的增量（个股 β 代理用），按价格比算。
+    // 旧写法 `nqNow(chgPct) - QQQ.postMarketChangePercent` 把「期货相对昨结算」
+    // 和「ETF 相对收盘」两个不同基准相减，结果没有任何意义。
     let nqDelta = null;  // percent, 20:00 之后 NQ 的增量
     let esDelta = null;  // percent, 20:00 之后 ES 的增量
     if (usState === 'OVERNIGHT') {
-      const nqNow = futuresData?.NQ?.chgPct;
-      const esNow = futuresData?.ES?.chgPct;
-      const qqq20 = sinaMap?.QQQ?.postMarketChangePercent;
-      const spy20 = sinaMap?.SPY?.postMarketChangePercent;
-      if (isFinite(nqNow) && isFinite(qqq20)) nqDelta = nqNow - qqq20;
-      if (isFinite(esNow) && isFinite(spy20)) esDelta = esNow - spy20;
+      nqDelta = futuresDeltaSince('NQ', overnightSessionStart, futuresData?.NQ?.price);
+      esDelta = futuresDeltaSince('ES', overnightSessionStart, futuresData?.ES?.price);
     }
-    // 本轮夜盘起点 + 雪球夜盘覆盖情况（判定逻辑详见 usOvernightSessionStart 说明）
-    const overnightSessionStart = usOvernightSessionStart();
     let xqNightLatestTs = 0;
     let xqInSessionCount = 0;
     if (xueqiuData && xueqiuData.size) {
@@ -1927,6 +2094,7 @@ app.get('/api/quotes', async (req, res) => {
             sina,
             yahoo: yhExtData && yhExtData.get(em.symbol),
             xq: xueqiuData && xueqiuData.get(em.symbol),
+            alpaca: alpacaData && alpacaData.get(em.symbol),
             etfFut: emFutSym ? futuresData[emFutSym] : null,
             overnightSessionStart,
             esDelta,
@@ -2011,6 +2179,7 @@ app.get('/api/quotes', async (req, res) => {
             sina: q,
             yahoo: yhExtData && yhExtData.get(q.symbol),
             xq: xueqiuData && xueqiuData.get(q.symbol),
+            alpaca: alpacaData && alpacaData.get(q.symbol),
             etfFut: futSym ? futuresData[futSym] : null,
             overnightSessionStart,
             esDelta,
@@ -2052,6 +2221,8 @@ app.get('/api/quotes', async (req, res) => {
           sinaRequested: sinaAll.length,
           yahooExtCount: yhExtData ? yhExtData.size : 0,
           xueqiuCount: xueqiuData ? xueqiuData.size : 0,
+          alpacaCount: alpacaData ? alpacaData.size : 0,
+          alpacaEnabled: !!alpacaConfig(),
           xqNightLatestTs: xqNightLatestTs ? new Date(xqNightLatestTs).toISOString() : null,
           xqNightInSessionCount: xqInSessionCount,
           overnightSessionStart: new Date(overnightSessionStart).toISOString(),
@@ -4077,10 +4248,14 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
       { tag: '抬仓', text: `收盘站回 MA21 ${ma21Txt0} 且通过重仓门控` },
     ];
   } else if (!up) {
-    action = `减仓至 ${posPct}%`;
-    tone = 'danger';
-    headline = `趋势已破坏（连续 ${last.belowDays} 日收在 MA21 缓冲带下方${last.ma60 != null && last.close < last.ma60 ? '，且跌破 MA60' : ''}）`
-      + `，先把仓位降到 ${posPct}% 以内，等重新站回 MA21 上方再考虑加回。`;
+    // 走到这里的只有 tier === 'heavy' 且 state 仍为 DOWN：价格已站回 MA21（否则进不了
+    // heavy 档），只是还没收回 MA21×1.02 的缓冲带。此时 belowDays 必为 0，原文案
+    // 「趋势已破坏（连续 0 日…）」是自相矛盾的死文本，改为修复确认口径。
+    action = `持有 ${posPct}%`;
+    tone = 'warn';
+    headline = `重仓门控已确认（MACD 翻红 + 站上 MA21 ${ma21Txt0}），但收盘还没收回 MA21×1.02 缓冲带，趋势章暂记「修复中」：`
+      + `收盘连续站回缓冲带上方便自动恢复「趋势向上」，届时趋势上限自动放开（站上 MA60 为 100%，否则 60%）。`
+      + `${last.ma60 != null && last.close < last.ma60 ? '注意当前仍在 MA60 下方，趋势上限已按 60% 封顶。' : ''}`;
   } else if (changed && last.target > prev.target) {
     action = `加仓至 ${posPct}%`; tone = 'buy';
     headline = `趋势条件改善，仓位上限放开到 ${posPct}%，可在回踩确认后分批补到该仓位。`;
@@ -4173,11 +4348,16 @@ function buildEtfPositionPlan(klines, navMap, live, panic, usIdx) {
         ? `${gateInfo.miss.join('、')} → 动能观察档：价格仍在 MA21 上方，只停止加仓，不因 MACD 单独翻绿直接减仓`
         : tier === 'try'
           ? `${gateInfo.miss.join('、')} → 试仓档上限 ${tryPct}%，当前目标 ${posPct}%；收盘站回 MA21（${ma21Txt0}）且 MACD 翻红后才允许抬仓`
-          : `重仓条件已满足 → ${up ? '趋势向上' : '趋势破坏'}，当前趋势上限 ${Math.round(baseCap * 100)}%；溢价不限制仓位`;
+          : `重仓条件已满足 → ${up ? '趋势向上' : (last.belowDays === 0 ? '趋势修复中（已站回 MA21，待缓冲带确认）' : '趋势破坏')}，当前趋势上限 ${Math.round(baseCap * 100)}%；溢价不限制仓位`;
 
   return {
     action, tone, headline, points, entryNote, capNote, panic: last.panic, panicWindow: panicWin, tier, gate: gateInfo,
-    state: last.state, stateLabel: up ? '趋势向上' : '趋势破坏',
+    state: last.state,
+    // 趋势章与行动卡口径对齐：破位后的反弹段（≥3% 修复确认）不再持续喊"趋势破坏"；
+    // state 字段本身不动（回测与仓位阶梯仍按 UP/DOWN 复算），只改展示文案。
+    stateLabel: up ? '趋势向上'
+      : (gt.etfRepair ? `破位修复中 · 自低点 +${gt.etfRebound}%`
+        : (last.belowDays === 0 ? '趋势修复中 · 待缓冲带确认' : '趋势破坏')),
     bull: last.bull, posPct, target: last.target,
     capTrend: baseCap, premiumFactor: last.factor, premium: p, premiumZone: zone,
     ma21: last.ma21, ma60: last.ma60, close: last.close, belowDays: last.belowDays, intraday: last.intraday,
@@ -6098,6 +6278,10 @@ function startKeepAlive() {
 // ═══════════════════════════════════════════════════════
 app.listen(PORT, () => {
   console.log(`美股基金估值服务已启动 → http://localhost:${PORT}`);
+  // 启动就把期货分钟线补进历史：否则重启后最早的基点是「当下」，漂移恒为 0
+  seedFuturesHist(true);
+  // 夜盘长（20:00–04:00 ET），本地采样可能因休眠中断，半小时对齐一次
+  setInterval(() => seedFuturesHist(), 30 * 60_000).unref?.();
   // Warm fund cache in background
   loadHoldingsFromFile();
   // Self-ping to prevent server sleep

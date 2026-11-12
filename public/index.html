@@ -1473,6 +1473,8 @@
     }
     .etf-pos.up .etf-pos-state { background: rgba(232,76,61,0.15); color: #e84c3d; }
     .etf-pos.down .etf-pos-state { background: rgba(46,160,67,0.16); color: #2ea043; }
+    /* 破位修复中：趋势章从"下跌绿"降为琥珀，与行动卡"修复中"同色系 */
+    .etf-pos.down.repair .etf-pos-state { background: rgba(232,160,61,0.14); color: #d29922; }
     .etf-pos-main { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
     .etf-pos-num {
       font-size: 25px; font-weight: 800; line-height: 1; color: var(--text-primary);
@@ -2061,6 +2063,34 @@
     .toast-title { font-size: 11.5px; font-weight: 700; color: var(--text-primary); }
     .toast-text { font-size: 10.5px; color: var(--text-secondary); margin-top: 3px; line-height: 1.5; }
     .toast-time { font-size: 9.5px; color: var(--text-muted); margin-top: 3px; }
+    /* ── 全局风险横幅：挂在 #app 之外，切到任何页签都在 ── */
+    #etf-guard-slot { position: sticky; top: 0; z-index: 940; }
+    #etf-guard-slot:empty { display: none; }
+    .etf-guard-bar {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 8px 11px;
+      background: rgba(232,76,61,0.14);
+      border-bottom: 1.5px solid #e84c3d;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+      animation: guard-in 0.2s ease-out;
+    }
+    .etf-guard-bar.warn { background: rgba(232,160,61,0.14); border-bottom-color: #e8a03d; }
+    @keyframes guard-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+    .etf-guard-tag {
+      flex: none; margin-top: 1px; padding: 2px 5px; border-radius: 4px;
+      background: #e84c3d; color: #fff; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    }
+    .etf-guard-bar.warn .etf-guard-tag { background: #e8a03d; }
+    .etf-guard-body { flex: 1; min-width: 0; }
+    .etf-guard-title { font-size: 12px; font-weight: 700; color: var(--text-primary); line-height: 1.4; }
+    .etf-guard-text { font-size: 10.5px; color: var(--text-secondary); line-height: 1.5; margin-top: 2px; }
+    .etf-guard-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+    .etf-guard-side span { font-size: 9.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .etf-guard-side button {
+      background: none; border: none; padding: 0 2px; cursor: pointer;
+      color: var(--text-muted); font-size: 15px; line-height: 1;
+    }
+    .etf-guard-side button:active { color: var(--text-primary); }
     .etf-alert-log { margin-top: 7px; display: flex; flex-direction: column; gap: 5px; }
     .etf-alert-log-item {
       display: grid; grid-template-columns: 42px 1fr; gap: 7px;
@@ -2078,6 +2108,7 @@
   </style>
 </head>
 <body>
+<div id="etf-guard-slot"></div>
 <div id="app"><div class="center-msg"><div class="spinner"></div><span>加载持仓数据…</span></div></div>
 
 <script src="/etf-t-strategy.js"></script>
@@ -2976,6 +3007,8 @@ async function loadEtfTrack() {
     ETF_LOAD_ERR = null;
     ETF_STALE = !!json.stale;
     processEtfAlerts(json.alerts || []);
+    try { etfFadeCheck(); } catch (e) { console.error('etf fade check failed:', e); }   // 浮盈回吐：维护当日高点并（首次触发时）提醒
+    etfGuardRender();     // 横幅挂在 #app 之外，任何页签常驻
     etfTUpdate();
     updateDocTitle();
   } catch (e) {
@@ -3126,6 +3159,221 @@ function etfToggleNotify() {
     if (!ETF_NOTIFY) etfToast({ level: 'warn', title: '通知权限被拒绝', text: '仍会在页面内弹出提示浮层' });
     renderEtfPosition();
   });
+}
+
+// ═══════════════════════════════════════════════════
+//  全局风险横幅 / 浮盈回吐提醒 / 买入拦截
+//  背景：2026-11-12 高开 +0.95% 后跳水，破位预警只在 ETF 页签里，
+//  用户停在别的页签就完全看不到。这里把「今天不该追」「已破位」
+//  「浮盈回吐」提到 #app 之外，任何页签都常驻，并且在下单前二次确认。
+// ═══════════════════════════════════════════════════
+const ETF_GUARD_DISMISS_KEY = 'etf-159509-guard-dismiss';
+const ETF_FADE_KEY = 'etf-159509-fade';
+let ETF_FADE = (() => {
+  try { const v = JSON.parse(localStorage.getItem(ETF_FADE_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+})();
+let ETF_GUARD_DISMISS = (() => {
+  try { const v = JSON.parse(localStorage.getItem(ETF_GUARD_DISMISS_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+})();
+
+function etfSaveFade() {
+  try { localStorage.setItem(ETF_FADE_KEY, JSON.stringify(ETF_FADE)); } catch { /* 忽略 */ }
+}
+
+// 浮盈回吐分级（纯计算，便于回放/测试）：
+//  - cost：峰值浮盈 ≥0.6% 后跌回成本下方（最严重，profit 全没了）
+//  - fade：峰值浮盈 ≥0.4%，回吐 ≥0.6pp 或回吐过半（且 ≥0.3pp）
+//  - high：未记录持仓时，高开 ≥0.3% 且自当日高点回落 ≥0.8%
+function etfFadeStage({ price, dayHigh, cost, openPct }) {
+  const p = Number(price), hi = Number(dayHigh), c = Number(cost);
+  if (!(p > 0) || !(hi > 0)) return null;
+  if (c > 0) {
+    const peakPct = (hi / c - 1) * 100;
+    const nowPct = (p / c - 1) * 100;
+    const give = peakPct - nowPct;
+    if (peakPct < 0.4) return { stage: null, peakPct, nowPct, give };
+    if (peakPct >= 0.6 && nowPct <= 0) return { stage: 'cost', level: 'danger', peakPct, nowPct, give };
+    if (give >= 0.6 || (give >= peakPct * 0.5 && give >= 0.3)) return { stage: 'fade', level: 'warn', peakPct, nowPct, give };
+    return { stage: null, peakPct, nowPct, give };
+  }
+  const off = (1 - p / hi) * 100;
+  const open = Number(openPct);
+  if (Number.isFinite(open) && open >= 0.3 && off >= 0.8) return { stage: 'high', level: 'warn', off, openPct: open };
+  return { stage: null, off };
+}
+
+// 当日已见最高价：报价 high 与分时点取大（源偶发缺 high，分时更可靠）
+function etfDayHigh() {
+  const q = (ETF_TRACK && ETF_TRACK.quote) || {};
+  const pts = (ETF_TRACK && ETF_TRACK.intraday && ETF_TRACK.intraday.points) || [];
+  let hi = Number(q.high) || 0;
+  for (const p of pts) { const v = Number(p.price); if (v > hi) hi = v; }
+  return hi;
+}
+
+function etfFadeAlert(r, { price, time, date }) {
+  const key = `guard-fade-${date}-${r.stage}`;
+  if (r.stage === 'fade') {
+    return { key, level: 'warn', time, tag: '回吐', kind: 'fade',
+      title: `浮盈回吐 ${r.give.toFixed(2)}pp · 从今日高点回落`,
+      text: `按你的成本：峰值 +${r.peakPct.toFixed(2)}% → 现在 +${r.nowPct.toFixed(2)}%，回吐 ${r.give.toFixed(2)}pp。这是浮盈保护提醒，不是高抛指令；要减仓按你自己的计划，别等回吐到成本才动。` };
+  }
+  if (r.stage === 'cost') {
+    return { key, level: 'danger', time, tag: '回吐', kind: 'cost',
+      title: `已跌回成本下方 · 峰值浮盈 +${r.peakPct.toFixed(2)}% 全部回吐`,
+      text: `现价 ${price.toFixed(3)} 已低于你的持仓成本。今天从 +${r.peakPct.toFixed(2)}% 一路回落到 ${r.nowPct.toFixed(2)}%，这是最典型的「上午赚钱、收盘亏钱」路径；要么按计划减仓，要么承认这笔是持有决定而不是做T。` };
+  }
+  return { key, level: 'warn', time, tag: '回落', kind: 'high',
+    title: `高开回落 ${r.off.toFixed(2)}% · 追高风险正在兑现`,
+    text: `今日高开 +${r.openPct.toFixed(2)}%（超过追涨上限 0.8%），现价已从当日高点回落 ${r.off.toFixed(2)}%。没有记录持仓，所以只按走势计算；若你在开盘附近买入，此刻大概率已由盈转亏。` };
+}
+
+// 盘中每分钟调用：维护当日最高价与已触发的阶段，阶段首次出现才提醒
+function etfFadeCheck() {
+  const t = ETF_TRACK;
+  const market = etfTMarket();
+  if (!t || !market.live) return null;
+  const date = market.date, q = market.quote || {};
+  const price = Number(q.price), hi = etfDayHigh();
+  if (!(price > 0) || !(hi > 0)) return null;
+  if (ETF_FADE.date !== date) ETF_FADE = { date, dayHigh: hi, stages: [], warn: null };
+  ETF_FADE.dayHigh = Math.max(Number(ETF_FADE.dayHigh) || 0, hi);
+  const pos = etfPosition();
+  const openPct = q.open > 0 && q.prevClose > 0 ? (q.open / q.prevClose - 1) * 100 : null;
+  const r = etfFadeStage({ price, dayHigh: ETF_FADE.dayHigh, cost: pos.shares > 0 ? pos.avgCost : 0, openPct });
+  if (!r || !r.stage) { ETF_FADE.warn = ETF_FADE.warn || null; etfSaveFade(); return r; }
+  if (!Array.isArray(ETF_FADE.stages)) ETF_FADE.stages = [];
+  if (!ETF_FADE.stages.includes(r.stage)) {
+    ETF_FADE.stages.push(r.stage);
+    const time = (q.quoteTime || '').slice(11, 16);
+    const a = etfFadeAlert(r, { price, time, date });
+    ETF_FADE.warn = { ...a, at: Date.now() };
+    etfRecordAlert(a, time, false);
+    etfToast(a, true);
+    etfBeep();
+  }
+  etfSaveFade();
+  return r;
+}
+
+// 横幅内容（纯计算）：破位 > 浮盈回吐 > 今天不该追 > 走弱
+function etfGuardBuild({ date, quote, live, stale, signals, fade }) {
+  if (!live && !stale) return null;
+  const q = quote || {}, price = Number(q.price);
+  const s = signals || {};
+  const cur = s.strength && s.strength.current;
+  const gate = s.chaseGate;
+  const time = (q.quoteTime || '').slice(11, 16);
+  const delay = stale ? '（行情延迟，以上为最后一笔报价时点）' : '';
+  const n = v => Number.isFinite(v) ? v.toFixed(2) : '—';
+  const px = price > 0 ? price.toFixed(3) : '--';
+  if (cur && cur.kind === 'broken') {
+    return { key: `guard-broken-${date}-${cur.time}`, level: 'danger', tag: '破位', kind: 'broken', time: cur.time,
+      title: `ETF 破位 · ${px} 跌破分时均价${cur.support ? `与支撑 ${cur.support.toFixed(3)}` : ''}`,
+      text: `${cur.label || ''}｜均价偏离 ${n(cur.avgGap)}% · 近4分钟 ${n(cur.move4)}%。停止追买，已有仓位考虑分批减仓；破位后不接飞刀。${delay}` };
+  }
+  if (fade && fade.key) return { key: fade.key, level: fade.level || 'warn', tag: fade.tag || '回吐', kind: fade.kind || 'fade',
+    time: fade.time || time, title: fade.title, text: fade.text + delay };
+  if (gate && gate.level === 'block') {
+    return { key: `guard-block-${date}`, level: 'warn', tag: '不追', kind: 'block', time: gate.asOf || time,
+      title: `今天不宜追涨 · ${gate.label || ''}`,
+      text: `${gate.reason || ''}${gate.fix ? `　${gate.fix}` : ''}${delay}` };
+  }
+  if (cur && cur.kind === 'weak') {
+    return { key: `guard-weak-${date}-${cur.time}`, level: 'warn', tag: '走弱', kind: 'weak', time: cur.time,
+      title: `ETF 持续走弱 · ${px} 位于均价下方`,
+      text: `${cur.label || ''}｜均价偏离 ${n(cur.avgGap)}% · 近4分钟 ${n(cur.move4)}%。不追买、不接跌，等重新站回均价再看。${delay}` };
+  }
+  return null;
+}
+
+function etfGuardIsDismissed(key) {
+  return ETF_GUARD_DISMISS.date === todayLocalStr()
+    && Array.isArray(ETF_GUARD_DISMISS.keys) && ETF_GUARD_DISMISS.keys.includes(key);
+}
+
+function etfGuardDismiss(el) {
+  const bar = el && el.closest ? el.closest('[data-guard-key]') : null;
+  const key = bar && bar.dataset ? bar.dataset.guardKey : '';
+  if (key) {
+    const today = todayLocalStr();
+    if (ETF_GUARD_DISMISS.date !== today) ETF_GUARD_DISMISS = { date: today, keys: [] };
+    if (!ETF_GUARD_DISMISS.keys.includes(key)) ETF_GUARD_DISMISS.keys.push(key);
+    if (ETF_GUARD_DISMISS.keys.length > 40) ETF_GUARD_DISMISS.keys.splice(0, ETF_GUARD_DISMISS.keys.length - 40);
+    try { localStorage.setItem(ETF_GUARD_DISMISS_KEY, JSON.stringify(ETF_GUARD_DISMISS)); } catch { /* 忽略 */ }
+    try { localStorage.setItem(ETF_FADE_KEY, JSON.stringify(ETF_FADE)); } catch { /* 忽略 */ }
+  }
+  etfGuardRender();
+}
+
+function etfGuardBarHtml(g) {
+  if (!g || !g.key) return '';
+  const level = g.level === 'danger' ? 'danger' : 'warn';
+  return `<div class="etf-guard-bar ${level}" data-guard-key="${escHtml(g.key)}" data-guard-kind="${escHtml(g.kind || '')}">
+    <span class="etf-guard-tag">${escHtml(g.tag || '提醒')}</span>
+    <div class="etf-guard-body">
+      <div class="etf-guard-title">${escHtml(g.title || '')}</div>
+      <div class="etf-guard-text">${escHtml(g.text || '')}</div>
+    </div>
+    <div class="etf-guard-side"><span>${escHtml(g.time || '')}</span><button type="button" aria-label="关闭提醒" onclick="etfGuardDismiss(this)">×</button></div>
+  </div>`;
+}
+
+function etfGuardRender() {
+  if (typeof document === 'undefined') return;
+  try {
+    let slot = document.getElementById('etf-guard-slot');
+    if (!slot) {
+      slot = document.createElement('div');
+      slot.id = 'etf-guard-slot';
+      document.body.insertBefore(slot, document.getElementById('app') || null);
+    }
+    const html = etfGuardBarHtml(etfGuardState());
+    if (slot.innerHTML !== html) slot.innerHTML = html;
+  } catch (e) { console.error('etf guard render failed:', e); }
+}
+
+function etfGuardState() {
+  const t = ETF_TRACK;
+  if (!t || ETF_LOAD_ERR) return null;
+  const market = etfTMarket();
+  // 回吐提醒只挂 45 分钟：之后再贴「已跌回成本」会变成误导（价格可能已经反弹）
+  const fresh = ETF_FADE && ETF_FADE.warn && (!ETF_FADE.warn.at || Date.now() - ETF_FADE.warn.at <= 45 * 60_000);
+  const fade = fresh && ETF_FADE.date === market.date ? ETF_FADE.warn : null;
+  const item = etfGuardBuild({ date: market.date, quote: market.quote, live: market.live, stale: market.stale,
+    signals: t.intradaySignals || {}, fade });
+  if (!item) return null;
+  return etfGuardIsDismissed(item.key) ? null : item;
+}
+
+// 买入拦截（纯计算）：破位 / 追涨闸门 block 时不允许一键记账
+function etfBuyGuardOf({ gate, strength, live }) {
+  if (!live) return null;
+  const cur = strength && strength.current;
+  if (cur && cur.kind === 'broken') {
+    return { kind: 'broken', title: 'ETF 已破位，此刻买入是接飞刀',
+      text: `${cur.label || '破位'}：连续 3 分钟低于分时均价并跌破支撑。趋势没修复前，买入不符合任何一条既定条件。` };
+  }
+  if (gate && gate.level === 'block') {
+    return { kind: 'block', title: '今天不宜追涨',
+      text: `${gate.reason || '开盘涨幅超过上限'}${gate.fix ? `　${gate.fix}` : ''}` };
+  }
+  return null;
+}
+
+function etfBuyGuard() {
+  const t = ETF_TRACK;
+  if (!t) return null;
+  const market = etfTMarket();
+  const s = t.intradaySignals || {};
+  return etfBuyGuardOf({ gate: s.chaseGate, strength: s.strength, live: market.live || market.stale });
+}
+
+function etfBuyGuardConfirm(g) {
+  if (typeof window === 'undefined' || typeof window.confirm !== 'function') return true;
+  const head = `【买入拦截】${g.title}\n${g.text}\n\n`;
+  if (!window.confirm(`${head}这不是策略批准的买点。仍要记录这笔买入吗？`)) return false;
+  return window.confirm('再次确认：这笔买入与今天的风控结论冲突。只有你确实已按真实成交买入时才继续。');
 }
 
 function etfDetectMarketMotion(points, symbol, extended = false, trend = false) {
@@ -3306,7 +3554,7 @@ function etfHeroHtml() {
     const at = qqq.overnightAsOf;
     const time = Number.isFinite(at) ? new Date(at).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false, hour: '2-digit', minute: '2-digit' }) : '';
     const lag = Number.isFinite(at) ? Math.max(0, Math.floor((Date.now() - at) / 60000)) : null;
-    const source = { xueqiu: '雪球', 'xueqiu-ext': '雪球扩展', yahoo: 'Yahoo', futures: 'NQ期货估算', proxy: '模型估算', 'xueqiu-drift': '雪球+NQ漂移' }[qqq.overnightSource] || '';
+    const source = { alpaca: 'Blue Ocean', xueqiu: '雪球', 'xueqiu-ext': '雪球扩展', yahoo: 'Yahoo', futures: 'NQ期货估算', proxy: '模型估算', 'xueqiu-drift': '雪球+NQ漂移' }[qqq.overnightSource] || '';
     qqqSession = [qqq.overnightEstimated ? source || '夜盘估算' : `夜盘${source ? ' · ' + source : ''}`, time,
       qqq.overnightSource && !Number.isFinite(at) ? '时间未确认' : '',
       qqq.overnightStale || LAST_STALE || lag > 5 ? `滞后${lag == null ? '' : lag + '分钟'}` : ''].filter(Boolean).join(' · ');
@@ -3425,7 +3673,7 @@ function etfPosAdviceHtml() {
   const posNote = p.headline && p.headline !== adviceHeadline
     ? `<div class="etf-pos-note">${esc(p.headline)}</div>` : '';
   return `
-      <div class="etf-pos ${p.state === 'UP' ? 'up' : 'down'}">
+      <div class="etf-pos ${p.state === 'UP' ? 'up' : 'down'}${p.gate && p.gate.repair ? ' repair' : ''}">
         <div class="etf-pos-head">
           <span class="etf-pos-title">仓位建议</span>
           <span class="etf-pos-state">${esc(p.stateLabel)}${p.bull ? ' · MACD 多头' : ''}</span>
@@ -4801,6 +5049,13 @@ function etfTRecordFill() {
     t.tRules = { ...ETF_T_RULES };
   }
   if (t.date > todayLocalStr() || t.date === todayLocalStr() && t.time > nowStr().slice(0, 5)) { etfToast({ level: 'warn', title: '无法记录未来成交', text: '只可录入已经发生的实际成交。' }); return; }
+  if (t.side === 'buy') {
+    const guard = etfBuyGuard();
+    if (guard && !etfBuyGuardConfirm(guard)) {
+      etfToast({ level: 'warn', title: '已拦截这笔买入', text: `${guard.title}：${guard.text}` });
+      return;
+    }
+  }
   const error = EtfTStrategy.validateFill(ETF_TRADES, t);
   if (error) { etfToast({ level: 'warn', title: '无法记录做T成交', text: error }); return; }
   const prospective = [...ETF_TRADES, t];
@@ -4937,7 +5192,9 @@ function etfTHtml() {
   }).join('');
   const param = (key, label, value, step) => `<label>${label}<input id="etf-t-rule-${key}" class="etf-inp" type="number" step="${step}" min="0" value="${value}"></label>`;
   const input = (key, label, type, value, step = '') => `<label>${label}<input id="etf-cycle-${key}" class="etf-inp" type="${type}" ${step ? `step="${step}"` : ''} value="${escHtml(value)}" oninput="ETF_T_FORM.${key}=this.value"></label>`;
+  const buyGuard = etfBuyGuard();
   return `<div class="etf-alert info"><b>${escHtml(state.state)}</b><div>${escHtml(state.note)}</div><div>今日额度 ${state.cap} 份；成交和采样仅存本浏览器，清理站点数据会丢失，请保留券商成交记录。提示不自动下单。趋势、时段和失效风控照常适用，溢价仅参考，做T不保证盈利。</div></div>
+    ${buyGuard ? `<div class="etf-alert warn" data-buy-guard><b>买入拦截已开启 · ${escHtml(buyGuard.title)}</b><div>${escHtml(buyGuard.text)}</div><div>保存任何买入／接回成交前会再确认两次，只记真实成交。</div></div>` : ''}
     <div class="etf-panic-note">固定每天最多一轮、底仓20%；净价差默认≥${(ETF_T_RULES.gap * 100).toFixed(2)}%，14:30后不接回；回补仓跌${(ETF_T_RULES.stop * 100).toFixed(2)}%提示退出，卖后涨${(ETF_T_RULES.fly * 100).toFixed(2)}%不追。</div>
     <button class="etf-btn" onclick="etfTPrepare('sell')">记录实际做T卖出</button>
     <div class="etf-trade-form etf-cycle-form">
@@ -5031,6 +5288,13 @@ function etfAddTrade() {
   }
   const earlier = ETF_TRADES.filter(t => t.date <= date);
   if (side === 'sell' && shares > EtfTStrategy.position(earlier).shares) { etfToast({ level: 'warn', title: '无法记录卖出', text: '卖出超过该日已记录的持仓，请先补录真实底仓。' }); return; }
+  if (side === 'buy') {
+    const guard = etfBuyGuard();
+    if (guard && !etfBuyGuardConfirm(guard)) {
+      etfToast({ level: 'warn', title: '已拦截这笔买入', text: `${guard.title}：${guard.text}` });
+      return;
+    }
+  }
   ETF_TRADES.push({ id: Date.now(), date, side, price, shares });
   etfSaveTrades();
   const pi = document.getElementById('etf-t-price');
@@ -5126,6 +5390,7 @@ function renderEtfView() {
 
 function updateEtfLive() {
   if (currentRoute().view !== 'etf') return;
+  etfGuardRender();
   const set = (id, html) => {
     const el = document.getElementById(id);
     if (el && el.innerHTML !== html) el.innerHTML = html;

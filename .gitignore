@@ -35,3 +35,6 @@ data/etf-day-plan.json
 
 # 新浪期货历史快照（夜盘漂移修正用，运行时生成，不入库）
 data/futures-hist.json
+
+# Alpaca 夜盘 key（含密钥，切勿提交）
+data/alpaca.json

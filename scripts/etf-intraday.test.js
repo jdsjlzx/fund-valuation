@@ -632,15 +632,15 @@ test('盘前参考计划独立默认折叠，开盘收盘及次日都可展开�
     browser.ETF_TRACK.premarket.mode = mode;
     browser.ETF_PLAN_OPEN = false;
     const folded = browser.etfPremarketHtml();
-    assert.match(folded, /<details class="etf-plan-fold"\s+ontoggle/);
+    assert.match(folded, /<details class="etf-plan-fold[^"]*"\s+ontoggle/);
     assert.doesNotMatch(folded, /盘前／盘中/);
     assert.match(folded, mode === 'next' ? /下个交易日 · 参考计划/ : /盘前提示 · 参考计划/);
     if (mode === 'next' || mode === 'closed') assert.ok(folded.indexOf('今日计划记录') < folded.indexOf('</details>'));
     browser.ETF_PLAN_OPEN = true;
-    assert.match(browser.etfPremarketHtml(), /<details class="etf-plan-fold" open/);
+    assert.match(browser.etfPremarketHtml(), /<details class="etf-plan-fold[^"]*" open/);
   }
   browser.ETF_TRACK.premarket = null; browser.ETF_PLAN_OPEN = false;
-  assert.match(browser.etfPremarketHtml(), /<details class="etf-plan-fold"\s+ontoggle/);
+  assert.match(browser.etfPremarketHtml(), /<details class="etf-plan-fold[^"]*"\s+ontoggle/);
 });
 
 test('图表用中文区分观察和买卖候选，不把观察标为买', () => {
