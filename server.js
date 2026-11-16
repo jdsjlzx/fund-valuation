@@ -1176,7 +1176,10 @@ async function fetchXueqiuQuotes(symbols) {
 // ──────────────────────────────────────────
 //  Sina 外盘期货 fetcher (hf_NQ / hf_ES / hf_YM)
 //  用于夜盘(ET 20:00-04:00) 美股 ETF 的 24h 走势代理，与富途一致。
-//  字段: [0]最新 [4]高 [5]低 [6]时间 [7]开盘 [8]昨结算 [12]日期 [13]名称
+//  字段: [0]最新 [4]高 [5]低 [6]时间 [7]昨结算 [8]开盘 [12]日期 [13]名称
+//  ⚠️ [7]才是昨结算、[8]是开盘。曾把注释和取值都写成 [8]，周末夜盘分支拿
+//  「今开」当结算基准：11-16 实测 NQ 今开 28062.5 vs 周五结算 28034.75，
+//  chgPct 凭空多跌 0.21pp（Yahoo previousClose 交叉验证 f[7]=结算）。
 // ──────────────────────────────────────────
 const SINA_FUTURES_CACHE = new Map();
 const SINA_FUTURES_TTL = 5_000;
@@ -1194,7 +1197,7 @@ async function fetchSinaFutures(symbols = ['NQ', 'ES', 'YM']) {
     const sym = m[1];
     const f = m[2].split(',');
     const price = parseFloat(f[0]);
-    const prevSettle = parseFloat(f[8]);
+    const prevSettle = parseFloat(f[7]);
     if (!isFinite(price) || !isFinite(prevSettle) || prevSettle <= 0) continue;
     const chgPct = ((price - prevSettle) / prevSettle) * 100;
     const sourceTimeMs = Date.parse(`${f[12]}T${f[6]}+08:00`);
@@ -1615,8 +1618,13 @@ function stockFuturesProxy(sym) {
 // ─────────────────────────────────────────────────────────────
 const ALPACA_DATA = 'https://data.alpaca.markets';
 let _alpacaCfg;
+let _alpacaCfgMissAt = 0;
+const ALPACA_CFG_RETRY_MS = 30_000;
 function alpacaConfig() {
-  if (_alpacaCfg !== undefined) return _alpacaCfg;
+  // 只缓存「成功」。未配置时每 30 秒重试读一次文件：key 是运行期填进来的
+  // （data/alpaca.json），若把 null 永久缓存，服务不重启就永远用不上。
+  if (_alpacaCfg) return _alpacaCfg;
+  if (_alpacaCfgMissAt && Date.now() - _alpacaCfgMissAt < ALPACA_CFG_RETRY_MS) return null;
   let id = (process.env.ALPACA_KEY_ID || '').trim();
   let secret = (process.env.ALPACA_SECRET_KEY || '').trim();
   if (!id || !secret) {
@@ -1626,9 +1634,13 @@ function alpacaConfig() {
       secret = String(j.secretKey || j.secret || '').trim();
     } catch { /* 未配置 */ }
   }
-  _alpacaCfg = id && secret ? { id, secret } : null;
-  if (_alpacaCfg) console.log('[alpaca] 夜盘 ATS 数据源已启用');
-  return _alpacaCfg;
+  if (id && secret) {
+    _alpacaCfg = { id, secret };
+    console.log('[alpaca] 夜盘 ATS 数据源已启用');
+    return _alpacaCfg;
+  }
+  _alpacaCfgMissAt = Date.now();
+  return null;
 }
 const ALPACA_OVERNIGHT_CACHE = new Map();   // symbols → { ts, map }
 const ALPACA_TTL_MS = 10_000;
@@ -1737,17 +1749,31 @@ function computeOvernightQuote({
       stale = false;
     }
   }
-  // 纯期货估算：基准必须是「20:00 ET 盘后收盘价 + 期货自 20:00 起的增量」。
-  // 旧写法直接把期货相对结算的 chgPct 套在正股收盘价上，等于把收盘前
-  // 16:00–20:00 那段盘后波动重复加了一次（11-11 实测偏 0.6pp、符号都能错）。
+  // 纯期货估算（Alpaca 不可用时的兜底）。分两种时段，基准完全不同：
+  //  平日夜盘：20:00 ET 起算 → 「ETF 盘后涨幅(16:00–20:00) + 期货自 20:00 起的增量」。
+  //    不能直接用期货相对结算的 chgPct，那会把 16:00–20:00 算两遍。
+  //  周末夜盘（周日 20:00 ET 起，延续到周一 04:00）：期货周五 17:00 收、周日 18:00
+  //    才开，不存在「周五 20:00 的期货价」，只能整段从周五结算量起 → 只取 chgPct。
+  //    此时**不能**再加 post20：期货结算起点 ≈ 周五收盘 16:00，post20 也从 16:00 算，
+  //    相加等于同一段跌两次。11-16 实测 post20(-0.83)+chgPct(-1.03) = -1.86%，
+  //    而 Blue Ocean 实时价 -0.91%、纯 chgPct -1.03%（误差 0.95pp vs 0.12pp）。
+  //    道理自洽：周五 20:00 的 ETF 盘后价是清淡盘的单笔成交，期货周末才收敛过去，
+  //    不是「盘后又多跌一段」。
+  const { day: etDay, minute: etMinute } = usMarketClock(new Date(now));
+  const weekendSession = etDay === 0 || (etDay === 1 && etMinute < 240);
   if (!selected && etfFut && futSym && inSession(etfFut.sourceTimeMs)
     && now - etfFut.sourceTimeMs <= XUEQIU_ETF_MAX_LAG_MS) {
-    const delta = futuresDeltaSince(futSym, overnightSessionStart, etfFut.price);
     const post20 = sina?.postMarketChangePercent;
-    if (delta != null && Number.isFinite(post20)) {
-      const chg = post20 + delta;
-      selected = { source: 'futures', chg,
-        price: closeForOvernight > 0 ? closeForOvernight * (1 + chg / 100) : null, at: etfFut.sourceTimeMs };
+    let delta;
+    if (weekendSession) {
+      delta = etfFut.chgPct;
+    } else {
+      const futDelta = futuresDeltaSince(futSym, overnightSessionStart, etfFut.price);
+      delta = Number.isFinite(post20) && Number.isFinite(futDelta) ? post20 + futDelta : NaN;
+    }
+    if (Number.isFinite(delta)) {
+      selected = { source: 'futures', chg: delta,
+        price: closeForOvernight > 0 ? closeForOvernight * (1 + delta / 100) : null, at: etfFut.sourceTimeMs };
     }
   }
   if (!selected && latest) { selected = latest; stale = true; }
@@ -2055,11 +2081,13 @@ app.get('/api/quotes', async (req, res) => {
     // 期货相对 20:00 ET 的增量（个股 β 代理用），按价格比算。
     // 旧写法 `nqNow(chgPct) - QQQ.postMarketChangePercent` 把「期货相对昨结算」
     // 和「ETF 相对收盘」两个不同基准相减，结果没有任何意义。
-    let nqDelta = null;  // percent, 20:00 之后 NQ 的增量
-    let esDelta = null;  // percent, 20:00 之后 ES 的增量
+    // 周末夜盘例外：上一结算=周五 17:00，其间无任何 ETF 成交，直接用 chgPct。
+    let nqDelta = null;  // percent, 20:00 之后 NQ 的增量（周末为相对周五结算）
+    let esDelta = null;  // percent, 20:00 之后 ES 的增量（周末为相对周五结算）
     if (usState === 'OVERNIGHT') {
-      nqDelta = futuresDeltaSince('NQ', overnightSessionStart, futuresData?.NQ?.price);
-      esDelta = futuresDeltaSince('ES', overnightSessionStart, futuresData?.ES?.price);
+      const wk = (() => { const { day, minute } = usMarketClock(); return day === 0 || (day === 1 && minute < 240); })();
+      nqDelta = wk ? futuresData?.NQ?.chgPct : futuresDeltaSince('NQ', overnightSessionStart, futuresData?.NQ?.price);
+      esDelta = wk ? futuresData?.ES?.chgPct : futuresDeltaSince('ES', overnightSessionStart, futuresData?.ES?.price);
     }
     let xqNightLatestTs = 0;
     let xqInSessionCount = 0;

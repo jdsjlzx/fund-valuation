@@ -75,8 +75,10 @@ class QuoteDate extends Date { static now() { return quoteNow; } }
 // 否则整个文件在装载时就 ReferenceError（18 个夜盘用例曾经全部静默不执行）。
 const vmBase = { Date: QuoteDate, path, __dirname: path.join(__dirname, '..'),
   FUTURES_PROXY: { QQQ: 'NQ', SPY: 'ES' }, stockFuturesProxy: () => ({ beta: 1, futSym: 'NQ' }) };
+const usClockSrc = server.slice(server.indexOf('function usMarketClock('), server.indexOf('function getUSMarketState('));
+const overnightSrc = () => usClockSrc + server.slice(server.indexOf('function computeOvernightQuote('), server.indexOf("app.get('/api/quotes'"));
 const overnightContext = vm.createContext({ ...vmBase, XUEQIU_ETF_MAX_LAG_MS: 300000 });
-vm.runInContext(server.slice(server.indexOf('function computeOvernightQuote('), server.indexOf("app.get('/api/quotes'")), overnightContext);
+vm.runInContext(overnightSrc(), overnightContext);
 const overnight = overrides => overnightContext.computeOvernightQuote({ symbol: 'QQQ', closeForOvernight: 679.35,
   overnightSessionStart: Date.parse('2026-11-10T01:00:00Z'),
   xq: { currentNight: 678.34, percentNight: -0.1487, timestampNight: Date.parse('2026-11-10T02:02:12Z') },
@@ -163,7 +165,7 @@ test('期货报价过期时不能拿它漂移：保留本轮旧成交并标滞�
 
 // ── 雪球锚点 + 期货增量漂移：雪球夜盘 ~20 分钟一批，批次间隔内用期货增量修正旧锚 ──
 const driftContext = vm.createContext({ ...vmBase, XUEQIU_ETF_MAX_LAG_MS: 30 * 60_000 });
-vm.runInContext(server.slice(server.indexOf('function computeOvernightQuote('), server.indexOf("app.get('/api/quotes'")), driftContext);
+vm.runInContext(overnightSrc(), driftContext);
 const driftQuote = overrides => driftContext.computeOvernightQuote({ symbol: 'QQQ', closeForOvernight: 679.35,
   overnightSessionStart: Date.parse('2026-11-10T01:00:00Z'),
   // 雪球锚 20 分钟前：仍在 30 分钟采信窗内，但已超过 90 秒漂移阈值
@@ -262,4 +264,30 @@ test('ATS 报价超出本轮夜盘或缺失时不影响原有链路', () => {
   // 没有 key / 未配置时 alpaca 为 undefined，退回雪球漂移
   const none = overnight({ alpaca: null });
   assert.ok(['xueqiu', 'xueqiu-drift', 'futures'].includes(none.overnightSource));
+});
+
+// ── 周末夜盘：上一结算=周五 17:00，期货周五 17:00 收、周日 18:00 开，
+//    不存在"周五 20:00 的期货价"，估算基准必须是相对周五结算的 chgPct ──
+test('周末夜盘估算只用期货相对周五结算的涨幅，不与周五盘后涨幅叠加', () => {
+  const sunNow = Date.parse('2026-11-16T01:30:00Z');   // 周日 20:30 ET
+  class SunDate extends Date { static now() { return sunNow; } }
+  const ctx = vm.createContext({ ...vmBase, Date: SunDate, XUEQIU_ETF_MAX_LAG_MS: 30 * 60_000 });
+  vm.runInContext(overnightSrc(), ctx);
+  const q = ctx.computeOvernightQuote({ symbol: 'QQQ', closeForOvernight: 679.89,
+    overnightSessionStart: Date.parse('2026-11-16T01:00:00Z'),
+    xq: null, yahoo: null,
+    sina: { postMarketChangePercent: -0.83, regularMarketPrice: 679.89 },
+    etfFut: { chgPct: -0.59, price: 27896.97, sourceTimeMs: sunNow - 10000 } });
+  assert.equal(q.overnightSource, 'futures');
+  // chgPct 起点是周五结算（≈周五收盘 16:00），已覆盖 ETF 盘后那段，
+  // 再加 post20(-0.83) 会把 16:00–20:00 算两遍（11-16 实测偏 0.95pp）
+  assert.ok(Math.abs(q.overnightChangePercent - (-0.59)) < 1e-9, `got ${q.overnightChangePercent}`);
+  assert.equal(q.overnightEstimated, true);
+});
+
+test('平日夜盘仍用 hist 价格比增量，不直接采用相对结算的 chgPct', () => {
+  const q = overnight({ xq: null, etfFut: { chgPct: -0.3, price: 20030, sourceTimeMs: quoteNow - 10000 } });
+  assert.equal(q.overnightSource, 'futures');
+  // hist 基点 20000（= sessionStart），现价 20030 → +0.15%；若错用 chgPct(-0.3) 会得 -0.5
+  assert.ok(Math.abs(q.overnightChangePercent - (-0.2 + 0.15)) < 1e-9, `got ${q.overnightChangePercent}`);
 });
